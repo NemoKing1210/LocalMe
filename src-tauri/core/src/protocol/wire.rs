@@ -43,11 +43,6 @@ pub(super) enum WirePayload {
         /// Counter.
         seq: u64,
     },
-    /// Liveness confirmation.
-    HeartbeatAck {
-        /// Counter being confirmed.
-        seq: u64,
-    },
     /// A chat message.
     Chat {
         /// Message identifier.
@@ -105,7 +100,6 @@ impl WireFrame {
                 WirePayload::Welcome(WireHandshake::from_handshake(handshake))
             }
             Frame::Heartbeat { seq } => WirePayload::Heartbeat { seq: *seq },
-            Frame::HeartbeatAck { seq } => WirePayload::HeartbeatAck { seq: *seq },
             Frame::Chat { id, body } => WirePayload::Chat {
                 id: id.to_string(),
                 body: body.as_str().to_owned(),
@@ -144,7 +138,6 @@ impl WireFrame {
             WirePayload::Hello(handshake) => Frame::Hello(handshake.into_handshake()?),
             WirePayload::Welcome(handshake) => Frame::Welcome(handshake.into_handshake()?),
             WirePayload::Heartbeat { seq } => Frame::Heartbeat { seq },
-            WirePayload::HeartbeatAck { seq } => Frame::HeartbeatAck { seq },
             WirePayload::Chat { id, body } => Frame::Chat {
                 id: id.parse::<MessageId>()?,
                 body: MessageBody::parse(&body)?,

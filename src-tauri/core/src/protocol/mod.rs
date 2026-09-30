@@ -154,12 +154,7 @@ pub enum Frame {
     Welcome(Handshake),
     /// Liveness probe.
     Heartbeat {
-        /// Monotonic counter, echoed by `HeartbeatAck`.
-        seq: u64,
-    },
-    /// Confirms a heartbeat, used to measure round-trip time.
-    HeartbeatAck {
-        /// The counter being confirmed.
+        /// Monotonic counter, useful in a log when a peer claims not to have heard us.
         seq: u64,
     },
     /// A chat message.
@@ -203,7 +198,6 @@ impl Frame {
             Self::Hello(_) => "hello",
             Self::Welcome(_) => "welcome",
             Self::Heartbeat { .. } => "heartbeat",
-            Self::HeartbeatAck { .. } => "heartbeat_ack",
             Self::Chat { .. } => "chat",
             Self::ChatAck { .. } => "chat_ack",
             Self::Profile { .. } => "profile",
@@ -334,7 +328,6 @@ mod tests {
             Frame::Hello(handshake()),
             Frame::Welcome(handshake()),
             Frame::Heartbeat { seq: 42 },
-            Frame::HeartbeatAck { seq: 42 },
             Frame::Chat {
                 id: message_id,
                 body: MessageBody::parse("Привет 👋\nвторая строка").expect("valid"),

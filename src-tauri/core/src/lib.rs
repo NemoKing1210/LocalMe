@@ -25,8 +25,14 @@
     )
 )]
 
+pub mod discovery;
 pub mod domain;
 pub mod error;
+pub mod ports;
 pub mod protocol;
+pub mod runtime;
+pub mod services;
+pub mod storage;
+pub mod transport;
 
 pub use error::CoreError;

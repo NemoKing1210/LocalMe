@@ -145,6 +145,15 @@ pub enum TransportError {
     /// A socket operation failed.
     #[error("io error: {0}")]
     Io(#[from] io::Error),
+    /// A frame was rejected by the protocol layer.
+    #[error(transparent)]
+    Protocol(#[from] ProtocolError),
+    /// The peer closed the connection in the middle of a frame.
+    #[error("peer closed the connection with {buffered} bytes of a partial frame buffered")]
+    TruncatedFrame {
+        /// Bytes of the incomplete frame that had arrived.
+        buffered: usize,
+    },
     /// The peer closed the connection before the handshake completed.
     #[error("peer closed the connection during the handshake")]
     HandshakeClosed,
@@ -162,6 +171,12 @@ pub enum TransportError {
     /// The peer tried to talk to itself, or two instances share a device id.
     #[error("peer announced our own device id")]
     SelfConnection,
+    /// The first frame on a connection was not the handshake.
+    #[error("expected a handshake frame, got {got}")]
+    UnexpectedFrame {
+        /// What arrived instead.
+        got: &'static str,
+    },
     /// Too many peers are already connected.
     #[error("connection refused: peer limit of {max} reached")]
     PeerLimit {
@@ -174,6 +189,13 @@ pub enum TransportError {
     /// The connection task has stopped.
     #[error("connection is closed")]
     Closed,
+    /// The connection failed for a reason that has no more specific variant.
+    ///
+    /// Used for refusals a peer reported back (a version mismatch, a full peer table) and for
+    /// failures whose distinction only matters in the log: every caller treats them the same
+    /// way, by marking the peer offline and retrying later.
+    #[error("{0}")]
+    Failed(String),
 }
 
 /// Errors surfaced to the caller of the service layer.

@@ -219,8 +219,7 @@ so a mismatch surfaces as a clear message instead of undefined behaviour.
 |---|---|---|---|
 | `hello` | dialer → acceptor | `device_id, nickname, avatar_seed, listen_port, protocol_version` | open a session |
 | `welcome` | acceptor → dialer | same shape | accept, symmetric identity exchange |
-| `heartbeat` | both | `seq` | liveness, one frame per 5 s |
-| `heartbeat_ack` | both | `seq` | optional confirmation, used to measure RTT for the tray tooltip |
+| `heartbeat` | both | `seq` | liveness, one frame per 5 s; the `seq` is only useful in a log |
 | `chat` | both | `id, body` | a chat message; sender/recipient are implied by the connection |
 | `chat_ack` | both | `id` | "delivered": persisted by the recipient |
 | `profile` | both | `nickname, avatar_seed` | nickname change, re-broadcast to all live sessions |
@@ -265,14 +264,23 @@ profile) are rejected by the same check, and the collision is surfaced in the lo
 
 ### 5.4 Message delivery and deduplication
 
-1. Sender assigns an `MessageId` (UUIDv7 → k-sortable, so storage order == time order).
+1. Sender assigns a `MessageId` (UUIDv7 → k-sortable, so storage order == time order).
 2. Sender persists the row `status = 'sending'`, queues the frame, UI shows *отправляется*.
 3. Recipient validates, deduplicates, persists, sends `chat_ack`, emits a UI event.
 4. Sender flips the row to `status = 'delivered'`, UI shows *доставлено*.
 
+**One clock.** A `chat` frame carries no timestamp. The time a message is stored under, and
+displayed with, is the *local* clock: for an outgoing message the moment it was queued, for an
+incoming one the moment it arrived. On a LAN those differ by a round trip, and using one clock
+for both directions removes an entire class of bug — a peer whose clock is an hour fast cannot
+reorder its own messages into the middle of the conversation, and "12:03" always means 12:03
+on this machine. `received_at_ms` is written alongside as the tie-break for messages that share
+a millisecond, and `sent_at_ms` is ordered with the `id` so the sort is total.
+
 Deduplication happens in storage: `messages.id` is the primary key and the insert is
-`INSERT OR IGNORE`, so a retransmitted frame is a no-op. A duplicate still receives
-`chat_ack` — the sender must never be left waiting because *it* retried.
+`INSERT OR IGNORE`, so a retransmitted frame is a no-op and the unread counter is incremented
+only when the row was genuinely new. A duplicate still receives `chat_ack` — the sender must
+never be left waiting because *it* retried.
 
 Delivery is best-effort with no retransmission beyond the live connection: out-of-scope
 offline delivery means a frame that could not be written to a live socket is marked
@@ -410,8 +418,11 @@ CREATE INDEX messages_unread    ON messages(peer_id) WHERE read = 0;
 ```
 
 `peers` doubles as the *known/forgotten device* list required by the settings screen.
-`forgotten = 1` rows are excluded from the user list but kept, which is what lets the
-settings screen show forgotten devices; `forgotten` is cleared when the peer is seen again.
+`forgotten = 1` rows are excluded from the user list but always kept, which is what lets the
+settings screen show forgotten devices and offer to bring them back. `forgotten` is cleared
+when the peer is seen again — "if their computer appears on the network again, it will be
+added as a new person", which is what the confirmation dialog promises — and by an explicit
+restore, for a device that is not on the network right now.
 
 ### 7.2 Migrations
 
@@ -721,9 +732,11 @@ the source of truth).
 
 1. Peers are on the same broadcast domain. Across subnets, mDNS reflection or the UDP beacon
    must be forwarded; this is not handled and is documented in the README.
-2. The user's clock may be wrong; it is used only for display. Ordering inside a conversation
-   uses `(sent_at_ms, id)` with `received_at_ms` as a tie-break, and `last_seen` is always the
-   local clock.
+2. The user's clock may be wrong; it is used only for display. Every stored timestamp is an
+   observation of the *local* clock — including the time shown for an incoming message, which
+   is when it arrived (`§5.4`). Ordering inside a conversation uses `(sent_at_ms, id)` with
+   `received_at_ms` as a tie-break, and `last_seen` is always the local clock. No remote clock
+   is ever used for a decision.
 3. Instances must share a protocol version to talk; mismatches are refused with a clear error
    rather than degraded.
 4. Nicknames are not unique and are never used as identity; the UI shows a device-id-derived
