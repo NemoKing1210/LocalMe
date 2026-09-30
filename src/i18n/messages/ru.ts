@@ -43,6 +43,7 @@ export const ru: MessageCatalog = {
   'users.emptyBody':
     'Убедитесь, что другой компьютер в той же сети и LocalMe запущен. Обнаружение обычно занимает несколько секунд.',
   'users.searchPlaceholder': 'Поиск людей',
+  'users.clearSearch': 'Очистить поиск',
   'users.searchEmpty': 'Никто не найден по запросу «{query}».',
   'users.online': 'в сети',
   'users.offline': 'не в сети',
@@ -98,9 +99,6 @@ export const ru: MessageCatalog = {
 
   'settings.nickname': 'Никнейм',
   'settings.nicknameHelp': 'Его видят все в сети.',
-  'settings.deviceId': 'Идентификатор устройства',
-  'settings.deviceIdHelp':
-    'Этот идентификатор и есть вы. Он не меняется, даже если вы смените имя.',
 
   'settings.theme': 'Тема',
   'settings.themeSystem': 'Системная',

@@ -102,16 +102,13 @@ async function onForgetConfirmed(deleteHistory: boolean): Promise<void> {
   <div class="users">
     <MdTopAppBar :title="i18n.t('users.title')">
       <template #trailing>
-        <MdIconButton
-          icon="settings"
-          :label="i18n.t('settings.title')"
-          @click="ui.goTo('settings')"
-        />
+        <MdIconButton icon="tune" :label="i18n.t('settings.title')" @click="ui.goTo('settings')" />
       </template>
       <MdTextField
         icon="search"
         :model-value="peers.query"
         :label="i18n.t('users.searchPlaceholder')"
+        :clear-label="i18n.t('users.clearSearch')"
         @update:model-value="onQuery"
       />
     </MdTopAppBar>

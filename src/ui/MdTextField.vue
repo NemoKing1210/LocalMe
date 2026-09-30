@@ -10,6 +10,7 @@
 import { computed, ref, useId } from 'vue';
 
 import MdIcon from './MdIcon.vue';
+import MdIconButton from './MdIconButton.vue';
 import type { IconName } from './icons';
 
 const props = withDefaults(
@@ -34,6 +35,11 @@ const props = withDefaults(
     maxlength?: number;
     /** Whether to show `used / maxlength` under the field. */
     showCounter?: boolean;
+    /**
+     * Accessible name of the clear button. Setting it is what offers to empty the field: a field
+     * cannot be clearable without a name for the control that clears it.
+     */
+    clearLabel?: string;
   }>(),
   { disabled: false, autofocus: false, showCounter: false },
 );
@@ -55,10 +61,29 @@ const counter = computed(() =>
     : null,
 );
 
-/** Focuses the field, for the places that open a dialog with a field in it. */
+/**
+ * Whether the trailing slot holds the clear button. It appears as soon as there is something to
+ * clear and stays while the field is focused or not, which is how a search box is expected to
+ * behave. A disabled field never clears itself, and an error keeps the slot for its own icon.
+ */
+const showClear = computed(
+  () => !props.disabled && error.value === null && props.modelValue.length > 0,
+);
+
+/**
+ * Focuses the field, for the places that open a dialog with a field in it.
+ *
+ * Also the place the clear button returns the caret to: emptying the field from a button must not
+ * cost the user the keyboard, or clearing a search would take two clicks to resume typing.
+ */
 function focus(): void {
   input.value?.focus();
   input.value?.select();
+}
+
+function clear(): void {
+  emit('update:modelValue', '');
+  focus();
 }
 
 function onInput(event: Event): void {
@@ -98,6 +123,14 @@ defineExpose({ focus });
         />
       </div>
       <MdIcon v-if="error !== null" name="error" :size="20" class="md-field__trailing" />
+      <MdIconButton
+        v-else-if="clearLabel !== undefined && showClear"
+        class="md-field__clear"
+        icon="close"
+        :label="clearLabel"
+        size="small"
+        @click="clear"
+      />
     </div>
     <div class="md-field__footer">
       <span
@@ -128,6 +161,13 @@ defineExpose({ focus });
 }
 
 .md-field__box {
+  /* One source of truth for the vertical rhythm inside the box. `line` is the body-large line box
+     the text is set on, and it also determines the floating label's scaled height; `inset` is the
+     room left under the text, and doubles as the input's top padding — see `.md-field__input`. */
+  --md-field-line: var(--md-sys-typescale-body-large-line-height);
+  --md-field-inset: 10px;
+  --md-field-float-gap: 6px;
+
   display: flex;
   gap: 12px;
   align-items: center;
@@ -141,38 +181,57 @@ defineExpose({ focus });
 
 .md-field__box:focus-within {
   border-color: var(--md-sys-color-primary);
-  box-shadow: inset 0 0 0 1px var(--md-sys-color-primary);
+  /* 2px, and drawn from the border box inward so 1px sits on the border itself: the ring reads as
+     a single 2px indicator instead of the hairline a 1px inset vanishes into. */
+  box-shadow: inset 0 0 0 2px var(--md-sys-color-primary);
 }
 
 .md-field--error .md-field__box {
   border-color: var(--md-sys-color-error);
 }
 
+.md-field--error .md-field__box:focus-within {
+  box-shadow: inset 0 0 0 2px var(--md-sys-color-error);
+}
+
 .md-field__stack {
   position: relative;
-  display: flex;
   flex: 1;
-  flex-direction: column;
-  justify-content: center;
   min-width: 0;
   height: 100%;
 }
 
 .md-field__label {
   position: absolute;
+  inset-inline-start: 0;
+  /* The resting label is centred in the field, the way a filled field reads before it is touched.
+     The text is not on that centre line — see `.md-field__input` — and it does not need to be:
+     the label only ever travels from here to its floating position, never through the text. */
+  top: 50%;
+  transform: translateY(-50%);
+  transform-origin: left center;
   color: var(--md-sys-color-on-surface-variant);
   pointer-events: none;
-  transform-origin: left center;
-  transition: transform var(--md-sys-motion-duration-short3) var(--md-sys-motion-easing-standard);
+  transition:
+    top var(--md-sys-motion-duration-short3) var(--md-sys-motion-easing-standard),
+    transform var(--md-sys-motion-duration-short3) var(--md-sys-motion-easing-standard);
 }
 
 .md-field__label--floating {
-  transform: translateY(-10px) scale(0.75);
+  /* `top` positions the label's centre, so this is the gap to the field's top edge plus half the
+     label's scaled line box (24 x 0.75). */
+  top: calc(var(--md-field-float-gap) + var(--md-field-line) * 0.375);
+  transform: translateY(-50%) scale(0.75);
 }
 
 .md-field__input {
+  /* The input fills the whole 56px box, so the entire field — not just the 24px text line — is a
+     click and focus target; the top padding sets the text on the lower line, under the label. */
+  position: absolute;
+  inset: 0;
   width: 100%;
   padding: 0;
+  padding-block-start: var(--md-field-inset);
   border: none;
   background: none;
   outline: none;
@@ -190,6 +249,13 @@ defineExpose({ focus });
 
 .md-field__trailing {
   color: var(--md-sys-color-error);
+}
+
+.md-field__clear {
+  /* The input is absolutely positioned over the whole box, so it paints above every in-flow child
+     and would swallow this click. Positioning the button puts it in the same painting order as the
+     input, and later in the document, so it receives the click. */
+  position: relative;
 }
 
 .md-field__footer {

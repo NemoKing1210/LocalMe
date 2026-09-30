@@ -305,17 +305,6 @@ onMounted(() => {
               />
             </div>
           </div>
-          <dl class="settings__pairs">
-            <dt class="md-typescale-label-medium settings__help">
-              {{ i18n.t('settings.deviceId') }}
-            </dt>
-            <dd class="md-typescale-body-small settings__mono" data-selectable>
-              {{ profile.deviceId }}
-            </dd>
-          </dl>
-          <p class="md-typescale-body-small settings__help">
-            {{ i18n.t('settings.deviceIdHelp') }}
-          </p>
         </div>
       </section>
 

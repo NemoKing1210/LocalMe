@@ -33,25 +33,27 @@ type Shape =
     }
   | { readonly kind: 'dot'; readonly cx: number; readonly cy: number; readonly r: number };
 
-/** Eight teeth around a hub, which is all a settings glyph needs to be recognised. */
-function gearTeeth(): Shape[] {
-  const teeth: Shape[] = [];
-  for (let index = 0; index < 8; index += 1) {
-    const angle = (index * Math.PI) / 4;
-    const inner = 6.2;
-    const outer = 9.2;
-    teeth.push({
-      kind: 'line',
-      x1: round(12 + Math.cos(angle) * inner),
-      y1: round(12 + Math.sin(angle) * inner),
-      x2: round(12 + Math.cos(angle) * outer),
-      y2: round(12 + Math.sin(angle) * outer),
-    });
+/**
+ * Three slider rows, the glyph the button that opens settings uses.
+ *
+ * It is deliberately not a cog: at 24 px the teeth of a gear blur into a ring, while three
+ * tracks with offset handles stay legible and read as "adjust", which is what the screen is.
+ */
+function tuneRows(): Shape[] {
+  const rows: readonly (readonly [y: number, handleX: number])[] = [
+    [6.5, 15.2],
+    [12, 8.8],
+    [17.5, 12.4],
+  ];
+  const shapes: Shape[] = [];
+  for (const [y, handleX] of rows) {
+    shapes.push({ kind: 'line', x1: 3.6, y1: y, x2: 20.4, y2: y });
+    shapes.push({ kind: 'line', x1: handleX, y1: y - 2.3, x2: handleX, y2: y + 2.3 });
   }
-  return teeth;
+  return shapes;
 }
 
-/** Sun rays, the same trick as the gear. */
+/** Sun rays, the same polar loop as the sliders. */
 function sunRays(): Shape[] {
   const rays: Shape[] = [];
   for (let index = 0; index < 8; index += 1) {
@@ -153,7 +155,7 @@ export const ICONS: Record<string, readonly Shape[]> = {
     { kind: 'line', x1: 10.2, y1: 10.6, x2: 10.2, y2: 17.2 },
     { kind: 'line', x1: 13.8, y1: 10.6, x2: 13.8, y2: 17.2 },
   ],
-  settings: [{ kind: 'circle', cx: 12, cy: 12, r: 3.3 }, ...gearTeeth()],
+  tune: tuneRows(),
   palette: [
     { kind: 'circle', cx: 12, cy: 12, r: 9 },
     { kind: 'dot', cx: 8.2, cy: 9.2, r: 1.35 },

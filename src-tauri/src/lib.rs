@@ -35,6 +35,7 @@ mod logging;
 mod notifications;
 mod state;
 mod tray;
+mod webview;
 mod window;
 
 /// The IPC surface, as a handler.
@@ -150,6 +151,7 @@ fn run_inner() -> Result<(), Box<dyn std::error::Error>> {
             app.manage(state);
 
             window::install_ready_gate(&handle);
+            webview::disable_saved_info(&handle);
             events::spawn_forwarder(&handle);
             window::refresh_title(&handle, 0);
 

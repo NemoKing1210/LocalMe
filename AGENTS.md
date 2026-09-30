@@ -19,7 +19,7 @@ Typical user loop:
    _delivered_.
 4. History, presence, unread counts and settings persist across restarts.
 
-UI languages: English and Russian. Identifier: `dev.localme.desktop`. Version: `0.1.1`. Changelog:
+UI languages: English and Russian. Identifier: `dev.localme.desktop`. Version: `0.1.8`. Changelog:
 [CHANGELOG.md](CHANGELOG.md). Design notes: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Stack (accurate)

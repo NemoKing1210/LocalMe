@@ -1,6 +1,6 @@
 [package]
 name = "localme"
-version = "0.1.1"
+version = "0.1.8"
 edition = "2024"
 rust-version = "1.85"
 description = "LocalMe — a zero-configuration messenger for the local network"
@@ -59,6 +59,13 @@ tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
 # here is what lets `cargo build --features custom-protocol` produce a self-contained binary,
 # which is how the two-instance check in the README is run.
 custom-protocol = ["tauri/custom-protocol"]
+
+[target.'cfg(windows)'.dependencies]
+# The WebView2 settings object, for the one piece of browser policy a page cannot express — see
+# `src/webview.rs`. `webview2-com` is pinned to the revision `wry` already links, because the
+# controller handle `with_webview` hands out is that crate's type, not a lookalike.
+webview2-com = "0.39"
+windows-core = "0.62"
 
 [profile.release]
 opt-level = "s"

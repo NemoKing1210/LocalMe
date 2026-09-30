@@ -49,6 +49,7 @@ export const en = {
   'users.emptyBody':
     'Make sure the other computer is on the same network and has LocalMe running. Discovery usually takes a few seconds.',
   'users.searchPlaceholder': 'Search people',
+  'users.clearSearch': 'Clear search',
   'users.searchEmpty': 'Nobody matches “{query}”.',
   'users.online': 'online',
   'users.offline': 'offline',
@@ -102,9 +103,6 @@ export const en = {
 
   'settings.nickname': 'Nickname',
   'settings.nicknameHelp': 'Shown to everyone on the network.',
-  'settings.deviceId': 'Device ID',
-  'settings.deviceIdHelp':
-    'This identifier is what makes you you. It never changes, even if you rename yourself.',
 
   'settings.theme': 'Theme',
   'settings.themeSystem': 'System',

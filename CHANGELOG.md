@@ -5,6 +5,57 @@ All notable changes to LocalMe are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.8] - 2026-10-01
+
+### Removed
+
+- The profile card in settings no longer prints the device identifier or the paragraph explaining
+  it; the value is still shown in the diagnostics block, where copying it for a bug report is the
+  point
+
+## [0.1.7] - 2026-10-01
+
+### Added
+
+- The search field in the people list clears itself with a button that appears once there is
+  something to clear, and returns the caret to the field
+
+## [0.1.6] - 2026-10-01
+
+### Fixed
+
+- Focusing a text field no longer opens the web view's saved-info autofill dropdown; the WebView2
+  feature is turned off at startup instead of being left to Microsoft Edge's defaults
+
+## [0.1.5] - 2026-10-01
+
+### Fixed
+
+- An empty text field's label is centred in the field again instead of sitting on the line the
+  typed text uses; the floating label keeps its clear gap above the text
+
+## [0.1.4] - 2026-10-01
+
+### Changed
+
+- Text fields keep a clear gap between the floating label and the typed text
+- The focus indicator on a text field is a 2 px ring instead of a hairline that disappeared into
+  the border, and the whole 56 px field — not just the text line — is a click and focus target
+
+## [0.1.3] - 2026-10-01
+
+### Changed
+
+- The button that opens settings now uses a sliders glyph instead of the cog, which blurred into
+  a ring at 24 px; the button itself, its label and its position are unchanged
+
+## [0.1.2] - 2026-10-01
+
+### Changed
+
+- Right-clicking no longer opens the webview's own context menu (Reload, Save image, Inspect);
+  clipboard and devtools keyboard shortcuts are unaffected
+
 ## [0.1.1] - 2026-10-01
 
 ### Added

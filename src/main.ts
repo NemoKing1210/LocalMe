@@ -14,6 +14,13 @@ import { initTheme } from '@/theme/useTheme';
 // the first render would show the default palette for a frame.
 initTheme();
 
+// The webview ships Chromium's own context menu (Back/Reload/Save image/Inspect) and LocalMe is
+// a native desktop app exposing none of those web affordances, so the browser menu is suppressed
+// everywhere. Keyboard shortcuts for clipboard and devtools keep working.
+window.addEventListener('contextmenu', (event: MouseEvent): void => {
+  event.preventDefault();
+});
+
 const app = createApp(App);
 installErrorHandlers(app);
 

@@ -603,6 +603,14 @@ prevents the "wake the webview for every heartbeat" class of bug.
   the strings once, and again on a language change, through `set_ui_labels`. That keeps one
   translation catalogue instead of a second one in Rust, at the cost of the tray being in English
   for the few milliseconds between process start and the first render.
+* **Web view policy** — WebView2 ships Microsoft Edge's *general* autofill switched on, and that
+  is why focusing an ordinary text field could offer to fill in a saved name or address inside a
+  local-network messenger. It is a browser feature, not a form feature: no attribute, header or
+  CSP directive switches it off, so the host does it once in `setup` through the WebView2 settings
+  object (`src-tauri/src/webview.rs`, Windows only, `IsGeneralAutofillEnabled = false`). Password
+  and payment autofill are already off by default in WebView2, and no other engine used here has a
+  saved-info autofill to disable. The same reasoning as `vue/no-v-html`: the surface that is not
+  part of the application does not get to appear inside it.
 
 ### 9.5 Capabilities
 
