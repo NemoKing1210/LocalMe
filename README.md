@@ -142,6 +142,7 @@ nothing else running. The process tree is the application plus the WebView2 proc
 | Private memory, the WebView2 tree (6 processes) | ~165 MB                                              |
 | Working set, whole tree                         | ~388 MB                                              |
 | Release binary on disk                          | 6.4 MB                                               |
+| Windows installers                              | 3.1 MB (MSI), 2.3 MB (NSIS)                          |
 | Front-end bundle                                | 85 KB gzipped JavaScript, 7 KB gzipped CSS           |
 
 Two things to keep in mind when reading those numbers. Working set counts a shared page once per

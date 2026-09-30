@@ -17,6 +17,8 @@ import * as ipc from '@/ipc';
 import { CommandError } from '@/ipc';
 import type { Diagnostics, KnownDevice, Profile, Settings, ThemeMode } from '@/ipc';
 import { THEME_MODES, useTheme } from '@/theme/useTheme';
+import { useChatStore } from '@/stores/chat';
+import { usePeerStore } from '@/stores/peers';
 import { useSettingsStore } from '@/stores/settings';
 import { useUiStore } from '@/stores/ui';
 import MdAvatar from '@/ui/MdAvatar.vue';
@@ -35,6 +37,8 @@ import type { IconName } from '@/ui/icons';
 const emit = defineEmits<{ close: [] }>();
 
 const settings = useSettingsStore();
+const chat = useChatStore();
+const peers = usePeerStore();
 const ui = useUiStore();
 const i18n = useI18n();
 const theme = useTheme();
@@ -181,6 +185,9 @@ async function clearHistory(): Promise<void> {
   confirmClear.value = false;
   try {
     const count = await ipc.clearHistory();
+    // The rows are gone from the database, so the open conversation has to be reloaded from it:
+    // leaving the deleted messages on screen would say the opposite of what just happened.
+    await chat.open(peers.selectedId);
     ui.notify('settings.historyCleared', { count });
     await loadDevices();
   } catch (error) {
