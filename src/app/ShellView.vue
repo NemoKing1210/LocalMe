@@ -38,11 +38,15 @@ const hasDetail = computed<boolean>(
 /**
  * A page's identity for the transition.
  *
- * Keyed by page name rather than by address so that switching conversations keeps the same
- * component instance — its scroll position and its paging are the same page, and remounting it
- * would re-fetch a history the user is already reading.
+ * A conversation is keyed by the peer, because moving between two conversations *is* a page
+ * change: the log, the header and the composer all belong to the peer in the address, and the
+ * reader should see one arrive as the other leaves. Within a conversation the key is stable, so
+ * a message arriving — or the day heading moving — never remounts anything.
  */
-const page = computed<string>(() => (route.name === ROUTE.settings ? 'settings' : 'chat'));
+const page = computed<string>(() => {
+  if (route.name === ROUTE.settings) return 'settings';
+  return chatPeerId.value === null ? 'chat' : `chat:${chatPeerId.value}`;
+});
 
 watch(
   chatPeerId,
@@ -69,9 +73,9 @@ watch(
           <motion.div
             :key="page"
             class="shell__page"
-            :initial="{ opacity: 0, y: 10 }"
-            :animate="{ opacity: 1, y: 0 }"
-            :exit="{ opacity: 0, y: -10 }"
+            :initial="{ opacity: 0, x: 16 }"
+            :animate="{ opacity: 1, x: 0 }"
+            :exit="{ opacity: 0, x: -16 }"
             :transition="{ duration: 0.18, ease: [0.2, 0, 0, 1] }"
           >
             <component :is="Component" />
@@ -122,6 +126,10 @@ watch(
   flex-direction: column;
   min-width: 0;
   background: var(--md-sys-color-surface);
+  /* A page slides in from the side, so for the length of the transition part of it sits outside
+     the pane. Without this clip that part paints over the list column beside it — the detail
+     pane is a later sibling and therefore the one that wins. */
+  overflow: hidden;
 }
 
 /*

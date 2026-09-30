@@ -786,6 +786,11 @@ dynamic, measured rows for the message list, which also handles the reverse-anch
 invalidation and scroll-anchoring problem that is hard to get right; the library is
 framework-thin and adds no styling, so the token strategy is unaffected.
 
+While a conversation's first page is being read, the log draws bubble-shaped placeholders —
+`MessageSkeleton` arranging `MdSkeleton` blocks, one per shape, on the side the message will
+belong to — rather than a spinner in the middle of an empty pane. The placeholder carries the
+shape and the width of what is coming, so the log does not jump when the real rows replace it.
+
 ### 10.4 i18n
 
 A typed module rather than a framework: `MessageKey` is derived from the English catalogue, so a
@@ -841,7 +846,11 @@ under `prefers-reduced-motion`.
 Where motion is used, and why:
 
 * **Page changes** — an `AnimatePresence` around the detail pane's `RouterView`, so a page leaves
-  before the next arrives.
+  before the next arrives. The key includes the conversation's peer, because moving between two
+  conversations *is* a page change: the header, the log and the composer belong to the peer in the
+  address and travel together. Within a conversation the key is stable, so an arriving message
+  never remounts the log. The page slides in horizontally, and the detail pane clips it: without
+  the clip the 16 px that is still outside the pane would paint over the list column beside it.
 * **The two lists** — entrance animations tied to the *list appearing*, not to a row mounting:
   `useEntranceWindow()` for the user list, and `chat.consumeEntrance(id)` for the message log.
   Both lists are virtualised, so a row mounts and unmounts as the reader scrolls; an animation

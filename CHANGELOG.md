@@ -5,6 +5,20 @@ All notable changes to LocalMe are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-10-01
+
+### Added
+
+- Moving between two conversations is animated: the next one slides in from the side as the
+  previous one leaves, instead of the two swapping in place
+- A conversation whose history is still being read shows bubble-shaped placeholders where the
+  messages will be, on the side each one belongs to, rather than a spinner in an empty log
+
+### Removed
+
+- The circular progress indicator. The message log was its last caller, and a placeholder with
+  the shape of what is arriving says more than a spinner does
+
 ## [0.2.0] - 2026-10-01
 
 ### Added

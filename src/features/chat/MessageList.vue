@@ -21,9 +21,9 @@ import { dayKey, useI18n } from '@/i18n';
 import type { Message, Peer } from '@/ipc';
 import { useChatStore } from '@/stores/chat';
 import MdButton from '@/ui/MdButton.vue';
-import MdCircularProgress from '@/ui/MdCircularProgress.vue';
 import MdIconButton from '@/ui/MdIconButton.vue';
 import MessageBubble from './MessageBubble.vue';
+import MessageSkeleton from './MessageSkeleton.vue';
 
 defineProps<{
   /** The conversation on screen. */
@@ -310,9 +310,7 @@ onMounted(() => {
       </MdButton>
     </div>
 
-    <div v-if="chat.loading && rows.length === 0" class="list__loading">
-      <MdCircularProgress :label="i18n.t('common.loading')" />
-    </div>
+    <MessageSkeleton v-if="chat.loading && rows.length === 0" class="list__loading" />
 
     <div v-if="!following" class="list__latest">
       <MdIconButton
@@ -413,9 +411,12 @@ onMounted(() => {
   inset-block-start: 8px;
 }
 
+/* The placeholder is laid out like the log itself — from the top, whole width — rather than
+   centred like the spinner it replaced, so the first real page does not move anything. */
 .list__loading {
-  inset-block: 0;
-  align-items: center;
+  inset-block-start: 0;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .list__latest {
