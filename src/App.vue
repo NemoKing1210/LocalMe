@@ -68,20 +68,16 @@ onBeforeUnmount(() => {
   disconnect?.();
 });
 
-// The host needs to know which conversation is open: it is the difference between "you are
-// already reading this" and "show a notification".
+// Selecting a person is three things at once: load the conversation, tell the host which chat is
+// open — that is the difference between "you are already reading this" and "show a notification"
+// — and drop the notification reminder for it. One watcher, so the three cannot disagree.
 watch(
   () => peers.selectedId,
   (deviceId) => {
+    void chat.open(deviceId);
     void ipc.setActiveChat(deviceId);
   },
-);
-
-watch(
-  () => chat.peerId,
-  (deviceId) => {
-    void ipc.setActiveChat(deviceId);
-  },
+  { immediate: true },
 );
 
 // The tray menu and a native notification are drawn outside the web view, so the host has to
@@ -99,16 +95,6 @@ watch(
       tooltipUnread: i18n.t('tray.tooltipUnread'),
       newMessage: i18n.t('notification.newMessage'),
     });
-  },
-  { immediate: true },
-);
-
-// Opening a conversation is a request to the host as well as a change of screen: the chat store
-// loads the page, and the host stops suppressing notifications for other senders.
-watch(
-  () => peers.selectedId,
-  (deviceId) => {
-    void chat.open(deviceId);
   },
   { immediate: true },
 );

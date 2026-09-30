@@ -774,3 +774,13 @@ the source of truth).
 7. Ports 47820 (TCP), 47821 (UDP) and 5353 (UDP, mDNS) must be permitted; if 47820 is taken,
    an ephemeral port is used and advertised through discovery, so a conflict degrades to
    "still works" rather than "fails to start".
+8. **The web view stays alive while the window is hidden in the tray.** Measured: ~169 MB of
+   private memory for the WebView2 process tree against 6.4 MB for the Rust host and core
+   together (README, Performance). Destroying the web view on hide and recreating it on show is
+   possible without any architectural change — the host owns every piece of state the interface
+   renders, and `state_snapshot` exists precisely to resynchronise a freshly loaded front end —
+   and it would be the largest resource saving available to this design. It is not done because
+   the reopen path is the one path that cannot be exercised without a visible desktop in the
+   environment this was built in, and shipping an unverifiable critical path to save memory on
+   machines that have it is the wrong trade. The cost is measured and in the README so the
+   decision can be revisited with evidence.

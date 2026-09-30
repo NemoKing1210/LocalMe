@@ -129,6 +129,43 @@ System Settings → Network → Firewall → Options.
 **Linux** depends on the distribution's firewall. With `firewalld`, put the interface in the
 `home` or `work` zone, where these ports are reachable within the zone.
 
+## Performance
+
+Measured on Windows 11 (x64) with a release build — `opt-level = "s"`, LTO, `codegen-units = 1`,
+`strip`, `panic = "abort"` — with the window hidden in the tray, one peer known and offline, and
+nothing else running. The process tree is the application plus the WebView2 processes it owns.
+
+|                                                 |                                                      |
+| ----------------------------------------------- | ---------------------------------------------------- |
+| CPU, one minute idle                            | 0.016 s — 0.03 % of one core, 0.002 % of the machine |
+| Private memory, `localme.exe` (host + core)     | 6.4 MB                                               |
+| Private memory, the WebView2 tree (6 processes) | ~165 MB                                              |
+| Working set, whole tree                         | ~388 MB                                              |
+| Release binary on disk                          | 6.4 MB                                               |
+| Front-end bundle                                | 85 KB gzipped JavaScript, 7 KB gzipped CSS           |
+
+Two things to keep in mind when reading those numbers. Working set counts a shared page once per
+process, so summing it across a seven-process tree overstates what the machine actually gives up;
+private bytes are the honest figure. And almost all of that memory is WebView2 rather than this
+application: the Rust host and the whole core are 6.4 MB, and the web view is the price of any
+Tauri application. Keeping the web view alive for a window nobody is looking at is the one part of
+this design a different trade-off could move — `docs/ARCHITECTURE.md` §13.8 records why it was not
+moved, and what it would cost.
+
+The idle CPU figure is the interesting one: nothing polls. Between heartbeats there is a 2 s
+presence tick, a 5 s heartbeat per connected peer, and a 3 s or 20 s discovery beacon — all of
+which are sub-millisecond wake-ups that touch no front-end code while the window is hidden.
+
+To reproduce:
+
+```sh
+npm run build
+cargo build --manifest-path src-tauri/Cargo.toml --release --features custom-protocol
+LOCALME_DATA_DIR=/tmp/localme-measure src-tauri/target/release/localme --minimized
+```
+
+then measure the process tree over a minute of idle.
+
 ## Troubleshooting
 
 **The other computer never appears.** In order of likelihood:
