@@ -90,6 +90,31 @@ onBeforeUnmount(() => {
   background: color-mix(in srgb, var(--md-sys-color-scrim) 32%, transparent);
 }
 
+/* The motion durations collapse to zero under `prefers-reduced-motion` (see tokens.css), so the
+   dialog simply appears for a user who asked for that. */
+.md-dialog[open]::backdrop {
+  animation: md-dialog-scrim var(--md-sys-motion-duration-medium2)
+    var(--md-sys-motion-easing-standard);
+}
+
+.md-dialog[open] .md-dialog__surface {
+  animation: md-dialog-surface var(--md-sys-motion-duration-medium2)
+    var(--md-sys-motion-easing-emphasized-decelerate);
+}
+
+@keyframes md-dialog-scrim {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes md-dialog-surface {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.98);
+  }
+}
+
 .md-dialog__surface {
   display: flex;
   flex-direction: column;

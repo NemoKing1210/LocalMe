@@ -1,6 +1,10 @@
 /**
  * The small amount of state that is about the interface itself rather than about peers or
- * messages: which screen is showing, and the transient messages shown in a snackbar.
+ * messages: the transient message shown in a snackbar.
+ *
+ * Deliberately not the current screen: which page is on screen is the router's business, and a
+ * second copy of it here is exactly the kind of state that drifts out of step with the address
+ * bar.
  */
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
@@ -10,8 +14,6 @@ import type { MessageKey } from '@/i18n';
 
 /** How long a snackbar stays on screen before it is dismissed. */
 const SNACKBAR_TIMEOUT_MS = 6_000;
-
-export type Screen = 'chat' | 'settings';
 
 /**
  * Something to tell the user, in their language.
@@ -27,7 +29,6 @@ export interface Notice {
 }
 
 export const useUiStore = defineStore('ui', () => {
-  const screen = ref<Screen>('chat');
   const notice = ref<Notice | null>(null);
   let nextId = 1;
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -66,9 +67,5 @@ export const useUiStore = defineStore('ui', () => {
     if (notice.value) notice.value = { ...notice.value, tone: 'error' };
   }
 
-  function goTo(next: Screen): void {
-    screen.value = next;
-  }
-
-  return { screen, notice, noticeText, notify, fail, dismiss, goTo };
+  return { notice, noticeText, notify, fail, dismiss };
 });

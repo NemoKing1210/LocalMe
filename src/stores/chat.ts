@@ -37,6 +37,19 @@ export const useChatStore = defineStore('chat', () => {
   const hasMore = ref(false);
   const sending = ref(false);
 
+  /**
+   * Messages that have not been drawn yet.
+   *
+   * The log is virtualised, so a row mounts and unmounts as the reader scrolls; a bubble that
+   * animated itself on mount would therefore play its entrance every time the reader flicked
+   * past it. This set turns the animation into a property of the *message arriving* rather than
+   * of a row appearing: the bubble asks once, the store forgets, and a scroll can never make it
+   * ask twice. Bounded because nothing consumes the entry of a message that arrives while the
+   * reader is far up the history and never scrolls down to it.
+   */
+  const undrawn = new Set<string>();
+  const UNDRAWN_LIMIT = 64;
+
   /** The oldest loaded message, which is where the previous page starts from. */
   const oldestCursor = computed<PageCursor | null>(() => {
     const oldest = messages.value[0];
@@ -53,6 +66,7 @@ export const useChatStore = defineStore('chat', () => {
     peerId.value = next;
     messages.value = [];
     hasMore.value = false;
+    undrawn.clear();
     if (next === null) return;
 
     loading.value = true;
@@ -118,6 +132,21 @@ export const useChatStore = defineStore('chat', () => {
     const next = [...messages.value];
     next.splice(index === -1 ? next.length : index, 0, message);
     messages.value = next;
+    if (undrawn.size >= UNDRAWN_LIMIT) {
+      const oldest = undrawn.values().next().value;
+      if (oldest !== undefined) undrawn.delete(oldest);
+    }
+    undrawn.add(message.id);
+  }
+
+  /**
+   * Whether this message should play its entrance, exactly once.
+   *
+   * Called from a bubble's setup, which runs once per mounted row: the first caller gets `true`
+   * and every later mount of the same message gets `false`.
+   */
+  function consumeEntrance(id: string): boolean {
+    return undrawn.delete(id);
   }
 
   /** Applies a delivery-status change, wherever the message came from. */
@@ -132,6 +161,7 @@ export const useChatStore = defineStore('chat', () => {
     if (peerId.value !== deviceId) return;
     messages.value = [];
     hasMore.value = false;
+    undrawn.clear();
   }
 
   return {
@@ -148,5 +178,6 @@ export const useChatStore = defineStore('chat', () => {
     add,
     update,
     clear,
+    consumeEntrance,
   };
 });

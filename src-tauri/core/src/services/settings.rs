@@ -25,9 +25,28 @@ const EVENT_CHANNEL_CAPACITY: usize = 16;
 const COMMAND_CHANNEL_CAPACITY: usize = 32;
 
 /// Current version of the settings schema.
-pub const SETTINGS_VERSION: u32 = 1;
+///
+/// Version 2 added the `logging` group. Adding it needed no migration step because every
+/// group carries `#[serde(default)]`, which is exactly what that attribute is for.
+pub const SETTINGS_VERSION: u32 = 2;
+
+/// Shortest log retention the settings screen offers.
+pub const MIN_LOG_RETENTION_DAYS: u32 = 1;
+
+/// Longest log retention the settings screen offers.
+pub const MAX_LOG_RETENTION_DAYS: u32 = 365;
+
+/// Retention a fresh install starts with.
+///
+/// Two weeks of a desktop messenger's own records is enough to diagnose a report from last
+/// month's release and small enough that nobody has to think about the disk usage.
+pub const DEFAULT_LOG_RETENTION_DAYS: u32 = 14;
 
 /// Interface languages this build ships.
+///
+/// The front end keeps the other half of this list in `src/i18n/locales.ts`; a variant added
+/// here without a catalogue there would let the user pick a language the interface cannot
+/// speak, so `messages.spec.ts` fails when a locale in that list has no label of its own.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Locale {
@@ -35,6 +54,16 @@ pub enum Locale {
     En,
     /// Russian.
     Ru,
+    /// Spanish.
+    Es,
+    /// German.
+    De,
+    /// French.
+    Fr,
+    /// Portuguese.
+    Pt,
+    /// Chinese, Simplified.
+    Zh,
 }
 
 impl Locale {
@@ -44,6 +73,11 @@ impl Locale {
         match self {
             Self::En => "en",
             Self::Ru => "ru",
+            Self::Es => "es",
+            Self::De => "de",
+            Self::Fr => "fr",
+            Self::Pt => "pt",
+            Self::Zh => "zh",
         }
     }
 }
@@ -101,6 +135,59 @@ impl Default for NotificationSettings {
     }
 }
 
+/// How much of its own activity the application writes to the log.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LogLevel {
+    /// Failures only.
+    Error,
+    /// Failures and warnings.
+    Warn,
+    /// The default: lifecycle, discovery and delivery events.
+    Info,
+    /// Everything, including per-frame protocol detail. Verbose and slow.
+    Debug,
+}
+
+impl LogLevel {
+    /// The `tracing` filter this level installs.
+    ///
+    /// The dependency tree stays at `warn` whatever the user picks: a debug-level messenger
+    /// that also logs every mDNS packet is a log nobody can read, and the user's choice is
+    /// about *our* records.
+    #[must_use]
+    pub const fn filter(self) -> &'static str {
+        match self {
+            Self::Error => "localme=error,localme_core=error",
+            Self::Warn => "localme=warn,localme_core=warn",
+            Self::Info => "localme=info,localme_core=info",
+            Self::Debug => "localme=debug,localme_core=debug",
+        }
+    }
+}
+
+/// Logging settings.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct LoggingSettings {
+    /// Verbosity of the application's own records.
+    pub level: LogLevel,
+    /// How many days of daily log files to keep.
+    ///
+    /// Pruning happens at startup and whenever the log rolls over to a new day, so this is a
+    /// bound on the directory rather than a scheduled job that has to keep running.
+    pub retention_days: u32,
+}
+
+impl Default for LoggingSettings {
+    fn default() -> Self {
+        Self {
+            level: LogLevel::Info,
+            retention_days: DEFAULT_LOG_RETENTION_DAYS,
+        }
+    }
+}
+
 /// Operating-system integration settings.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -146,6 +233,8 @@ pub struct Settings {
     pub notifications: NotificationSettings,
     /// System integration.
     pub system: SystemSettings,
+    /// Logging.
+    pub logging: LoggingSettings,
 }
 
 impl Default for Settings {
@@ -157,6 +246,7 @@ impl Default for Settings {
             locale: Locale::En,
             notifications: NotificationSettings::default(),
             system: SystemSettings::default(),
+            logging: LoggingSettings::default(),
         }
     }
 }
@@ -196,6 +286,12 @@ impl Settings {
         if !is_hex_colour(&self.appearance.accent) {
             self.appearance.accent = AppearanceSettings::default().accent;
         }
+        // A hand-edited file is as likely to hold `0` (which would delete today's log on the
+        // next start) as it is a sane number, so the field is clamped rather than trusted.
+        self.logging.retention_days = self
+            .logging
+            .retention_days
+            .clamp(MIN_LOG_RETENTION_DAYS, MAX_LOG_RETENTION_DAYS);
     }
 }
 
@@ -395,6 +491,61 @@ mod tests {
         assert!(!settings.system.autostart);
         assert!(!settings.system.start_minimized);
         assert!(settings.system.close_to_tray);
+        assert_eq!(settings.logging.level, LogLevel::Info);
+        assert_eq!(settings.logging.retention_days, DEFAULT_LOG_RETENTION_DAYS);
+    }
+
+    #[test]
+    fn every_shipped_locale_round_trips_through_its_tag() {
+        // The tag is what the front end and `Intl` see, and it is also what the settings file
+        // holds; a variant whose tag did not survive serialisation would silently reset the
+        // user's language on the next start.
+        let locales = [
+            Locale::En,
+            Locale::Ru,
+            Locale::Es,
+            Locale::De,
+            Locale::Fr,
+            Locale::Pt,
+            Locale::Zh,
+        ];
+        for locale in locales {
+            let json = serde_json::to_string(&locale).expect("serialises");
+            assert_eq!(json, format!("\"{}\"", locale.tag()));
+            let back: Locale = serde_json::from_str(&json).expect("parses");
+            assert_eq!(back, locale);
+        }
+    }
+
+    #[test]
+    fn a_silly_log_retention_is_repaired() {
+        let mut settings = Settings {
+            logging: LoggingSettings {
+                retention_days: 0,
+                ..LoggingSettings::default()
+            },
+            ..Settings::default()
+        };
+        settings.normalise();
+        assert_eq!(settings.logging.retention_days, MIN_LOG_RETENTION_DAYS);
+
+        settings.logging.retention_days = u32::MAX;
+        settings.normalise();
+        assert_eq!(settings.logging.retention_days, MAX_LOG_RETENTION_DAYS);
+    }
+
+    #[test]
+    fn every_log_level_installs_a_filter_for_our_own_crates() {
+        for level in [
+            LogLevel::Error,
+            LogLevel::Warn,
+            LogLevel::Info,
+            LogLevel::Debug,
+        ] {
+            let filter = level.filter();
+            assert!(filter.contains("localme="), "{filter}");
+            assert!(filter.contains("localme_core="), "{filter}");
+        }
     }
 
     #[test]
@@ -405,6 +556,7 @@ mod tests {
         assert_eq!(partial.locale, Locale::Ru);
         assert_eq!(partial.appearance.accent, "#6750A4");
         assert!(partial.system.close_to_tray);
+        assert_eq!(partial.logging, LoggingSettings::default());
     }
 
     #[test]
@@ -557,6 +709,7 @@ mod tests {
         assert!(text.contains("\"closeToTray\""), "{text}");
         assert!(text.contains("\"showText\""), "{text}");
         assert!(text.contains("\"startMinimized\""), "{text}");
+        assert!(text.contains("\"retentionDays\""), "{text}");
         assert!(!text.contains("close_to_tray"), "{text}");
     }
 

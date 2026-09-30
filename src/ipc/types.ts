@@ -69,8 +69,8 @@ export interface KnownDevice {
 /** Which palette to use. */
 export type ThemeMode = 'system' | 'light' | 'dark';
 
-/** Interface language. */
-export type Locale = 'en' | 'ru';
+/** Interface language. Mirrors the `Locale` enum in `localme-core`. */
+export type Locale = 'en' | 'ru' | 'es' | 'de' | 'fr' | 'pt' | 'zh';
 
 /** Appearance settings. */
 export interface AppearanceSettings {
@@ -92,6 +92,15 @@ export interface SystemSettings {
   closeToTray: boolean;
 }
 
+/** How much of its own activity the application writes to the log. */
+export type LogLevel = 'error' | 'warn' | 'info' | 'debug';
+
+/** Logging settings. */
+export interface LoggingSettings {
+  level: LogLevel;
+  retentionDays: number;
+}
+
 /** The settings document, as stored by the host. */
 export interface Settings {
   version: number;
@@ -100,6 +109,7 @@ export interface Settings {
   locale: Locale;
   notifications: NotificationSettings;
   system: SystemSettings;
+  logging: LoggingSettings;
 }
 
 /** Where a page of history starts. */
@@ -126,6 +136,21 @@ export interface Diagnostics {
   readonly tcpPort: number;
   readonly deviceId: string;
   readonly platform: string;
+}
+
+/** One daily log file. */
+export interface LogFile {
+  readonly name: string;
+  readonly sizeBytes: number;
+  readonly modifiedMs: number | null;
+}
+
+/** The log directory, as the settings screen describes it. */
+export interface LogsInfo {
+  readonly directory: string;
+  readonly files: readonly LogFile[];
+  readonly totalBytes: number;
+  readonly retentionDays: number;
 }
 
 /** Labels the host draws outside the web view. */

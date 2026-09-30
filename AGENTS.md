@@ -19,8 +19,9 @@ Typical user loop:
    _delivered_.
 4. History, presence, unread counts and settings persist across restarts.
 
-UI languages: English and Russian. Identifier: `dev.localme.desktop`. Version: `0.1.8`. Changelog:
-[CHANGELOG.md](CHANGELOG.md). Design notes: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+UI languages: English, Russian, Spanish, German, French, Portuguese and Chinese. Identifier:
+`dev.localme.desktop`. Version: `0.2.0`. Changelog: [CHANGELOG.md](CHANGELOG.md). Design notes:
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Stack (accurate)
 
@@ -32,11 +33,14 @@ UI languages: English and Russian. Identifier: `dev.localme.desktop`. Version: `
 | Palette   | `@material/material-color-utilities` (HCT tonal palettes from the accent colour)                     |
 | Avatars   | `blobatar` (static SVG data URIs, memoised)                                                          |
 | Lists     | `@tanstack/vue-virtual` (headless)                                                                   |
+| Pages     | `vue-router` with hash history; one route per page, the shell is the parent route                    |
+| Motion    | `motion-v` (Motion for Vue), configured once through `MotionConfig`                                  |
 | State     | Pinia (`src/stores/`)                                                                                |
-| i18n      | A typed module (`src/i18n/`), `en` + `ru`, missing key is a compile error                            |
+| i18n      | A typed module (`src/i18n/`), `en` `ru` `es` `de` `fr` `pt` `zh`, missing key is a compile error     |
 | Native    | Rust edition 2024, Tauri 2                                                                           |
 | Storage   | SQLite via `rusqlite` (bundled) owned by one writer thread                                           |
 | Discovery | `mdns-sd` + a UDP beacon (`socket2`)                                                                 |
+| Logs      | `tracing` to `stderr` and to a daily file under `logs/`, pruned by the settings document             |
 | Tests     | Vitest (front end, `src/**/*.spec.ts`) and `cargo test` (core, incl. a two-instance loopback suite)  |
 
 Path alias `@/*` → `src/*` (`tsconfig.app.json`, `vite.config.ts`). Vite dev server is
@@ -49,19 +53,19 @@ so the interface renders but has no data. Use `npm run tauri dev` for the real a
 
 ```
 src/
-  main.ts, App.vue         Vue mount, theme init, request routing
+  main.ts, App.vue         Vue mount, theme init, the process-level gates
   ipc/                     the only frontend ↔ Tauri boundary (typed commands + events)
   theme/                   MD3 tokens, palettes, accent generation
-  i18n/                    typed t(), en + ru message catalogues, Intl formatting
+  i18n/                    typed t(), seven catalogues, Intl formatting
   ui/                      design-system components (MdButton, MdTextField, MdDialog, …)
   features/
     onboarding/            first-run nickname + avatar
     users/                 user list, search, sorting, forget
     chat/                  message list, composer, history paging
-    settings/              grouped settings screen
+    settings/              profile, appearance, language, notifications, system, data, logs
   stores/                  Pinia: peers, chat, settings, ui
-  composables/             useNow, useMediaQuery
-  app/                     connect (event bridge), errors, ready
+  composables/             useNow, useMediaQuery, useEntrance
+  app/                     router + routes, ShellView, connect (event bridge), errors, ready
 src-tauri/
   Cargo.toml               package `localme` (host) + workspace definition
   tauri.conf.json          Tauri 2 configuration
@@ -73,7 +77,8 @@ src-tauri/
     args.rs                argument parsing/validation (unit-tested)
     state.rs               the shared host state handed to commands
     events.rs              CoreEvent → window.emit (suppressed while hidden in the tray)
-    tray.rs  window.rs  notifications.rs  autostart.rs  logging.rs  error.rs
+    tray.rs  window.rs  notifications.rs  autostart.rs  error.rs
+    logging.rs              the subscriber: daily files, retention pruning, the level reload
   core/                    crate `localme-core` — no Tauri, no UI
     src/
       domain/              pure: DeviceId, Nickname, MessageId, Peer, PresenceMachine
@@ -104,7 +109,8 @@ ui       → theme (tokens) only; never ipc, stores or features
 ipc      → nothing in src/ (it is the boundary)
 ```
 
-Feature modules must not import other features; `App.vue` composes them. Components never call the
+Feature modules must not import other features; the route table (`src/app/router.ts`) and the
+shell (`src/app/ShellView.vue`) compose them. Components never call the
 host directly — every command and event goes through `src/ipc/`. When a feature grows, add
 siblings in the same `src/features/<feature>/` directory.
 
@@ -135,6 +141,7 @@ it in `src/ipc/`.
 | Profile              | `own_profile`, `set_nickname`, `complete_onboarding`                                          |
 | Settings & UI labels | `get_settings`, `update_settings`, `is_autostart_enabled`, `set_ui_labels`, `set_active_chat` |
 | Window & lifecycle   | `show_window`, `hide_window`, `quit`, `diagnostics`                                           |
+| Logs                 | `logs_info`, `open_logs_folder`, `clear_logs`, `log_frontend`                                 |
 
 Host events: `peers`, `message`, `message_status`, `settings_changed`, `state_snapshot`,
 `open_chat`, `notice`, `stopped`. They are fanned into the stores by `src/app/connect.ts` — the
@@ -189,7 +196,9 @@ a tray-resident instance at ~0 % CPU.
 7. **No `v-html`, ever.** Message bodies and nicknames are rendered with `{{ }}`; an ESLint rule
    (`vue/no-v-html`) enforces it.
 8. Keep the core's state serialisable and UI-independent. UI renders; services perform I/O.
-9. Every user-facing string exists in **both** `en` and `ru`; a missing key must be a compile error.
+9. Every user-facing string exists in **every** catalogue (`en`, `ru`, `es`, `de`, `fr`, `pt`, `zh`); a
+   missing key is a compile error and `messages.spec.ts` checks the placeholders and the plural
+   forms of each language.
 10. Do not commit secrets, build output (`dist/`, `src-tauri/target/`, `src-tauri/gen/`), or
     OS-specific temp files.
 
@@ -208,15 +217,23 @@ Formatting: Prettier, **100** print width, single quotes (`/.prettierrc.json`). 
 
 ## How to add work safely
 
-- **Screen / feature:** add under `src/features/<name>/`, route it from `App.vue`, and import only
-  from `ipc/`, `stores/`, `ui/`, `theme/`, `i18n/`, `composables/`.
+- **Screen / feature:** add under `src/features/<name>/`, register it as a route in
+  `src/app/router.ts` (a page is an address, not a flag), and import only from `ipc/`, `stores/`,
+  `ui/`, `theme/`, `i18n/`, `composables/`.
 - **Native capability:** implement in the matching Rust module, register in `lib.rs`, wrap in
   `src/ipc/index.ts` and `types.ts`, then call it from a store or a feature.
-- **String:** add the key to `Messages` and both `src/i18n/messages/en.ts` and `ru.ts`.
+- **Motion:** use `motion-v`. `MotionConfig reduced-motion="user"` in `App.vue` is the one place the
+  system preference is applied, so do not re-check it per component. In a virtualised list, tie the
+  animation to the item _arriving_ (`useEntranceWindow`, `chat.consumeEntrance`) rather than to the
+  row mounting, and leave no transform at rest on a list row — see the note in `UserListView.vue`.
+- **String:** add the key to `src/i18n/messages/en.ts` (the source of truth for `MessageKey`) and to
+  **every** other catalogue; `npm run test` fails when one is missing. A new language is a catalogue
+  plus an entry in `src/i18n/locales.ts`, `src/ipc/types.ts` and `Locale` in `localme-core`.
 - **UI control:** add an `Md*` component in `src/ui/` using the tokens from `src/theme/tokens.css`;
   do not import a component library.
-- **Setting:** extend the typed `Settings` document, its default, the settings screen, and both
-  catalogues.
+- **Setting:** extend the typed `Settings` document (and its schema version), its default, the
+  settings screen, and every catalogue. A logging level or retention change is applied by the host
+  without a restart: `events::apply_settings` calls `logging::apply`.
 - **Protocol change:** bump the envelope protocol version and update the frame table in
   `docs/ARCHITECTURE.md` §5.2.
 
@@ -262,7 +279,9 @@ check:versions` must pass.
 - Presence transitions, including the simultaneous-connect tie-break
 - Persistence across restart (peers, history, settings, window bounds)
 - Tray close, native notification, single-instance focus
-- `en` and `ru` copy for every new string
+- Copy in every catalogue for each new string, with the plural forms the language actually uses
+- Pages: a new screen is a route, and the back behaviour follows from it
+- The log file: a start still writes one line, and a level change takes effect without a restart
 - Light and dark theme if you touched chrome or tokens
 - `CHANGELOG.md` updated and SemVer bumped across every version file
 - `docs/ARCHITECTURE.md` updated when a decision or a bound changes
@@ -270,6 +289,11 @@ check:versions` must pass.
 ## Out of scope / traps
 
 - Do not add a second component library, a second state library or a second i18n system.
+- Do not add a second animation library, and do not hand-write the same `motion` animation again in a
+  component that a shared pattern already covers: the user list, the message log and the unread badge
+  are the three that exist.
+- Do not navigate with anything but the router: a store field that decides which page is on screen
+  is the bug this architecture replaced.
 - Do not call Tauri `invoke`/`listen` outside `src/ipc/`.
 - Do not put protocol, discovery or storage logic in the Tauri host crate.
 - Do not trust remote clocks, and do not add a clock to the presence machine.

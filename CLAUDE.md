@@ -11,7 +11,8 @@ over mDNS/DNS-SD (with a UDP beacon fallback) and exchange text messages over TC
 account, no configuration. Messages are stored locally in SQLite on both ends.
 
 Stack: Vue 3.5 + TypeScript (strict) + Vite 8 + Pinia + own Material Design 3 components +
-`@tanstack/vue-virtual` + `blobatar`. i18n: `en` + `ru`. Native: Rust edition 2024, Tauri 2, a
+`@tanstack/vue-virtual` + `blobatar`. Pages: `vue-router`. Motion: `motion-v`. i18n: `en`, `ru`,
+`es`, `de`, `fr`, `pt`, `zh`. Native: Rust edition 2024, Tauri 2, a
 Tauri-free `localme-core` crate plus a thin `localme` host crate. Identifier: `dev.localme.desktop`.
 Alias `@/*` → `src/*`. Vite dev server **127.0.0.1:5173**.
 
@@ -48,10 +49,11 @@ Before finishing a change: `npm run build`, `npm run check:versions`, and
 src/main.ts, App.vue       Vue mount, theme init, request routing
 src/ipc/index.ts           the only frontend ↔ Tauri boundary (typed commands + events)
 src/theme/                 MD3 tokens, palettes, accent generation
-src/i18n/                  typed t(), en + ru catalogues
+src/i18n/                  typed t(), seven catalogues
 src/ui/                    design-system components (Md*)
-src/features/<name>/       one screen; kebab-case dirs (onboarding, users, chat, settings)
+src/features/<name>/       one page; kebab-case dirs (onboarding, users, chat, settings)
 src/stores/                Pinia: peers, chat, settings, ui
+src/app/router.ts          the page table; ShellView.vue is the two-pane shell
 src/app/connect.ts         the only place that subscribes to host events
 src-tauri/src/lib.rs       bootstrap + command registration
 src-tauri/src/commands.rs  thin IPC commands; args.rs validates arguments
@@ -107,7 +109,7 @@ Default to patch when unsure. Keep `package.json`, `package-lock.json`, `src-tau
 3. Every inbound byte is hostile — size, shape, length and rate are checked before the domain.
 4. One clock: every stored timestamp is the local clock; remote clocks are display-only.
 5. No `v-html` anywhere (lint-enforced). Render message bodies as text.
-6. Every user-facing string: both `en` and `ru`, and a missing key must not compile.
+6. Every user-facing string: every catalogue, and a missing key must not compile.
 7. No `any` in new TypeScript. Small functions, explicit types.
 8. Do not commit secrets, `dist/`, `src-tauri/target/`, `src-tauri/gen/`, or OS temp files.
 9. Log every change in `CHANGELOG.md` and bump SemVer (patch for small changes).
@@ -119,7 +121,9 @@ Feature dirs kebab-case. Tests next to the module (`*.spec.ts`) or under `tests/
 
 ## Do not
 
-- Add a component library, a second state library or a second i18n system.
+- Add a component library, a second state library, a second i18n system or a second animation
+  library.
+- Put the current page in a store: the router owns it.
 - Call Tauri `invoke`/`listen` outside `src/ipc/`.
 - Put protocol, discovery or storage logic in the Tauri host crate.
 - Trust remote clocks.

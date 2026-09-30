@@ -109,6 +109,10 @@ const dot = computed(() => `${Math.max(8, Math.round(props.size / 3.2))}px`);
   inset-inline-end: 0;
   border: 2px solid var(--md-sys-color-surface);
   border-radius: var(--md-sys-shape-corner-full);
+  /* Presence changes under the user's eyes — a peer going offline mid-conversation — so the dot
+     recolours rather than flicking between two colours on the next frame. */
+  transition: background-color var(--md-sys-motion-duration-medium1)
+    var(--md-sys-motion-easing-standard);
 }
 
 .md-avatar__presence--online {

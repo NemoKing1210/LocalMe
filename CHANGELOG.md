@@ -5,6 +5,35 @@ All notable changes to LocalMe are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-10-01
+
+### Added
+
+- A daily log file, under `logs/` in the data directory, with the level of detail and the number of
+  days to keep chosen in settings. The same screen shows where the files are, how much room they
+  take, opens the folder in the file manager and deletes them — and an error thrown by the
+  interface itself is written to the same file, so a problem survives the window being closed
+- Five more interface languages: Spanish, German, French, Portuguese and Chinese, alongside English
+  and Russian
+- Chats and settings are pages with their own address now, so the back gesture and the back button
+  return to where the user came from instead of the window forgetting it
+- Motion throughout: page changes, the people list, a message arriving, its delivery status, unread
+  badges, the theme change itself, and the first-run screen handing over to the conversation list.
+  All of it is switched off when the operating system asks for reduced motion
+
+### Changed
+
+- The settings document gains a `logging` group (schema version 2); a file written by an earlier
+  version is read and upgraded, with the default level and a fourteen-day retention
+
+### Fixed
+
+- The people list no longer empties itself a few seconds after launch, and a message that arrives
+  while the application is running appears in the conversation immediately. The host was sending
+  every event wrapped in its own name (`{"peers":{"peers":[…]}}`), so the interface read an empty
+  list and an undefined message from each one; the payloads are now the shapes the interface
+  declares, and a test pins each of them
+
 ## [0.1.8] - 2026-10-01
 
 ### Removed

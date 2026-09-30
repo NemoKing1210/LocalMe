@@ -1,0 +1,200 @@
+/**
+ * Portuguese messages.
+ *
+ * Typed against the English catalogue's keys through `MessageCatalog`, with the additional
+ * CLDR plural category Portuguese needs (`many`) permitted. The `i18n` test suite fails if a
+ * key is missing, unknown, or if a placeholder does not match the English one.
+ */
+import type { MessageCatalog } from './types';
+
+export const pt: MessageCatalog = {
+  'app.name': 'LocalMe',
+  'app.tagline': 'Mensagens na tua rede local',
+
+  'common.cancel': 'Cancelar',
+  'common.confirm': 'Confirmar',
+  'common.close': 'Fechar',
+  'common.save': 'Guardar',
+  'common.delete': 'Eliminar',
+  'common.search': 'Pesquisar',
+  'common.retry': 'Tentar novamente',
+  'common.back': 'Voltar',
+  'common.loading': 'A carregar…',
+  'common.you': 'Tu',
+  'common.dismiss': 'Dispensar',
+  'common.more': 'Mais',
+  'common.options': 'Opções',
+  'common.clear': 'Limpar',
+
+  'onboarding.title': 'Bem-vindo ao LocalMe',
+  'onboarding.subtitle':
+    'O LocalMe encontra os outros computadores que o usam na tua rede. Sem conta, sem servidor.',
+  'onboarding.nickname.label': 'Como queres que te chamem?',
+  'onboarding.nickname.placeholder': 'O teu nome',
+  'onboarding.nickname.help': 'Entre 1 e 32 caracteres. Não é um nome de utilizador único.',
+  'onboarding.nickname.errorEmpty': 'Introduz um nome.',
+  'onboarding.nickname.errorTooLong': 'Esse nome tem mais de {max} caracteres.',
+  'onboarding.nickname.errorControl': 'Esse nome contém caracteres que não podem ser usados.',
+  'onboarding.avatarPreview': 'É assim que o teu avatar vai aparecer',
+  'onboarding.submit': 'Começar a conversar',
+
+  'users.title': 'Pessoas',
+  'users.emptyTitle': 'Ainda não está aqui ninguém',
+  'users.emptyBody':
+    'Confirma que o outro computador está na mesma rede e tem o LocalMe a funcionar. A deteção costuma levar alguns segundos.',
+  'users.searchPlaceholder': 'Pesquisar pessoas',
+  'users.clearSearch': 'Limpar pesquisa',
+  'users.searchEmpty': 'Ninguém corresponde a “{query}”.',
+  'users.online': 'em linha',
+  'users.offline': 'desligado',
+  'users.lastSeen': 'visto {relative}',
+  'users.neverSeen': 'nunca esteve em linha',
+  'users.unread': '{count} mensagens não lidas',
+  'users.unread.one': '{count} mensagem não lida',
+  'users.unread.many': '{count} mensagens não lidas',
+  'users.forget': 'Esquecer…',
+  'users.muted': 'Notificações silenciadas',
+  'users.openChatWith': 'Conversa com {name}',
+  'users.actionsFor': 'Ações para {name}',
+  'users.mute': 'Silenciar notificações',
+  'users.unmute': 'Reativar notificações',
+  'users.you': 'Tu ({name})',
+  'users.count': 'Pessoas: {count}',
+
+  'forget.title': 'Esquecer {name}?',
+  'forget.body':
+    'Vai desaparecer da tua lista. Se o computador dessa pessoa voltar a aparecer na rede, será adicionado como uma nova pessoa.',
+  'forget.deleteHistory': 'Eliminar também o histórico de mensagens',
+  'forget.confirm': 'Esquecer',
+
+  'chat.emptyTitle': 'Escolhe alguém para conversar',
+  'chat.emptyBody': 'Escolhe uma pessoa da lista para abrir a conversa.',
+  'chat.composerPlaceholder': 'Mensagem para {name}',
+  'chat.composerOffline': 'Não é possível enviar mensagens enquanto {name} estiver desligado',
+  'chat.composerOfflineHint':
+    '{name} está desligado. Podes voltar a escrever quando estiver de volta.',
+  'chat.send': 'Enviar',
+  'chat.tooLong': 'Essa mensagem tem mais de {max} caracteres.',
+  'chat.composerHint': 'Enter envia, Shift+Enter muda de linha',
+  'chat.statusSending': 'A enviar…',
+  'chat.statusSent': 'Enviada',
+  'chat.statusDelivered': 'Entregue',
+  'chat.statusFailed': 'Não entregue',
+  'chat.loadOlder': 'Carregar mensagens anteriores',
+  'chat.dayToday': 'Hoje',
+  'chat.dayYesterday': 'Ontem',
+  'chat.jumpToLatest': 'Ir para as mensagens mais recentes',
+  'chat.messageList': 'Mensagens com {name}',
+  'chat.sending': 'A enviar a tua mensagem',
+  'chat.historyEnd': 'Este é o início da conversa',
+
+  'settings.title': 'Definições',
+  'settings.close': 'Voltar às mensagens',
+  'settings.groupProfile': 'Perfil',
+  'settings.groupAppearance': 'Aspeto',
+  'settings.groupLanguage': 'Idioma',
+  'settings.groupNotifications': 'Notificações',
+  'settings.groupSystem': 'Sistema',
+  'settings.groupData': 'Dados',
+  'settings.groupLogging': 'Registos',
+
+  'settings.nickname': 'Alcunha',
+  'settings.nicknameHelp': 'Visível para todos na rede.',
+
+  'settings.theme': 'Tema',
+  'settings.themeSystem': 'Sistema',
+  'settings.themeLight': 'Claro',
+  'settings.themeDark': 'Escuro',
+  'settings.accent': 'Cor de destaque',
+  'settings.accentHelp': 'Muda toda a paleta, não apenas um botão.',
+
+  'settings.language': 'Idioma da interface',
+  'settings.languageHelp': 'Aplica-se imediatamente e fica memorizado.',
+
+  'settings.notificationsEnabled': 'Mostrar notificações',
+  'settings.notificationsEnabledHelp':
+    'As mensagens novas continuam a chegar mesmo com isto desligado.',
+  'settings.showMessageText': 'Incluir o texto da mensagem',
+  'settings.showMessageTextHelp':
+    'Desliga isto para saber que chegou uma mensagem sem ver o que ela diz.',
+  'settings.notificationSound': 'Reproduzir um som',
+
+  'settings.autostart': 'Iniciar o LocalMe quando eu iniciar sessão',
+  'settings.startMinimized': 'Iniciar minimizado na bandeja',
+  'settings.closeToTray': 'Continuar a funcionar na bandeja quando a janela é fechada',
+  'settings.closeToTrayHelp':
+    'Com isto desligado, fechar a janela encerra o LocalMe e deixas de receber mensagens.',
+
+  'settings.clearHistory': 'Eliminar todo o histórico de mensagens',
+  'settings.clearHistoryHelp': 'Elimina todas as conversas neste computador.',
+  'settings.clearHistoryConfirm': 'Eliminar todas as mensagens?',
+  'settings.knownDevices': 'Dispositivos conhecidos',
+  'settings.devicesEmpty': 'Ainda não foi visto nenhum dispositivo.',
+  'settings.deviceForgotten': 'esquecido',
+  'settings.deviceKnown': 'conhecido',
+  'settings.restoreDevice': 'Voltar a receber deste dispositivo',
+
+  'settings.logLevel': 'Detalhe dos registos',
+  'settings.logLevelHelp':
+    'A quantidade do próprio trabalho que a aplicação registra. Aplica-se de imediato.',
+  'settings.logLevelError': 'Erros',
+  'settings.logLevelWarn': 'Avisos',
+  'settings.logLevelInfo': 'Normal',
+  'settings.logLevelDebug': 'Detalhado',
+  'settings.logRetention': 'Manter os registos durante',
+  'settings.logRetentionHelp':
+    'Os ficheiros diários mais antigos do que isto são eliminados automaticamente.',
+  'settings.logFolder': 'Pasta dos registos',
+  'settings.logSummary': '{count} ficheiros · {size}',
+  'settings.logSummary.one': '{count} ficheiro · {size}',
+  'settings.logSummary.many': '{count} ficheiros · {size}',
+  'settings.logEmpty': 'Ainda não há ficheiros de registo.',
+  'settings.openLogFolder': 'Abrir pasta',
+  'settings.clearLogs': 'Eliminar ficheiros de registo',
+  'settings.clearLogsConfirm': 'Eliminar todos os ficheiros de registo?',
+  'settings.clearLogsHelp': 'A pasta mantém-se; só os ficheiros são eliminados.',
+  'settings.logsCleared': 'Eliminados {size} de registos.',
+  'settings.logFolderFailed': 'Não foi possível abrir a pasta dos registos.',
+  'settings.logsFailed': 'Não foi possível ler os ficheiros de registo.',
+
+  'settings.aboutTitle': 'Acerca de',
+  'settings.aboutVersion': 'Versão {version}',
+  'settings.aboutArchitecture': 'Mensageiro de rede local',
+  'settings.aboutLicense': 'Licenciado ao abrigo da licença MIT.',
+  'settings.aboutDiagnostics': 'Diagnóstico',
+  'settings.devicesKnown': 'Conhecidos',
+  'settings.devicesForgotten': 'Esquecidos',
+  'settings.saveFailed': 'Não foi possível guardar essa definição.',
+  'settings.historyCleared': 'Eliminadas {count} mensagens.',
+  'settings.notificationsPerPeerHelp':
+    'Podes silenciar pessoas individualmente no menu ⋮ da lista.',
+  'locale.en': 'English',
+  'locale.ru': 'Русский',
+  'locale.es': 'Español',
+  'locale.de': 'Deutsch',
+  'locale.fr': 'Français',
+  'locale.pt': 'Português',
+  'locale.zh': '中文',
+
+  'tray.open': 'Abrir o LocalMe',
+  'tray.mute': 'Pausar notificações',
+  'tray.unmute': 'Retomar notificações',
+  'tray.quit': 'Sair do LocalMe',
+  'tray.tooltipIdle': 'LocalMe — sem mensagens não lidas',
+  'tray.tooltipUnread': 'LocalMe — {count} não lidas',
+
+  'notification.newMessage': 'Nova mensagem',
+  'notification.newMessageCount': '{count} mensagens novas',
+  'notification.newMessageCount.one': '{count} mensagem nova',
+  'notification.newMessageCount.many': '{count} mensagens novas',
+
+  'error.storage': 'O LocalMe não conseguiu ler a própria base de dados.',
+  'error.discovery': 'O LocalMe não conseguiu procurar outros dispositivos nesta rede.',
+  'error.network': 'Não foi possível entregar.',
+  'error.internal': 'Algo correu mal. Os detalhes técnicos estão no registo.',
+  'error.unknownPeer': 'Essa pessoa já não está na tua lista.',
+  'error.peerOffline': 'Não está em linha neste momento.',
+  'error.shuttingDown': 'O LocalMe está a encerrar.',
+  'error.databaseRecovered':
+    'A base de dados de mensagens estava danificada e não pôde ser usada. Foi guardada como {path} e foi criada uma nova base de dados.',
+};

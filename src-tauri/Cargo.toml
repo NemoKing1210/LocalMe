@@ -1,6 +1,6 @@
 [package]
 name = "localme"
-version = "0.1.8"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.85"
 description = "LocalMe — a zero-configuration messenger for the local network"
@@ -52,6 +52,9 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
+
+[dev-dependencies]
+tempfile = "3.23.0"
 
 [features]
 # Without this the front end is loaded from `devUrl`, which is what `tauri dev` wants and what

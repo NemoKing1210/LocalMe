@@ -8,7 +8,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { dayKey, formatClockTime, formatDayHeading, formatRelativeTime } from './format';
+import { byteUnit, dayKey, formatClockTime, formatDayHeading, formatRelativeTime } from './format';
 
 const SECOND = 1_000;
 const MINUTE = 60 * SECOND;
@@ -108,5 +108,28 @@ describe('dayKey and formatDayHeading', () => {
     const labels = { today: 'Today', yesterday: 'Yesterday' };
     expect(formatDayHeading(firstOfMarch, NOW, 'en', labels)).not.toBe('Yesterday');
     expect(formatDayHeading(lastOfFebruary, NOW, 'en', labels)).not.toBe('Yesterday');
+  });
+});
+
+describe('byteUnit', () => {
+  it('keeps bytes whole and everything above them to one decimal', () => {
+    expect(byteUnit(0)).toEqual({ unit: 'byte', digits: 0, scaled: 0 });
+    expect(byteUnit(1023)).toEqual({ unit: 'byte', digits: 0, scaled: 1023 });
+  });
+
+  it('steps up a unit exactly at the boundary', () => {
+    // The boundary is the whole point: a log directory of 1024 bytes is "1 kB", not "1024 B".
+    expect(byteUnit(1024)).toEqual({ unit: 'kilobyte', digits: 1, scaled: 1 });
+    expect(byteUnit(1536)).toEqual({ unit: 'kilobyte', digits: 1, scaled: 1.5 });
+    expect(byteUnit(1024 * 1024)).toEqual({ unit: 'megabyte', digits: 1, scaled: 1 });
+    expect(byteUnit(3 * 1024 * 1024 * 1024)).toEqual({
+      unit: 'gigabyte',
+      digits: 1,
+      scaled: 3,
+    });
+  });
+
+  it('treats a negative size as nothing rather than inventing a unit', () => {
+    expect(byteUnit(-5)).toEqual({ unit: 'byte', digits: 0, scaled: 0 });
   });
 });

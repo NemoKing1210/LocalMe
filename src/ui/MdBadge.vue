@@ -9,6 +9,7 @@
  * bit of information.
  */
 import { computed } from 'vue';
+import { AnimatePresence, motion } from 'motion-v';
 
 const props = withDefaults(
   // The `| undefined` is not decoration: an optional prop already has that type, but
@@ -32,7 +33,22 @@ const text = computed(() => {
 </script>
 
 <template>
-  <span v-if="visible" class="md-badge md-typescale-label-small">{{ text }}</span>
+  <!-- Keyed by the number so the value change is an animation rather than a silent rewrite, and
+       `popLayout` takes the outgoing badge out of the layout while it leaves, so the row does
+       not jump sideways for the length of the cross-fade. -->
+  <AnimatePresence mode="popLayout">
+    <motion.span
+      v-if="visible"
+      :key="text"
+      class="md-badge md-typescale-label-small"
+      :initial="{ opacity: 0, scale: 0.6 }"
+      :animate="{ opacity: 1, scale: 1 }"
+      :exit="{ opacity: 0, scale: 0.6 }"
+      :transition="{ type: 'spring', stiffness: 520, damping: 28 }"
+    >
+      {{ text }}
+    </motion.span>
+  </AnimatePresence>
 </template>
 
 <style scoped>

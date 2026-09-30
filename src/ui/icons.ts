@@ -201,6 +201,13 @@ export const ICONS: Record<string, readonly Shape[]> = {
     { kind: 'path', d: 'M4 12c0 1.4 3.6 2.6 8 2.6s8-1.2 8-2.6' },
   ],
   'chevron-down': [{ kind: 'polyline', points: '6,9.5 12,15.5 18,9.5' }],
+  folder: [
+    {
+      kind: 'path',
+      d: 'M3.3 6.8A2 2 0 0 1 5.3 4.8h3.5l1.9 2.3h8a2 2 0 0 1 2 2v7.9a2 2 0 0 1-2 2H5.3a2 2 0 0 1-2-2z',
+    },
+    { kind: 'line', x1: 3.3, y1: 9.5, x2: 20.7, y2: 9.5 },
+  ],
 };
 
 /** Every icon name, so a typo is caught by the type checker at the call site. */

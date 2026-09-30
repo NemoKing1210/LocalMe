@@ -1983,7 +1983,7 @@ checksum = "47d9d19d1d6efa0109d2f65ff4c85cddd50bd572e5a00127ab10987290bcefae"
 
 [[package]]
 name = "localme"
-version = "0.1.8"
+version = "0.2.0"
 dependencies = [
  "localme-core",
  "serde",
@@ -1995,6 +1995,7 @@ dependencies = [
  "tauri-plugin-os",
  "tauri-plugin-process",
  "tauri-plugin-single-instance",
+ "tempfile",
  "thiserror 2.0.21",
  "tokio",
  "tracing",
@@ -2005,7 +2006,7 @@ dependencies = [
 
 [[package]]
 name = "localme-core"
-version = "0.1.8"
+version = "0.2.0"
 dependencies = [
  "mdns-sd",
  "rusqlite",

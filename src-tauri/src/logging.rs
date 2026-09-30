@@ -1,25 +1,613 @@
-//! Logging setup.
+//! Logging setup: one subscriber for the process, one file per day, and a bounded directory.
 //!
-//! One subscriber for the whole process, writing to stderr so that on Windows the console
-//! build shows it and on macOS/Linux it lands in the launch terminal. Verbosity is
-//! controlled by `RUST_LOG`, defaulting to `info` for our own crates and `warn` for the
-//! dependency tree, which keeps a normal run quiet without hiding a real problem.
+//! The log is the only artefact a user can send us about a failure that happened on a machine
+//! we will never see, so it is written by the application itself rather than left to whatever
+//! stderr happens to be attached to. Four decisions shape this module:
+//!
+//! * **One file per day**, named `localme.YYYY-MM-DD.log`, written under `logs/` in the data
+//!   directory. The day comes from UTC: `std` has no local-time API, and a name that is an
+//!   hour or two off at the boundary matters to nobody, while a dependency that can fail to
+//!   resolve a time zone at exactly the moment we need to write a log does.
+//! * **Append on every record.** The file is opened, written and closed per event rather than
+//!   held open, which costs one `open` per record — negligible at this application's volume —
+//!   and buys two things worth far more: "clear logs" and "prune old logs" work while the
+//!   application is running, on Windows too, where deleting an open file fails.
+//! * **Bounded retention.** Pruning runs once a day, triggered by the first record written
+//!   after the date rolls over, so the directory cannot grow without limit and nothing has to
+//!   keep a timer running to keep it that way.
+//! * **Never fatal.** Every filesystem step is best-effort: a log we could not write must not
+//!   take down the messenger that was trying to report a problem.
+//!
+//! `stderr` keeps receiving the same records, so `cargo tauri dev` and a launch from a terminal
+//! behave exactly as they did before files existed.
+//!
+//! The state lives in [`Logs`] rather than in module-level globals so it can be constructed in
+//! a temporary directory by the tests below; [`init`] is the only thing that publishes one for
+//! the rest of the process.
 
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, IsTerminal, Write};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use localme_core::services::{
+    DEFAULT_LOG_RETENTION_DAYS, LogLevel, LoggingSettings, MAX_LOG_RETENTION_DAYS,
+    MIN_LOG_RETENTION_DAYS,
+};
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::Registry;
+use tracing_subscriber::fmt::MakeWriter;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::reload;
+use tracing_subscriber::util::SubscriberInitExt;
 
-/// Installs the global subscriber.
+/// Folder inside the data directory that holds the daily files.
+pub const LOG_DIRECTORY: &str = "logs";
+
+/// Prefix of every file the application writes.
+const FILE_PREFIX: &str = "localme";
+
+/// Extension of every file the application writes.
+const FILE_EXTENSION: &str = "log";
+
+/// Longest record field the front end may send; longer ones are cut, not rejected.
+const MAX_FRONTEND_MESSAGE_CHARS: usize = 4_096;
+
+/// Filter used when neither `RUST_LOG` nor the settings document has an opinion.
+const DEFAULT_FILTER: &str =
+    "localme=info,localme_core=info,tauri=warn,tauri_runtime=warn,mdns_sd=warn";
+
+/// The directory logs are written to, once [`init`] has run.
+static LOGS: OnceLock<Arc<Logs>> = OnceLock::new();
+
+/// Handle that lets the level be changed without restarting the process.
+static LEVEL: OnceLock<reload::Handle<EnvFilter, Registry>> = OnceLock::new();
+
+/// Whether `RUST_LOG` was set, in which case the settings document does not get to override it.
+static ENV_OVERRIDE: OnceLock<bool> = OnceLock::new();
+
+/// One file in the log directory, as the settings screen sees it.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogFile {
+    /// File name, including the date.
+    pub name: String,
+    /// Size in bytes.
+    pub size_bytes: u64,
+    /// Last modification time, in milliseconds since the Unix epoch.
+    pub modified_ms: Option<u64>,
+}
+
+/// What the settings screen needs to describe the log directory.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogsInfo {
+    /// Absolute path of the directory, shown so it can be read out in a bug report.
+    pub directory: String,
+    /// The files, newest first.
+    pub files: Vec<LogFile>,
+    /// Their combined size in bytes.
+    pub total_bytes: u64,
+    /// How many days the directory is allowed to hold.
+    pub retention_days: u32,
+}
+
+/// The log directory and the policy applied to it.
 ///
-/// Called once, first thing in [`crate::run`]. A second call is ignored by
-/// `tracing_subscriber`, and a malformed `RUST_LOG` falls back to the default filter rather
-/// than failing the start.
-pub fn init() {
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-        EnvFilter::new("localme=info,localme_core=info,tauri=warn,tauri_runtime=warn,mdns_sd=warn")
-    });
+/// Owned behind an `Arc` by the subscriber that writes the files and by the commands that
+/// describe and clear them, which is what keeps the two from disagreeing about where the files
+/// are.
+#[derive(Debug)]
+pub struct Logs {
+    directory: PathBuf,
+    retention_days: AtomicU32,
+    /// Day key of the last prune, so pruning happens once a day rather than once a record.
+    last_prune: Mutex<String>,
+}
 
-    tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .with_target(true)
-        .with_writer(std::io::stderr)
-        .init();
+impl Logs {
+    /// Prepares the directory; the caller decides whether it is reachable.
+    #[must_use]
+    pub fn new(directory: PathBuf) -> Self {
+        Self {
+            directory,
+            retention_days: AtomicU32::new(DEFAULT_LOG_RETENTION_DAYS),
+            last_prune: Mutex::new(String::new()),
+        }
+    }
+
+    /// Where the files are.
+    #[must_use]
+    pub fn directory(&self) -> &Path {
+        &self.directory
+    }
+
+    /// Applies retention and prunes immediately, so lowering it in the settings screen is
+    /// visible in the directory the settings screen just told the user to open.
+    pub fn set_retention(&self, days: u32) {
+        self.retention_days
+            .store(clamp_retention(days), Ordering::Relaxed);
+        self.prune();
+    }
+
+    /// How many days are kept.
+    #[must_use]
+    pub fn retention_days(&self) -> u32 {
+        self.retention_days.load(Ordering::Relaxed)
+    }
+
+    /// The daily files, newest first, with their sizes.
+    #[must_use]
+    pub fn files(&self) -> Vec<LogFile> {
+        let Ok(entries) = fs::read_dir(&self.directory) else {
+            return Vec::new();
+        };
+
+        let mut files: Vec<LogFile> = entries
+            .flatten()
+            .filter_map(|entry| {
+                let metadata = entry.metadata().ok()?;
+                if !metadata.is_file() {
+                    return None;
+                }
+                let name = entry.file_name().to_string_lossy().into_owned();
+                parse_date_key(&name)?;
+                let modified_ms = metadata
+                    .modified()
+                    .ok()
+                    .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+                    .map(|age| age.as_millis() as u64);
+                Some(LogFile {
+                    name,
+                    size_bytes: metadata.len(),
+                    modified_ms,
+                })
+            })
+            .collect();
+
+        // The name carries the date, so a plain reverse sort is newest first.
+        files.sort_by(|left, right| right.name.cmp(&left.name));
+        files
+    }
+
+    /// What the settings screen shows, including the retention currently in effect.
+    #[must_use]
+    pub fn info(&self) -> LogsInfo {
+        let files = self.files();
+        let total_bytes = files.iter().map(|file| file.size_bytes).sum();
+        LogsInfo {
+            directory: self.directory.display().to_string(),
+            files,
+            total_bytes,
+            retention_days: self.retention_days(),
+        }
+    }
+
+    /// Deletes every log file, returning the number of bytes freed.
+    ///
+    /// A file that cannot be removed is left alone: a partially cleared directory is a smaller
+    /// problem than an error the user cannot act on, and the next record recreates today's file
+    /// anyway.
+    pub fn clear(&self) -> u64 {
+        let mut freed = 0;
+        for file in self.files() {
+            if fs::remove_file(self.directory.join(&file.name)).is_ok() {
+                freed += file.size_bytes;
+            }
+        }
+        freed
+    }
+
+    /// Deletes files that fall outside the retention window.
+    pub fn prune(&self) {
+        let today = days_since_epoch(SystemTime::now());
+        let today_key = date_key(today);
+        if let Ok(mut last) = self.last_prune.lock() {
+            // Once a day is enough: the window moves by a day at a time.
+            if *last == today_key {
+                return;
+            }
+            *last = today_key;
+        }
+
+        let retention = i64::from(self.retention_days());
+        let cutoff = date_key(today - (retention - 1));
+        let Ok(entries) = fs::read_dir(&self.directory) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let Some(key) = parse_date_key(&name) else {
+                // Anything else in the directory belongs to somebody else.
+                continue;
+            };
+            // ISO dates compare correctly as strings, which is the whole reason for the format.
+            if key.as_str() < cutoff.as_str() {
+                let _ = fs::remove_file(entry.path());
+            }
+        }
+    }
+
+    /// Opens the log directory in the platform's file manager.
+    ///
+    /// # Errors
+    ///
+    /// [`io::Error`] if no file manager could be started, which is what a headless Linux session
+    /// or a locked-down desktop will report.
+    pub fn open_directory(&self) -> io::Result<()> {
+        let mut command = opener(&self.directory);
+        command.spawn().map(|_| ())
+    }
+
+    /// Opens today's file for appending, pruning first if the date has rolled over.
+    fn open_today(&self) -> Option<File> {
+        self.prune();
+        OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(
+                self.directory
+                    .join(file_name(days_since_epoch(SystemTime::now()))),
+            )
+            .ok()
+    }
+}
+
+/// The process-wide logs, if [`init`] has run.
+#[must_use]
+pub fn logs() -> Option<&'static Arc<Logs>> {
+    LOGS.get()
+}
+
+/// Installs the global subscriber, writing to `stderr` and to a daily file under `data_dir`.
+///
+/// Called once, from `setup`, before the core starts — everything the core and the window policy
+/// have to say therefore lands in the file. A second call leaves the first subscriber in place,
+/// so the function is safe to reach from more than one startup path.
+///
+/// Returns the directory the files are written to.
+pub fn init(data_dir: &Path) -> PathBuf {
+    let logs = Arc::new(Logs::new(data_dir.join(LOG_DIRECTORY)));
+    // Deliberately ignoring the error: if the directory cannot be created, `stderr` still gets
+    // every record and the application still runs.
+    let _ = fs::create_dir_all(logs.directory());
+    logs.prune();
+    let directory = logs.directory().to_path_buf();
+    let _ = LOGS.set(logs.clone());
+
+    let from_env = EnvFilter::try_from_default_env().ok();
+    let _ = ENV_OVERRIDE.set(from_env.is_some());
+    let filter = from_env.unwrap_or_else(|| EnvFilter::new(DEFAULT_FILTER));
+    let (filter, handle) = reload::Layer::new(filter);
+    let _ = LEVEL.set(handle);
+
+    // ANSI escapes are a terminal affordance: a GUI launch and a log file must not contain
+    // them, so they are on only when stderr is actually a terminal.
+    let _ = tracing_subscriber::registry()
+        .with(filter)
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_target(true)
+                .with_ansi(io::stderr().is_terminal())
+                .with_writer(LogsWriter { logs }),
+        )
+        .try_init();
+
+    directory
+}
+
+/// Reports a panic through the log before the default hook prints it.
+///
+/// With `panic = "abort"` in the release profile the hook is the last code that runs, so this is
+/// the only chance the file has to record why the process went away.
+pub fn install_panic_hook() {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let payload = info
+            .payload()
+            .downcast_ref::<&str>()
+            .map(|text| (*text).to_owned())
+            .or_else(|| info.payload().downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "a panic with a non-text payload".to_owned());
+        let location = info
+            .location()
+            .map(|place| format!("{}:{}:{}", place.file(), place.line(), place.column()))
+            .unwrap_or_else(|| "an unknown location".to_owned());
+        tracing::error!(panic = %payload, location = %location, "the application panicked");
+        previous(info);
+    }));
+}
+
+/// Applies the level from the settings document.
+///
+/// `RUST_LOG` wins: it is the escape hatch a developer reaches for when the interface is the
+/// thing that is broken, and a stored preference quietly overriding it would make debugging
+/// harder in exactly the case debugging matters.
+pub fn set_level(level: LogLevel) {
+    if ENV_OVERRIDE.get().copied().unwrap_or(false) {
+        tracing::debug!(
+            chosen = level.filter(),
+            "RUST_LOG is set, so the stored log level is not applied"
+        );
+        return;
+    }
+    match LEVEL.get() {
+        Some(handle) => {
+            if let Err(error) = handle.reload(EnvFilter::new(level.filter())) {
+                tracing::warn!(%error, "the log level could not be changed");
+            }
+        }
+        None => tracing::debug!("logging was not initialised; the log level was not applied"),
+    }
+}
+
+/// Applies both halves of the logging settings.
+pub fn apply(settings: &LoggingSettings) {
+    if let Some(logs) = logs() {
+        logs.set_retention(settings.retention_days);
+    }
+    set_level(settings.level);
+}
+
+/// Records a message from the front end in the same file as everything else.
+///
+/// The web view has no filesystem access and its console is invisible in a packaged build, so
+/// without this an error thrown by a component would exist only on a screen the user has
+/// already closed.
+pub fn log_frontend(level: &str, message: &str, context: Option<&str>) {
+    let message = truncate(message);
+    let context = context.map(truncate).unwrap_or_default();
+    match level {
+        "error" => tracing::error!(source = "frontend", %context, "{message}"),
+        "warn" => tracing::warn!(source = "frontend", %context, "{message}"),
+        "info" => tracing::info!(source = "frontend", %context, "{message}"),
+        _ => tracing::debug!(source = "frontend", %context, "{message}"),
+    }
+}
+
+/// Keeps a retention value inside the range the settings screen offers.
+fn clamp_retention(days: u32) -> u32 {
+    days.clamp(MIN_LOG_RETENTION_DAYS, MAX_LOG_RETENTION_DAYS)
+}
+
+/// Cuts a front-end message to a length a log can hold, on a character boundary.
+fn truncate(value: &str) -> String {
+    if value.chars().count() <= MAX_FRONTEND_MESSAGE_CHARS {
+        return value.to_owned();
+    }
+    let mut text: String = value.chars().take(MAX_FRONTEND_MESSAGE_CHARS).collect();
+    text.push('…');
+    text
+}
+
+/// The command that opens a directory in the platform's file manager.
+#[must_use]
+pub fn opener(directory: &Path) -> std::process::Command {
+    #[cfg(target_os = "windows")]
+    let program = "explorer";
+    #[cfg(target_os = "macos")]
+    let program = "open";
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    let program = "xdg-open";
+
+    // On Windows `explorer` reports a non-zero status even when it opened the folder, so the
+    // caller checks only that the process started.
+    let mut command = std::process::Command::new(program);
+    command.arg(directory);
+    command
+}
+
+/// The writer `tracing` asks for once per record.
+#[derive(Clone)]
+struct LogsWriter {
+    logs: Arc<Logs>,
+}
+
+impl<'writer> MakeWriter<'writer> for LogsWriter {
+    type Writer = MultiWriter;
+
+    fn make_writer(&'writer self) -> Self::Writer {
+        MultiWriter {
+            stderr: io::stderr(),
+            file: self.logs.open_today(),
+        }
+    }
+}
+
+/// Writes one record to `stderr` and to today's file.
+struct MultiWriter {
+    stderr: io::Stderr,
+    file: Option<File>,
+}
+
+impl Write for MultiWriter {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        // `stderr` decides the result: it is the writer that cannot fail in a way the caller
+        // could act on, and the subscriber ignores whatever comes back.
+        let written = self.stderr.write(buffer)?;
+        if let Some(file) = self.file.as_mut() {
+            // Best effort on purpose: a full disk must not turn a log record into a panic.
+            let _ = file.write_all(buffer);
+        }
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        if let Some(file) = self.file.as_mut() {
+            let _ = file.flush();
+        }
+        self.stderr.flush()
+    }
+}
+
+/// `localme.YYYY-MM-DD.log`.
+fn file_name(days: i64) -> String {
+    format!("{FILE_PREFIX}.{}.{FILE_EXTENSION}", date_key(days))
+}
+
+/// The date in a file name, if the name follows our own convention.
+fn parse_date_key(name: &str) -> Option<String> {
+    let rest = name.strip_prefix(FILE_PREFIX)?.strip_prefix('.')?;
+    let (date, extension) = rest.rsplit_once('.')?;
+    if extension != FILE_EXTENSION || date.len() != 10 {
+        return None;
+    }
+    let bytes = date.as_bytes();
+    let shaped = bytes[4] == b'-'
+        && bytes[7] == b'-'
+        && bytes
+            .iter()
+            .enumerate()
+            .all(|(index, byte)| index == 4 || index == 7 || byte.is_ascii_digit());
+    shaped.then(|| date.to_owned())
+}
+
+/// Whole days between the Unix epoch and `time`.
+fn days_since_epoch(time: SystemTime) -> i64 {
+    time.duration_since(UNIX_EPOCH)
+        .map(|age| (age.as_secs() / 86_400) as i64)
+        .unwrap_or(0)
+}
+
+/// `YYYY-MM-DD` for a count of days since the epoch.
+///
+/// Howard Hinnant's `civil_from_days`, which is why this module needs no date dependency: the
+/// arithmetic is exact for every date the application will ever see, including the leap years
+/// every four-line approximation gets wrong.
+fn date_key(days: i64) -> String {
+    let shifted = days + 719_468;
+    let era = shifted.div_euclid(146_097);
+    let day_of_era = shifted - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_position = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_position + 2) / 5 + 1;
+    let month = month_position + if month_position < 10 { 3 } else { -9 };
+    let year = year + i64::from(month <= 2);
+    format!("{year:04}-{month:02}-{day:02}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A logs directory in a temporary folder, which is the whole reason [`Logs`] is a value
+    /// rather than a module-level global.
+    fn temporary() -> (tempfile::TempDir, Arc<Logs>) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let logs = Arc::new(Logs::new(dir.path().join(LOG_DIRECTORY)));
+        fs::create_dir_all(logs.directory()).expect("create");
+        (dir, logs)
+    }
+
+    #[test]
+    fn the_date_key_matches_known_dates() {
+        assert_eq!(date_key(0), "1970-01-01");
+        assert_eq!(date_key(1), "1970-01-02");
+        assert_eq!(date_key(10_957), "2000-01-01");
+        assert_eq!(date_key(11_016), "2000-02-29");
+        assert_eq!(date_key(19_723), "2024-01-01");
+        assert_eq!(date_key(20_000), "2024-10-04");
+    }
+
+    #[test]
+    fn the_file_name_carries_its_date() {
+        assert_eq!(file_name(0), "localme.1970-01-01.log");
+    }
+
+    #[test]
+    fn only_our_own_file_names_are_recognised() {
+        assert_eq!(
+            parse_date_key("localme.2026-10-01.log").as_deref(),
+            Some("2026-10-01")
+        );
+        assert!(parse_date_key("localme.2026-10-01.txt").is_none());
+        assert!(parse_date_key("other.2026-10-01.log").is_none());
+        assert!(parse_date_key("localme.log").is_none());
+        assert!(parse_date_key("localme.2026-1-1.log").is_none());
+        assert!(parse_date_key("localme.2026-10-01.log.1").is_none());
+        assert!(parse_date_key("settings.json").is_none());
+    }
+
+    #[test]
+    fn records_land_in_the_file_for_the_day() {
+        let (_dir, logs) = temporary();
+        let writer = LogsWriter { logs: logs.clone() };
+        let mut record = writer.make_writer();
+        record.write_all(b"a record for the test\n").expect("write");
+        record.flush().expect("flush");
+
+        let files = logs.files();
+        assert_eq!(files.len(), 1, "{files:?}");
+        assert_eq!(
+            files[0].name,
+            file_name(days_since_epoch(SystemTime::now()))
+        );
+        let text = fs::read_to_string(logs.directory().join(&files[0].name)).expect("read");
+        assert!(text.contains("a record for the test"), "{text}");
+    }
+
+    #[test]
+    fn the_writer_keeps_the_first_record_of_a_new_day_and_drops_the_old_ones() {
+        let (_dir, logs) = temporary();
+        let today = days_since_epoch(SystemTime::now());
+        logs.set_retention(7);
+        for offset in [0, 1, 30] {
+            fs::write(logs.directory().join(file_name(today - offset)), b"x").expect("write");
+        }
+        fs::write(logs.directory().join("settings.json"), b"not ours").expect("write");
+
+        // The marker was set by `set_retention`, so the day is cleared to make this a rollover.
+        *logs.last_prune.lock().expect("lock") = String::new();
+        logs.prune();
+
+        assert!(logs.directory().join(file_name(today)).exists());
+        assert!(logs.directory().join(file_name(today - 1)).exists());
+        assert!(!logs.directory().join(file_name(today - 30)).exists());
+        assert!(logs.directory().join("settings.json").exists());
+    }
+
+    #[test]
+    fn a_silly_retention_is_clamped() {
+        let (_dir, logs) = temporary();
+        logs.set_retention(0);
+        assert_eq!(logs.retention_days(), MIN_LOG_RETENTION_DAYS);
+        logs.set_retention(u32::MAX);
+        assert_eq!(logs.retention_days(), MAX_LOG_RETENTION_DAYS);
+    }
+
+    #[test]
+    fn the_summary_counts_the_files_and_their_bytes() {
+        let (_dir, logs) = temporary();
+        let today = days_since_epoch(SystemTime::now());
+        fs::write(logs.directory().join(file_name(today)), vec![b'x'; 16]).expect("write");
+
+        let info = logs.info();
+        assert_eq!(info.total_bytes, 16);
+        assert_eq!(info.files.len(), 1);
+        assert_eq!(info.directory, logs.directory().display().to_string());
+    }
+
+    #[test]
+    fn clearing_removes_the_files_and_reports_the_space() {
+        let (_dir, logs) = temporary();
+        let today = days_since_epoch(SystemTime::now());
+        fs::write(logs.directory().join(file_name(today)), vec![b'x'; 16]).expect("write");
+
+        assert_eq!(logs.clear(), 16);
+        assert!(logs.files().is_empty());
+    }
+
+    #[test]
+    fn a_long_front_end_message_is_cut_rather_than_stored_whole() {
+        let long = "x".repeat(MAX_FRONTEND_MESSAGE_CHARS + 10);
+        let cut = truncate(&long);
+        assert_eq!(cut.chars().count(), MAX_FRONTEND_MESSAGE_CHARS + 1);
+        assert!(cut.ends_with('…'));
+        assert_eq!(truncate("short"), "short");
+    }
 }

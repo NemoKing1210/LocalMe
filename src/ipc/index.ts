@@ -17,6 +17,8 @@ import type {
   DeviceId,
   Diagnostics,
   KnownDevice,
+  LogLevel,
+  LogsInfo,
   Message,
   PageCursor,
   Peer,
@@ -214,4 +216,29 @@ export function quit(): Promise<void> {
 /** Ports, identity and versions. */
 export function diagnostics(): Promise<Diagnostics> {
   return call('diagnostics');
+}
+
+/** The log directory, its daily files and their total size. */
+export function logsInfo(): Promise<LogsInfo> {
+  return call('logs_info');
+}
+
+/** Opens the log directory in the platform's file manager. */
+export function openLogsFolder(): Promise<void> {
+  return call('open_logs_folder');
+}
+
+/** Deletes every log file. Returns how many bytes that freed. */
+export function clearLogs(): Promise<number> {
+  return call('clear_logs');
+}
+
+/**
+ * Writes a front-end failure to the same daily file as the host's own records.
+ *
+ * Deliberately not failing loudly: a log we could not deliver must never turn a handled error
+ * into an unhandled one, so the caller ignores the rejection.
+ */
+export function logFrontend(level: LogLevel, message: string, context?: string): Promise<void> {
+  return call('log_frontend', { level, message, context: context ?? null });
 }

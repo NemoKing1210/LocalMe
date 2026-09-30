@@ -19,6 +19,7 @@ use tauri::{AppHandle, Emitter, Runtime, State};
 
 use crate::args::{self, PageCursor};
 use crate::error::ApiError;
+use crate::logging::{self, LogsInfo};
 use crate::state::{AppState, UiLabels};
 use crate::{tray, window};
 
@@ -393,4 +394,81 @@ pub fn diagnostics(state: State<'_, Arc<AppState>>) -> Diagnostics {
         device_id,
         platform: tauri_plugin_os::platform().to_owned(),
     }
+}
+
+/// The directory the application logs to, and everything the settings screen says about it.
+///
+/// # Errors
+///
+/// [`ApiError::Internal`] if logging has not been initialised, which would mean the settings
+/// screen somehow outlived the startup sequence.
+#[tauri::command]
+pub fn logs_info() -> Result<LogsInfo, ApiError> {
+    Ok(logs()?.info())
+}
+
+/// Opens the log directory in the platform's file manager.
+///
+/// # Errors
+///
+/// [`ApiError::Internal`] if no file manager could be started.
+#[tauri::command]
+pub fn open_logs_folder() -> Result<(), ApiError> {
+    logs()?
+        .open_directory()
+        .map_err(|error| ApiError::Internal {
+            message: format!("the log directory could not be opened: {error}"),
+        })
+}
+
+/// Deletes every log file and reports how many bytes that freed.
+///
+/// The directory belongs to the user, so emptying it is a normal operation rather than a
+/// debugging last resort; today's file is recreated by the next record.
+///
+/// # Errors
+///
+/// [`ApiError::Internal`] if logging has not been initialised.
+#[tauri::command]
+pub fn clear_logs() -> Result<u64, ApiError> {
+    let freed = logs()?.clear();
+    tracing::info!(
+        bytes = freed,
+        "the log files were cleared from the settings screen"
+    );
+    Ok(freed)
+}
+
+/// Records a message from the web view in the same daily file as everything else.
+///
+/// The front end has no filesystem access and its console is invisible in a packaged build, so
+/// this is how a component error reaches a file the user can send us.
+///
+/// # Errors
+///
+/// [`ApiError::InvalidInput`] for an unknown level or an empty message.
+#[tauri::command]
+pub fn log_frontend(
+    level: String,
+    message: String,
+    context: Option<String>,
+) -> Result<(), ApiError> {
+    if !matches!(level.as_str(), "error" | "warn" | "info" | "debug") {
+        return Err(ApiError::invalid_input(
+            "level",
+            "must be one of error, warn, info or debug",
+        ));
+    }
+    if message.trim().is_empty() {
+        return Err(ApiError::invalid_input("message", "must not be empty"));
+    }
+    logging::log_frontend(&level, &message, context.as_deref());
+    Ok(())
+}
+
+/// The process-wide log directory.
+fn logs() -> Result<&'static std::sync::Arc<logging::Logs>, ApiError> {
+    logging::logs().ok_or_else(|| ApiError::Internal {
+        message: "the log directory is not available".to_owned(),
+    })
 }

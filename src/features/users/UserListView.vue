@@ -13,7 +13,11 @@
  */
 import { useVirtualizer } from '@tanstack/vue-virtual';
 import { computed, ref } from 'vue';
+import { motion } from 'motion-v';
+import { useRouter } from 'vue-router';
 
+import { useEntranceWindow } from '@/composables/useEntrance';
+import { ROUTE } from '@/app/routes';
 import { useI18n } from '@/i18n';
 import * as ipc from '@/ipc';
 import type { Peer } from '@/ipc';
@@ -41,8 +45,12 @@ const peers = usePeerStore();
 const chat = useChatStore();
 const ui = useUiStore();
 const i18n = useI18n();
+const router = useRouter();
 
 const scroll = ref<HTMLElement | null>(null);
+
+/** Rows fade in while the list is appearing; a row mounted by scrolling simply is. */
+const entering = useEntranceWindow();
 
 const virtualizer = useVirtualizer(
   computed(() => ({
@@ -68,7 +76,11 @@ function onQuery(value: string): void {
 }
 
 function onActivate(peer: Peer): void {
-  peers.select(peer.deviceId);
+  void router.push({ name: ROUTE.chat, params: { deviceId: peer.deviceId } });
+}
+
+function openSettings(): void {
+  void router.push({ name: ROUTE.settings });
 }
 
 async function onMute(peer: Peer): Promise<void> {
@@ -94,7 +106,9 @@ async function onForgetConfirmed(deleteHistory: boolean): Promise<void> {
   }
 
   chat.clear(peer.deviceId);
-  if (peers.selectedId === peer.deviceId) peers.select(null);
+  // The conversation is gone from the list, so an address pointing at it would be an address
+  // pointing at nothing.
+  if (peers.selectedId === peer.deviceId) void router.replace({ name: ROUTE.chat });
 }
 </script>
 
@@ -102,7 +116,7 @@ async function onForgetConfirmed(deleteHistory: boolean): Promise<void> {
   <div class="users">
     <MdTopAppBar :title="i18n.t('users.title')">
       <template #trailing>
-        <MdIconButton icon="tune" :label="i18n.t('settings.title')" @click="ui.goTo('settings')" />
+        <MdIconButton icon="tune" :label="i18n.t('settings.title')" @click="openSettings" />
       </template>
       <MdTextField
         icon="search"
@@ -127,11 +141,18 @@ async function onForgetConfirmed(deleteHistory: boolean): Promise<void> {
 
     <div v-else ref="scroll" class="users__scroll">
       <ul class="users__list" :style="{ height: `${totalSize}px` }">
-        <li
-          v-for="row in rows"
+        <motion.li
+          v-for="(row, position) in rows"
           :key="row.key"
           class="users__row"
           :style="{ top: `${row.start}px` }"
+          :initial="entering ? { opacity: 0 } : false"
+          :animate="{ opacity: 1 }"
+          :transition="{
+            duration: 0.18,
+            delay: Math.min(position, 8) * 0.02,
+            ease: [0.2, 0, 0, 1],
+          }"
         >
           <UserListItem
             :peer="row.peer"
@@ -140,7 +161,7 @@ async function onForgetConfirmed(deleteHistory: boolean): Promise<void> {
             @mute="onMute(row.peer)"
             @forget="forgetTarget = row.peer"
           />
-        </li>
+        </motion.li>
       </ul>
     </div>
 
@@ -176,7 +197,9 @@ async function onForgetConfirmed(deleteHistory: boolean): Promise<void> {
 /* Rows are absolutely positioned because their order in the DOM is the order of the visible
    slice, not the order of the list. `top` rather than `transform: translateY` places them at
    their offset on purpose: a transform would make every row its own stacking context, and the
-   overflow menu opened from a row could then never paint above the rows below it. */
+   overflow menu opened from a row could then never paint above the rows below it. The entrance
+   animation is opacity-only for that same reason — motion at rest leaves `opacity: 1`, which
+   creates no stacking context, where a `y` or `x` would leave a transform behind forever. */
 .users__row {
   position: absolute;
   inset-inline: 0;

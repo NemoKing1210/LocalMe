@@ -9,9 +9,11 @@
  * is nine characters, never markup.
  */
 import { computed } from 'vue';
+import { AnimatePresence, motion } from 'motion-v';
 
 import { useI18n, type MessageKey } from '@/i18n';
 import type { Message, MessageStatus } from '@/ipc';
+import { useChatStore } from '@/stores/chat';
 import MdIcon from '@/ui/MdIcon.vue';
 import type { IconName } from '@/ui/icons';
 
@@ -23,6 +25,15 @@ const props = defineProps<{
 }>();
 
 const i18n = useI18n();
+const chat = useChatStore();
+
+/**
+ * Whether this bubble is being drawn for the first time.
+ *
+ * Asked once, in `setup`: a message that arrives animates in, and the same message scrolling
+ * back into view is drawn without ceremony. See `chat.consumeEntrance`.
+ */
+const entrance = chat.consumeEntrance(props.message.id);
 
 /**
  * The glyph and the sentence for each delivery state.
@@ -56,20 +67,35 @@ const status = computed<{ readonly icon: IconName; readonly label: string } | nu
 </script>
 
 <template>
-  <article class="bubble" :class="outgoing ? 'bubble--outgoing' : 'bubble--incoming'">
+  <motion.article
+    class="bubble"
+    :class="outgoing ? 'bubble--outgoing' : 'bubble--incoming'"
+    :initial="entrance ? { opacity: 0, y: 12, scale: 0.98 } : false"
+    :animate="{ opacity: 1, y: 0, scale: 1 }"
+    :transition="{ type: 'spring', stiffness: 420, damping: 34 }"
+  >
     <p class="md-typescale-body-medium bubble__body" data-selectable>{{ message.body }}</p>
     <footer class="md-typescale-label-small bubble__meta">
       <span class="bubble__time">{{ i18n.clock(message.sentAt) }}</span>
-      <MdIcon
-        v-if="status"
-        class="bubble__status"
-        :class="{ 'bubble__status--failed': message.status === 'failed' }"
-        :name="status.icon"
-        :size="14"
-        :title="status.label"
-      />
+      <!-- One glyph at a time, cross-faded: sending → sent → delivered is the one thing on a
+           bubble that changes after it is on screen, and a swap with no transition reads as a
+           rendering glitch rather than as progress. -->
+      <AnimatePresence mode="wait">
+        <motion.span
+          v-if="status"
+          :key="status.icon"
+          class="bubble__status"
+          :class="{ 'bubble__status--failed': message.status === 'failed' }"
+          :initial="{ opacity: 0, scale: 0.6 }"
+          :animate="{ opacity: 1, scale: 1 }"
+          :exit="{ opacity: 0, scale: 0.6 }"
+          :transition="{ duration: 0.14, ease: [0.2, 0, 0, 1] }"
+        >
+          <MdIcon :name="status.icon" :size="14" :title="status.label" />
+        </motion.span>
+      </AnimatePresence>
     </footer>
-  </article>
+  </motion.article>
 </template>
 
 <style scoped>
@@ -113,6 +139,11 @@ const status = computed<{ readonly icon: IconName; readonly label: string } | nu
 
 .bubble__time {
   font-variant-numeric: tabular-nums;
+}
+
+.bubble__status {
+  display: inline-flex;
+  align-items: center;
 }
 
 .bubble__status--failed {

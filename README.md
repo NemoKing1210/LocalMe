@@ -15,7 +15,7 @@
   <img src="https://img.shields.io/badge/Tauri-2-24C8DB?style=flat-square&logo=tauri&logoColor=white" alt="Tauri 2">
   <img src="https://img.shields.io/badge/Vue-3-42B883?style=flat-square&logo=vuedotjs&logoColor=white" alt="Vue 3">
   <img src="https://img.shields.io/badge/Rust-2024-DEA584?style=flat-square&logo=rust&logoColor=white" alt="Rust">
-  <img src="https://img.shields.io/badge/UI-2_languages-111716?style=flat-square" alt="2 UI languages">
+  <img src="https://img.shields.io/badge/UI-7_languages-111716?style=flat-square" alt="7 UI languages">
 </p>
 
 <p align="center">
@@ -31,7 +31,8 @@
 ---
 
 Launch LocalMe on two computers that share a network and they find each other. Messages are stored
-locally on both ends, in SQLite, and the interface exists in English and Russian. Built with
+locally on both ends, in SQLite, and the interface exists in English, Russian, Spanish, German,
+French, Portuguese and Chinese. Built with
 [Tauri 2](https://tauri.app) (Rust) and Vue 3. Architecture for contributors and coding agents:
 [AGENTS.md](AGENTS.md) and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
@@ -103,6 +104,10 @@ actor, the session, which owns the peer table and receives commands, transport e
 discovery events on one mailbox; there is no lock anywhere in it. The front end is Vue 3 with a
 hand-built Material 3 token layer over the official colour utilities, Pinia stores that hold
 state and nothing else, and a single typed IPC module: components never call the host directly.
+Conversations and settings are routes rather than overlays, so the back button means what it
+says, and the transitions between them use `motion-v` — switched off when the system asks for
+reduced motion. The interface speaks English, Russian, Spanish, German, French, Portuguese and
+Chinese.
 
 ## Protocol
 
@@ -234,6 +239,13 @@ lost silently. The data directory is:
 | Windows  | `%APPDATA%\dev.localme.desktop`                     |
 | macOS    | `~/Library/Application Support/dev.localme.desktop` |
 | Linux    | `~/.local/share/dev.localme.desktop`                |
+
+**Reporting a problem.** LocalMe writes one log file per day to `logs/` inside that data
+directory (`localme.YYYY-MM-DD.log`; the day is UTC). Settings → Logs shows the folder, how much
+room the files take, how many days to keep and how much detail to record, and can open the folder
+or delete the files — including an error thrown by the interface itself, which is written to the
+same file because a packaged build has no console to show it in. Logging out of the box keeps a
+fortnight of records and never grows past that without being asked.
 
 **Two instances on one machine.** The second launch focuses the first window and exits. That is
 deliberate: two copies would fight over the same database and advertise the same device id.

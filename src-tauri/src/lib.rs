@@ -69,6 +69,10 @@ macro_rules! ipc_handler {
             $crate::commands::hide_window,
             $crate::commands::quit,
             $crate::commands::diagnostics,
+            $crate::commands::logs_info,
+            $crate::commands::open_logs_folder,
+            $crate::commands::clear_logs,
+            $crate::commands::log_frontend,
         ]
     };
 }
@@ -114,8 +118,6 @@ pub fn run() -> ExitCode {
 }
 
 fn run_inner() -> Result<(), Box<dyn std::error::Error>> {
-    logging::init();
-
     let mut builder = tauri::Builder::default();
 
     if data_dir_override().is_none() {
@@ -141,13 +143,21 @@ fn run_inner() -> Result<(), Box<dyn std::error::Error>> {
         .invoke_handler(ipc_handler!())
         .setup(|app| {
             let handle = app.handle().clone();
+            // Logging comes first, and to a file, because everything between here and the first
+            // frame is exactly what a "the window never appeared" report has to explain.
+            let data_dir = resolve_data_dir(&handle)?;
+            logging::init(&data_dir);
+            logging::install_panic_hook();
             tracing::info!(
                 version = env!("CARGO_PKG_VERSION"),
                 minimized = started_minimized(),
+                path = %data_dir.display(),
                 "LocalMe starting"
             );
 
-            let state = tauri::async_runtime::block_on(start_core(&handle))?;
+            let state = tauri::async_runtime::block_on(start_core(&handle, data_dir))?;
+            // The document owns the level and the retention; the subscriber follows it.
+            logging::apply(&state.settings_snapshot().logging);
             app.manage(state);
 
             window::install_ready_gate(&handle);
@@ -214,18 +224,35 @@ fn run_inner() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// The data directory: the `LOCALME_DATA_DIR` override when one was given, otherwise the
+/// platform's application data directory.
+///
+/// Both logging and the core need it, and they must agree — a log in a different directory from
+/// the database would be a log nobody can correlate with the data it describes.
+fn resolve_data_dir(
+    app: &tauri::AppHandle,
+) -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
+    match data_dir_override() {
+        Some(override_dir) => {
+            tracing::warn!(
+                path = %override_dir.display(),
+                "using an explicitly configured data directory"
+            );
+            Ok(override_dir)
+        }
+        None => Ok(app.path().app_data_dir()?),
+    }
+}
+
 /// Opens the database, binds the listener and starts the session and discovery.
 ///
 /// The window is created hidden by the configuration, so the first thing the user sees is a
 /// themed frame rather than a white one — the front end reports readiness and
 /// [`window::install_ready_gate`] reveals it.
-async fn start_core(app: &tauri::AppHandle) -> Result<Arc<AppState>, Box<dyn std::error::Error>> {
-    let data_dir = match data_dir_override() {
-        Some(override_dir) => override_dir,
-        None => app.path().app_data_dir()?,
-    };
-    tracing::info!(path = %data_dir.display(), "using an explicitly configured data directory");
-
+async fn start_core(
+    app: &tauri::AppHandle,
+    data_dir: std::path::PathBuf,
+) -> Result<Arc<AppState>, Box<dyn std::error::Error>> {
     let hostname = tauri_plugin_os::hostname();
     let nickname = Nickname::parse(&hostname)
         .or_else(|_| Nickname::parse(FALLBACK_NICKNAME))

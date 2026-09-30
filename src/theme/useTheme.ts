@@ -33,6 +33,8 @@ const mode = ref<ThemeMode>('system');
 const accent = ref<string>(DEFAULT_ACCENT);
 const systemPrefersDark = ref(false);
 const reducedMotion = ref(false);
+/** Whether a frame has been painted already, i.e. whether a change has something to fade from. */
+let hasPainted = false;
 
 const effectiveTheme: ComputedRef<EffectiveTheme> = computed(() => {
   if (mode.value === 'system') return systemPrefersDark.value ? 'dark' : 'light';
@@ -53,10 +55,24 @@ function schemeFor(source: string, isDark: boolean): ColorScheme {
 
 function paint(): void {
   const root = document.documentElement;
-  // Order matters: the `data-theme` attribute selects the fallbacks, then the generated
-  // custom properties are written as inline styles, which win over them.
-  root.dataset['theme'] = effectiveTheme.value;
-  applyColorScheme(root, schemeFor(accent.value, effectiveTheme.value === 'dark'));
+  const apply = (): void => {
+    // Order matters: the `data-theme` attribute selects the fallbacks, then the generated
+    // custom properties are written as inline styles, which win over them.
+    root.dataset['theme'] = effectiveTheme.value;
+    applyColorScheme(root, schemeFor(accent.value, effectiveTheme.value === 'dark'));
+  };
+
+  // Changing the theme or the accent repaints every surface in the window at once. The View
+  // Transitions API cross-fades the two states, which is what it is for; it is a no-op on an
+  // engine without it, and the first paint is not a transition because there is nothing to
+  // cross-fade from.
+  const canTransition = hasPainted && !reducedMotion.value && 'startViewTransition' in document;
+  if (canTransition) {
+    document.startViewTransition(apply);
+  } else {
+    apply();
+  }
+  hasPainted = true;
 }
 
 function watchMedia(query: string, target: Ref<boolean>): void {

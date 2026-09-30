@@ -138,3 +138,54 @@ export function formatDayHeading(
 
   return dateFormatter(locale).format(new Date(timestampMs));
 }
+
+/**
+ * The unit and precision for a byte count.
+ *
+ * Written as its own function, free of `Intl`, because it is the part with a decision in it:
+ * a log directory of 1536 bytes must read "1.5 kB" and not "1536 byte". Only the phrasing is
+ * left to `Intl`, which is the part that has to be translated.
+ */
+export function byteUnit(value: number): {
+  readonly unit: 'byte' | 'kilobyte' | 'megabyte' | 'gigabyte';
+  readonly digits: number;
+  readonly scaled: number;
+} {
+  let unit: 'byte' | 'kilobyte' | 'megabyte' | 'gigabyte' = 'byte';
+  let digits = 0;
+  let scaled = Math.max(0, value);
+  if (scaled >= 1024) {
+    unit = 'kilobyte';
+    digits = 1;
+    scaled /= 1024;
+  }
+  if (scaled >= 1024) {
+    unit = 'megabyte';
+    scaled /= 1024;
+  }
+  if (scaled >= 1024) {
+    unit = 'gigabyte';
+    scaled /= 1024;
+  }
+  return { unit, digits, scaled };
+}
+
+/**
+ * A file size the way the language writes it: "1.5 kB", "1,5 КБ", "1.5 KB".
+ *
+ * The unit word comes from `Intl` rather than from the catalogue, so it agrees with the number
+ * format and needs no plural rules — `Intl` already knows that Russian says «1,5 килобайта».
+ */
+export function formatBytes(value: number, locale: Locale): string {
+  const { unit, digits, scaled } = byteUnit(value);
+  return new Intl.NumberFormat(locale, {
+    style: 'unit',
+    unit,
+    maximumFractionDigits: digits,
+  }).format(scaled);
+}
+
+/** A count of days, with the language's own unit word: "14 дней", "14 days". */
+export function formatDays(count: number, locale: Locale): string {
+  return new Intl.NumberFormat(locale, { style: 'unit', unit: 'day' }).format(count);
+}

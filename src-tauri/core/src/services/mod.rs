@@ -14,6 +14,7 @@ pub use session::{
     SessionCommand, SessionConfig, SessionHandle, SessionRuntime, spawn as spawn_session,
 };
 pub use settings::{
-    AppearanceSettings, Locale, NotificationSettings, Settings, SettingsHandle, SystemSettings,
-    ThemeMode, spawn as spawn_settings,
+    AppearanceSettings, DEFAULT_LOG_RETENTION_DAYS, Locale, LogLevel, LoggingSettings,
+    MAX_LOG_RETENTION_DAYS, MIN_LOG_RETENTION_DAYS, NotificationSettings, Settings, SettingsHandle,
+    SystemSettings, ThemeMode, spawn as spawn_settings,
 };

@@ -11,11 +11,21 @@
  * itself, because neither is part of the settings document.
  */
 import { computed, onMounted, ref, watch } from 'vue';
+import { useRouter } from 'vue-router';
 
-import { LOCALES, useI18n, type Locale } from '@/i18n';
+import { ROUTE } from '@/app/routes';
+import { LOCALES, useI18n, type Locale, type MessageKey } from '@/i18n';
 import * as ipc from '@/ipc';
 import { CommandError } from '@/ipc';
-import type { Diagnostics, KnownDevice, Profile, Settings, ThemeMode } from '@/ipc';
+import type {
+  Diagnostics,
+  KnownDevice,
+  LogLevel,
+  LogsInfo,
+  Profile,
+  Settings,
+  ThemeMode,
+} from '@/ipc';
 import { THEME_MODES, useTheme } from '@/theme/useTheme';
 import { useChatStore } from '@/stores/chat';
 import { usePeerStore } from '@/stores/peers';
@@ -34,21 +44,33 @@ import MdTextField from '@/ui/MdTextField.vue';
 import MdTopAppBar from '@/ui/MdTopAppBar.vue';
 import type { IconName } from '@/ui/icons';
 
-const emit = defineEmits<{ close: [] }>();
-
 const settings = useSettingsStore();
 const chat = useChatStore();
 const peers = usePeerStore();
 const ui = useUiStore();
 const i18n = useI18n();
 const theme = useTheme();
+const router = useRouter();
+
+const LOG_LEVELS: readonly LogLevel[] = ['error', 'warn', 'info', 'debug'];
+/** A record rather than a computed key, so a level added to the host is a compile error here. */
+const LOG_LEVEL_LABELS: Record<LogLevel, MessageKey> = {
+  error: 'settings.logLevelError',
+  warn: 'settings.logLevelWarn',
+  info: 'settings.logLevelInfo',
+  debug: 'settings.logLevelDebug',
+};
+/** Retention presets, in days; the host clamps anything outside 1..=365. */
+const LOG_RETENTION_PRESETS: readonly number[] = [7, 14, 30, 90];
 
 const profile = ref<Profile | null>(null);
 const devices = ref<readonly KnownDevice[]>([]);
 const diagnostics = ref<Diagnostics | null>(null);
+const logs = ref<LogsInfo | null>(null);
 const nickname = ref('');
 const nicknameError = ref<string | undefined>(undefined);
 const confirmClear = ref(false);
+const confirmClearLogs = ref(false);
 
 const themeOptions = computed<
   readonly { readonly value: ThemeMode; readonly label: string; readonly icon: IconName }[]
@@ -100,6 +122,25 @@ const diagnosticsRows = computed<readonly { readonly label: string; readonly val
 
 const isCustomAccent = computed(() => !theme.presets.some((preset) => isActiveAccent(preset.hex)));
 
+const logLevelOptions = computed<readonly { readonly value: string; readonly label: string }[]>(
+  () => LOG_LEVELS.map((value) => ({ value, label: i18n.t(LOG_LEVEL_LABELS[value]) })),
+);
+
+const logRetentionOptions = computed<readonly { readonly value: string; readonly label: string }[]>(
+  () => LOG_RETENTION_PRESETS.map((days) => ({ value: `${days}`, label: i18n.days(days) })),
+);
+
+/** The line under the folder path: how many files there are and how much room they take. */
+const logSummary = computed<string>(() => {
+  const info = logs.value;
+  if (info === null) return '';
+  if (info.files.length === 0) return i18n.t('settings.logEmpty');
+  return i18n.t('settings.logSummary', {
+    count: info.files.length,
+    size: i18n.bytes(info.totalBytes),
+  });
+});
+
 function isThemeMode(value: string): value is ThemeMode {
   return THEME_MODES.some((mode) => mode === value);
 }
@@ -108,8 +149,22 @@ function isLocale(value: string): value is Locale {
   return LOCALES.some((locale) => locale === value);
 }
 
+function isLogLevel(value: string): value is LogLevel {
+  return LOG_LEVELS.some((level) => level === value);
+}
+
 function isActiveAccent(hex: string): boolean {
   return hex.toLowerCase() === settings.accent.toLowerCase();
+}
+
+/** Leaves the page the way it was entered. */
+function close(): void {
+  // `back()` when the user arrived from inside the application, which restores the conversation
+  // they were reading; the chat page when the address was opened directly, where going back
+  // would leave the window on nothing.
+  const previous = router.options.history.state['back'];
+  if (typeof previous === 'string' && previous.length > 0) router.back();
+  else void router.replace({ name: ROUTE.chat });
 }
 
 /** Sends one change to the host and reports the failure in the language of the interface. */
@@ -147,6 +202,62 @@ async function loadDiagnostics(): Promise<void> {
     diagnostics.value = await ipc.diagnostics();
   } catch (error) {
     console.error('[localme] the diagnostics could not be read', error);
+    ui.fail('error.internal');
+  }
+}
+
+/**
+ * Reads the log directory.
+ *
+ * The host is the only side that knows the path and the sizes, so this is reloaded after every
+ * change that can move them — opening the group, and deleting the files.
+ */
+async function loadLogs(): Promise<void> {
+  try {
+    logs.value = await ipc.logsInfo();
+  } catch (error) {
+    console.error('[localme] the log directory could not be read', error);
+    ui.fail('settings.logsFailed');
+  }
+}
+
+function setLogLevel(value: string): void {
+  if (!isLogLevel(value)) return;
+  void persist((current) => ({
+    ...current,
+    logging: { ...current.logging, level: value },
+  }));
+}
+
+/** Retention is sent as a number, and the summary is reloaded because pruning happens at once. */
+async function setLogRetention(value: string): Promise<void> {
+  const days = Number.parseInt(value, 10);
+  if (!Number.isFinite(days)) return;
+  await persist((current) => ({
+    ...current,
+    logging: { ...current.logging, retentionDays: days },
+  }));
+  await loadLogs();
+}
+
+async function openLogFolder(): Promise<void> {
+  try {
+    await ipc.openLogsFolder();
+  } catch (error) {
+    console.error('[localme] the log folder could not be opened', error);
+    ui.fail('settings.logFolderFailed');
+  }
+}
+
+/** Deletes the files, then re-reads the directory so the summary cannot claim they are there. */
+async function clearLogs(): Promise<void> {
+  confirmClearLogs.value = false;
+  try {
+    const freed = await ipc.clearLogs();
+    ui.notify('settings.logsCleared', { size: i18n.bytes(freed) });
+    await loadLogs();
+  } catch (error) {
+    console.error('[localme] the log files could not be deleted', error);
     ui.fail('error.internal');
   }
 }
@@ -276,6 +387,7 @@ onMounted(() => {
   void loadProfile();
   void loadDevices();
   void loadDiagnostics();
+  void loadLogs();
 });
 </script>
 
@@ -283,7 +395,7 @@ onMounted(() => {
   <section class="settings">
     <MdTopAppBar :title="i18n.t('settings.title')">
       <template #leading>
-        <MdIconButton icon="back" :label="i18n.t('settings.close')" @click="emit('close')" />
+        <MdIconButton icon="back" :label="i18n.t('settings.close')" @click="close" />
       </template>
     </MdTopAppBar>
 
@@ -473,6 +585,69 @@ onMounted(() => {
 
       <section class="settings__group">
         <h2 class="md-typescale-title-medium settings__heading">
+          {{ i18n.t('settings.groupLogging') }}
+        </h2>
+        <div class="settings__card">
+          <div class="settings__row">
+            <span class="md-typescale-body-large settings__row-text">
+              {{ i18n.t('settings.logLevel') }}
+              <span class="md-typescale-body-medium settings__help">
+                {{ i18n.t('settings.logLevelHelp') }}
+              </span>
+            </span>
+            <MdSegmentedButton
+              :model-value="settings.document?.logging.level ?? 'info'"
+              :options="logLevelOptions"
+              @update:model-value="setLogLevel"
+            />
+          </div>
+          <div class="settings__row">
+            <span class="md-typescale-body-large settings__row-text">
+              {{ i18n.t('settings.logRetention') }}
+              <span class="md-typescale-body-medium settings__help">
+                {{ i18n.t('settings.logRetentionHelp') }}
+              </span>
+            </span>
+            <MdSegmentedButton
+              :model-value="`${settings.document?.logging.retentionDays ?? 14}`"
+              :options="logRetentionOptions"
+              @update:model-value="setLogRetention"
+            />
+          </div>
+          <div class="settings__row">
+            <span class="md-typescale-body-large settings__row-text">
+              {{ i18n.t('settings.logFolder') }}
+              <span class="md-typescale-body-medium settings__help">
+                {{ logSummary }}
+              </span>
+            </span>
+            <div class="settings__log-actions">
+              <MdButton variant="tonal" icon="folder" @click="openLogFolder">
+                {{ i18n.t('settings.openLogFolder') }}
+              </MdButton>
+              <MdButton
+                class="settings__clear"
+                variant="text"
+                icon="trash"
+                :disabled="(logs?.files.length ?? 0) === 0"
+                @click="confirmClearLogs = true"
+              >
+                {{ i18n.t('settings.clearLogs') }}
+              </MdButton>
+            </div>
+          </div>
+          <p
+            v-if="logs"
+            class="md-typescale-body-small settings__help settings__mono"
+            data-selectable
+          >
+            {{ logs.directory }}
+          </p>
+        </div>
+      </section>
+
+      <section class="settings__group">
+        <h2 class="md-typescale-title-medium settings__heading">
           {{ i18n.t('settings.aboutTitle') }}
         </h2>
         <div class="settings__card">
@@ -497,6 +672,22 @@ onMounted(() => {
         </div>
       </section>
     </div>
+
+    <MdDialog
+      :open="confirmClearLogs"
+      :headline="i18n.t('settings.clearLogsConfirm')"
+      @close="confirmClearLogs = false"
+    >
+      <p class="md-typescale-body-medium">{{ i18n.t('settings.clearLogsHelp') }}</p>
+      <template #actions>
+        <MdButton variant="text" @click="confirmClearLogs = false">
+          {{ i18n.t('common.cancel') }}
+        </MdButton>
+        <MdButton variant="filled" @click="clearLogs">
+          {{ i18n.t('common.delete') }}
+        </MdButton>
+      </template>
+    </MdDialog>
 
     <MdDialog
       :open="confirmClear"
@@ -646,6 +837,13 @@ onMounted(() => {
 .settings__devices {
   display: flex;
   flex-direction: column;
+}
+
+.settings__log-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
 }
 
 .settings__danger {

@@ -15,29 +15,39 @@
 import { readonly, ref, watch, type App, type Ref } from 'vue';
 
 import {
+  formatBytes,
   formatClockTime,
   formatDateTime,
   formatDayHeading,
+  formatDays,
   formatRelativeTime,
   pluralRulesFor,
 } from './format';
 import { FALLBACK_LOCALE, LOCALES, type Locale } from './locales';
+import { de } from './messages/de';
 import { en } from './messages/en';
+import { es } from './messages/es';
+import { fr } from './messages/fr';
+import { pt } from './messages/pt';
 import { ru } from './messages/ru';
+import { zh } from './messages/zh';
 import type { MessageCatalog, MessageKey, MessageParams } from './messages/types';
 
 export {
+  byteUnit,
   dayKey,
+  formatBytes,
   formatClockTime,
   formatDateTime,
   formatDayHeading,
+  formatDays,
   formatRelativeTime,
 } from './format';
 export { LOCALES, normalizeLocale, FALLBACK_LOCALE } from './locales';
 export type { Locale } from './locales';
 export type { MessageKey, MessageParams } from './messages/types';
 
-const CATALOGS: Record<Locale, MessageCatalog> = { en, ru };
+const CATALOGS: Record<Locale, MessageCatalog> = { en, ru, es, de, fr, pt, zh };
 
 const selectedLocale = ref<Locale>(FALLBACK_LOCALE);
 
@@ -108,6 +118,10 @@ export interface UseI18n {
   readonly dateTime: (timestampMs: number) => string;
   /** Heading above a group of messages: Today, Yesterday, or a date. */
   readonly dayHeading: (timestampMs: number, nowMs?: number) => string;
+  /** A file size in the language's own unit and number format: "1.5 kB". */
+  readonly bytes: (value: number) => string;
+  /** A count of days with the language's unit word: "14 days". */
+  readonly days: (count: number) => string;
 }
 
 /** The composition-API entry point. */
@@ -131,6 +145,12 @@ export function useI18n(): UseI18n {
         today: translate('chat.dayToday'),
         yesterday: translate('chat.dayYesterday'),
       });
+    },
+    bytes(value: number): string {
+      return formatBytes(value, selectedLocale.value);
+    },
+    days(count: number): string {
+      return formatDays(count, selectedLocale.value);
     },
   };
 }

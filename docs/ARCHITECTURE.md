@@ -503,13 +503,25 @@ means "durably stored on the recipient", not "written to a socket buffer".
 
 ### 8.3 Settings
 
-An actor over a typed `Settings` struct (serde). Persisted as JSON through
-`tauri-plugin-store` in the app-data dir, one key per field group; the schema is versioned
-and unknown fields are preserved on rewrite. In-memory reads are answered by the actor, so
+An actor over a typed `Settings` struct (serde), persisted as one JSON document in the
+app-data directory and written atomically (temp file, then rename) by the actor itself —
+`tauri-plugin-store` was the alternative and was rejected: a second writer for the same data
+would be a second answer to "what is stored", and the host needs the document before the web
+view exists. The schema is versioned (`SETTINGS_VERSION`, currently **2**), the file is
+migrated (or reset, with the reason reported) on load, unknown fields are ignored rather
+than kept, and every group carries `#[serde(default)]`, so a group added in a later version
+is readable by an older build and vice versa. In-memory reads are answered by the actor, so
 the front end never blocks on disk.
 
-Settings groups map 1:1 to the settings screen: `profile`, `appearance`, `locale`,
-`notifications`, `system`, `data`.
+Settings groups map 1:1 to the settings screen: `appearance`, `locale`, `notifications`,
+`system`, `logging`. Values that are individually valid JSON but unusable are repaired by
+`Settings::normalise` on every load and update — a bad accent colour falls back to the
+default, and a retention outside 1..=365 is clamped, because a hand-edited `0` would
+otherwise delete today's log on the next start.
+
+The logging group is the one group the host applies rather than merely stores: a change to
+the level or the retention is pushed into the live subscriber by `events::apply_settings`
+(§9.7), so the settings screen can change verbosity without a restart.
 
 ### 8.4 Graceful shutdown
 
@@ -571,6 +583,16 @@ hidden in the tray, the Tauri layer keeps the state it needs (unread count for t
 badge, a cached peer list) and emits nothing; on show it emits one `state_snapshot` event
 instead of replaying a backlog. This is what keeps a tray-resident instance at ~0 % CPU and
 prevents the "wake the webview for every heartbeat" class of bug.
+
+The payload of an event is the **content of its variant**, not the variant wrapped in its own
+name: `CoreEvent::Peers { peers }` arrives as `{"peers":[…]}` and `CoreEvent::Stopped` as
+`null`, which is what `src/ipc/types.ts` declares and what `src/app/connect.ts` reads. Serde's
+default (externally tagged) representation would nest it — `{"peers":{"peers":[…]}}` — and
+that is not a cosmetic difference: a subscription reading `payload.peers` would get an object
+where it expects an array, and the user list would silently empty itself the first time any
+peer changed. `untagged` plus `rename_all_fields = "camelCase"` is the derivation that matches
+the interface, and the unit tests in `core/src/services/events.rs` pin the shape of every
+variant the front end subscribes to.
 
 ### 9.4 Process and window policy
 
@@ -637,28 +659,71 @@ strictly non-inline and no remote origin is reachable. Message bodies are render
 `{{ }}` interpolation only — no `v-html` anywhere in the codebase, and an ESLint rule
 (`vue/no-v-html`) keeps it that way.
 
+### 9.7 Logging
+
+The log is the only artefact a user can send about a failure on a machine we will never see, so
+the application writes one rather than relying on whatever `stderr` is attached to. `tracing`
+with one subscriber, four decisions:
+
+* **One file per day**, `logs/localme.YYYY-MM-DD.log` in the data directory (beside the
+  database, so a report's log and its data agree on where "the data directory" is). The day is
+  **UTC**: `std` has no local-time API, and a dependency that can fail to resolve a time zone at
+  the moment a log record must be written is a worse trade than a name that is a few hours off
+  the user's calendar at the boundary.
+* **Append per record.** The current file is opened, written and closed for each record instead
+  of being held open for the process's lifetime. That costs an `open` per record — nothing at
+  this application's volume — and buys the two operations that matter: clearing the directory and
+  pruning it work *while the application runs*, on Windows too, where deleting an open file
+  fails.
+* **Bounded retention**, from the settings document (default 14 days, 1..=365). Pruning runs at
+  startup and on the first record after the date rolls over, so nothing has to keep a timer
+  alive to keep the directory bounded.
+* **Never fatal.** Every filesystem step is best-effort: a log that could not be written must
+  not take the messenger down while it is reporting a problem.
+
+`stderr` receives the same records, so `cargo tauri dev` and a launch from a terminal behave as
+they did before files existed; ANSI colour is on only when `stderr` is a terminal, which also
+keeps escape codes out of the files.
+
+Verbosity comes from the settings document and is applied to the running subscriber through
+`tracing_subscriber::reload`, so changing it in the settings screen takes effect immediately;
+`RUST_LOG` wins over the stored level, because the case where debugging matters most is the one
+where the interface itself is broken. A panic hook writes the payload and location before the
+default hook runs, which with `panic = "abort"` is the last chance to record why the process
+went away.
+
+The web view has no filesystem access and its console is invisible in a packaged build, so
+`src/app/errors.ts` forwards every component, window and unhandled-rejection error to
+`log_frontend`, with the first stack frames attached: an error thrown by a component would
+otherwise exist only on a screen the user has already closed. The settings screen exposes the
+directory (`logs_info`), opens it in the platform's file manager (`open_logs_folder`, via
+`explorer` / `open` / `xdg-open`) and empties it (`clear_logs`, which reports the bytes freed).
+
 ---
 
 ## 10. Front end
 
 ```
 src/
-├─ main.ts, App.vue
-├─ ipc/            typed command + event wrapper (§9.2)
-├─ theme/          MD3 tokens, palettes, accent generation
-├─ i18n/           ru + en dictionaries, tiny typed t()
-├─ ui/             design-system components (Button, TextField, Dialog, …)
+├─ main.ts, App.vue          # mount, theme, the process-level gates (loading, first run)
+├─ app/                      # router, route names, the two-pane shell, event bridge, errors
+├─ ipc/                      # typed command + event wrapper (§9.2)
+├─ theme/                    # MD3 tokens, palettes, accent generation
+├─ i18n/                     # seven typed catalogues, tiny typed t(), Intl formatting
+├─ ui/                       # design-system components (Button, TextField, Dialog, …)
 ├─ features/
-│  ├─ onboarding/  first-run nickname + avatar preview
-│  ├─ users/       user list, search, sorting, forget
-│  ├─ chat/        message list, composer, history paging
-│  └─ settings/    grouped settings screen
-├─ stores/         Pinia: peers, chat, settings, ui
-└─ composables/    useVirtualList, useRelativeTime, useTheme, useAvatar
+│  ├─ onboarding/            # first-run nickname + avatar preview
+│  ├─ users/                 # user list, search, sorting, forget
+│  ├─ chat/                  # message list, composer, history paging
+│  └─ settings/              # grouped settings screen, including the log directory
+├─ stores/                   # Pinia: peers, chat, settings, ui
+└─ composables/              # useNow, useMediaQuery, useEntranceWindow
 ```
 
-*Stores hold state, composables hold behaviour, components hold markup.* No store performs
-IPC directly except through `features/*/api.ts` modules, so what talks to Rust is greppable.
+*Stores hold state, composables hold behaviour, components hold markup.* Components never call
+the host directly: every command and event goes through `ipc/`, and the only file that subscribes
+to host events is `app/connect.ts`, so what the interface does when a message arrives is readable
+in one place.
 
 ### 10.1 Material Design 3
 
@@ -723,11 +788,76 @@ framework-thin and adds no styling, so the token strategy is unaffected.
 
 ### 10.4 i18n
 
-A ~40-line typed module: a `Messages` interface with `ru` and `en` records, so a missing key
-is a **compile error** and a stale key is a lint error. Locale choice follows the settings
-value, defaulting to the OS locale on first launch. Number/date formatting goes through
-`Intl`, and relative times ("был(а) в сети 5 минут назад") through `Intl.RelativeTimeFormat`
-with a unit-selection function unit-tested for boundaries.
+A typed module rather than a framework: `MessageKey` is derived from the English catalogue, so a
+missing key is a **compile error** and a typo in `t('…')` is a compile error at the call site;
+the other catalogues are typed `Record<MessageKey, string>` plus the plural specialisations a
+language actually needs. Seven languages ship: English, Russian, Spanish, German, French,
+Portuguese and Chinese. `LOCALES` is the list, `src/ipc/types.ts` mirrors it for the settings
+document, and `Locale` in `localme-core` is what the file stores; adding a language is a
+catalogue plus those three entries.
+
+Number, date and relative-time formatting goes through `Intl`, and so do the units: file sizes
+and day counts are formatted with `Intl.NumberFormat({ style: 'unit' })`, so «14 дней», "14 Tg."
+and "14 days" are the runtime's translations rather than seven hand-written forms. Plural forms
+go through `Intl.PluralRules` with per-language specialisations (`users.unread.few` and friends),
+and `messages.spec.ts` fails when a language is missing a key, renames a placeholder, declares a
+plural form its `Intl` never selects, or ships an untranslated copy of English.
+
+### 10.5 Pages and routing
+
+**Decision: `vue-router` with hash history; a page is an address.**
+
+The window is a two-pane shell, and the two panes are two levels of one route tree:
+
+```
+/                     → shell: the people list beside a RouterView
+├─ /chat              → the placeholder ("pick someone to talk to")
+├─ /chat/:deviceId    → that conversation, in the detail pane
+└─ /settings          → the settings page, in the detail pane
+```
+
+The alternative — a `screen` field in a store, which is what this replaced — made settings an
+overlay drawn on top of the conversation and left "which page is on screen" in two places: the
+store and the (nonexistent) address. With routes, the back gesture, the back button and the
+system's window-history all do what the address says; the peer list's selection is derived from
+the route rather than stored beside it; and the tray's "open the conversation that notified"
+request is a `router.replace` like every other navigation. Hash history, not HTML5 history,
+because a packaged Tauri build serves the front end from a custom protocol where a path is a
+file name.
+
+The pages themselves are lazy route components, so the settings screen is not in the bundle of a
+user who never opens it.
+
+### 10.6 Motion
+
+`motion-v` (Motion for Vue, MIT) — the Vue port of Framer Motion's API, chosen over
+`@vueuse/motion` because it is the same API the rest of the ecosystem documents and because it
+supports exit animations, which the page transitions need. `MotionConfig reduced-motion="user"`
+in `App.vue` is the single place the operating system's preference is applied to every animation,
+including those inside components that never mention motion; the CSS-transition animations
+(snackbar, dialog, state layers) are switched off by the token sheet zeroing the motion durations
+under `prefers-reduced-motion`.
+
+Where motion is used, and why:
+
+* **Page changes** — an `AnimatePresence` around the detail pane's `RouterView`, so a page leaves
+  before the next arrives.
+* **The two lists** — entrance animations tied to the *list appearing*, not to a row mounting:
+  `useEntranceWindow()` for the user list, and `chat.consumeEntrance(id)` for the message log.
+  Both lists are virtualised, so a row mounts and unmounts as the reader scrolls; an animation
+  bound to mounting would replay on every flick of the wheel. The user list's rows animate
+  opacity only and never a transform, because a transform would leave every row in its own
+  stacking context and the row's overflow menu could then never paint above the rows below it.
+* **Delivery status and unread counts** — the status glyph cross-fades and the badge pops, keyed
+  by the value, so a change is visibly a change.
+* **The theme change** — the View Transitions API (`document.startViewTransition`) cross-fades the
+  whole window when the mode or the accent changes, which is what it exists for; it is skipped on
+  the first paint and on an engine without it.
+* **Presence** — the avatar's presence dot transitions its colour, and the dialog animates in.
+
+Motion is the largest single contributor to the main bundle, which now sits just above the
+deliberately low `chunkSizeWarningLimit` in `vite.config.ts`; the build reports it rather than
+hiding it, and the two pages are lazy chunks that a user who never opens them never downloads.
 
 ---
 

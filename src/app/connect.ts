@@ -8,6 +8,8 @@
  */
 import { onCoreEvent } from '@/ipc';
 import type { Peer } from '@/ipc';
+import { router } from '@/app/router';
+import { ROUTE } from '@/app/routes';
 import { useChatStore } from '@/stores/chat';
 import { usePeerStore } from '@/stores/peers';
 import { useSettingsStore } from '@/stores/settings';
@@ -59,8 +61,10 @@ export async function connectCoreEvents(): Promise<() => void> {
     }),
 
     onCoreEvent('open_chat', (deviceId) => {
-      ui.goTo('chat');
-      peers.select(deviceId);
+      // The tray asked for a conversation: that is a navigation, so it goes through the router
+      // like every other one, rather than through a screen flag this file would have to keep in
+      // step with the address bar.
+      void router.replace({ name: ROUTE.chat, params: { deviceId } });
     }),
 
     onCoreEvent('notice', (payload) => {

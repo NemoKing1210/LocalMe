@@ -4,7 +4,7 @@
  * Adding a language is a two-line change here plus a message file; the `Messages` type
  * makes a missing translation a compile error rather than a silent English fallback.
  */
-export const LOCALES = ['en', 'ru'] as const;
+export const LOCALES = ['en', 'ru', 'es', 'de', 'fr', 'pt', 'zh'] as const;
 
 export type Locale = (typeof LOCALES)[number];
 

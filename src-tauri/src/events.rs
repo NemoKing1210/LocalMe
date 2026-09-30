@@ -114,6 +114,9 @@ pub fn apply_settings<R: Runtime>(app: &AppHandle<R>, settings: &Settings) {
     if let Ok(mut cached) = state.cached.write() {
         cached.settings = settings.clone();
     }
+    // The log level and the retention are settings like any other, and they are applied here so
+    // that a change from the settings screen takes effect without a restart.
+    crate::logging::apply(&settings.logging);
     tray::refresh(app, &state);
     window::refresh_title(app, state.unread.load(Ordering::Relaxed));
     if let Err(error) = app.emit(SETTINGS_EVENT, settings) {
