@@ -34,7 +34,12 @@ cargo clippy --workspace --all-targets -- -D warnings
 ```
 
 `cargo test` lives in `src-tauri`; the integration suite there starts two complete instances on
-the loopback interface and has them discover each other over real mDNS.
+the loopback interface and has them discover each other. Discovery is injected in those tests, so
+they do not depend on multicast; the real-mDNS test is opt-in for the same reason:
+
+```sh
+cargo test -p localme-core --test loopback -- --ignored
+```
 
 ### Two instances on one computer
 

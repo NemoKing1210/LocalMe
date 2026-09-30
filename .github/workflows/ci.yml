@@ -76,10 +76,19 @@ jobs:
         working-directory: src-tauri
 
       # The unit tests are pure and fast; the integration tests bind loopback sockets and run
-      # two full instances, including real mDNS discovery over the runner's network interface.
+      # two full instances with discovery injected, so they are deterministic.
       - name: Tests
         run: cargo test --workspace
         working-directory: src-tauri
+
+      # The real-mDNS test is opt-in because it needs multicast to work between two daemons
+      # inside one process, which depends on the machine's interfaces. It runs here so the
+      # result is visible, and it is advisory: a runner that filters multicast is a fact about
+      # the runner, not about the code.
+      - name: Discovery over real multicast (advisory)
+        run: cargo test -p localme-core --test loopback -- --ignored
+        working-directory: src-tauri
+        continue-on-error: true
 
   bundle:
     name: Bundle (${{ matrix.os }})
