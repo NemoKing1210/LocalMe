@@ -27,7 +27,9 @@ const OPEN_CHAT_EVENT: &str = "open_chat";
 pub fn spawn_forwarder(app: &AppHandle) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        let state = state::from_handle(&app);
+        let Some(state) = state::from_handle(&app) else {
+            return;
+        };
         let mut core_events = state.session.subscribe();
         let mut settings_events = state.settings.subscribe();
 
@@ -105,7 +107,9 @@ pub fn window_is_visible(state: &AppState) -> bool {
 /// Mirrors a settings change: the settings actor is the source of truth, and the tray, the
 /// window title and the interface all follow it.
 pub fn apply_settings(app: &AppHandle, settings: &Settings) {
-    let state = state::from_handle(app);
+    let Some(state) = state::from_handle(app) else {
+        return;
+    };
     if let Ok(mut cached) = state.cached.write() {
         cached.settings = settings.clone();
     }
@@ -124,7 +128,9 @@ pub fn apply_settings(app: &AppHandle, settings: &Settings) {
 pub fn emit_snapshot(app: &AppHandle) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        let state = state::from_handle(&app);
+        let Some(state) = state::from_handle(&app) else {
+            return;
+        };
         let session = state.session.clone();
         let settings = state.settings.clone();
         let (peers, settings) = match (session.list_peers().await, settings.get().await) {

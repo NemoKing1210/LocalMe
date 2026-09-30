@@ -27,6 +27,10 @@ export const en = {
   'common.loading': 'Loading…',
   'common.you': 'You',
   'common.dismiss': 'Dismiss',
+  'common.more': 'More',
+  'common.options': 'Options',
+  'common.retry': 'Retry',
+  'common.clear': 'Clear',
 
   'onboarding.title': 'Welcome to LocalMe',
   'onboarding.subtitle':
@@ -54,6 +58,12 @@ export const en = {
   'users.unread.one': '{count} unread message',
   'users.forget': 'Forget…',
   'users.muted': 'Notifications muted',
+  'users.openChatWith': 'Conversation with {name}',
+  'users.actionsFor': 'Actions for {name}',
+  'users.mute': 'Mute notifications',
+  'users.unmute': 'Unmute notifications',
+  'users.you': 'You ({name})',
+  'users.count': 'People: {count}',
 
   'forget.title': 'Forget {name}?',
   'forget.body':
@@ -76,6 +86,10 @@ export const en = {
   'chat.loadOlder': 'Load earlier messages',
   'chat.dayToday': 'Today',
   'chat.dayYesterday': 'Yesterday',
+  'chat.jumpToLatest': 'Jump to latest messages',
+  'chat.messageList': 'Messages with {name}',
+  'chat.sending': 'Sending your message',
+  'chat.historyEnd': 'This is the beginning of the conversation',
 
   'settings.title': 'Settings',
   'settings.groupProfile': 'Profile',
@@ -127,6 +141,15 @@ export const en = {
   'settings.aboutVersion': 'Version {version}',
   'settings.aboutArchitecture': 'Local network messenger',
   'settings.aboutLicense': 'Licensed under the MIT licence.',
+  'settings.aboutDiagnostics': 'Diagnostics',
+  'settings.devicesKnown': 'Known',
+  'settings.devicesForgotten': 'Forgotten',
+  'settings.saveFailed': 'That setting could not be saved.',
+  'settings.historyCleared': 'Deleted {count} messages.',
+  'settings.notificationsPerPeerHelp':
+    'Individual people can be muted from the ⋮ menu in the list.',
+  'locale.en': 'English',
+  'locale.ru': 'Русский',
 
   'tray.open': 'Open LocalMe',
   'tray.mute': 'Pause notifications',

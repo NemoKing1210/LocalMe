@@ -347,7 +347,9 @@ dialer tries them in order and remembers the winner.
 identity tuple. It exists for networks where mDNS is filtered (some corporate, some
 container/VPN setups). Receiving a beacon produces a `Found`; the announcement period is
 adaptive — every 3 s while alone, every 20 s once a peer is known — so an idle instance does
-not produce a steady drip of traffic.
+not produce a steady drip of traffic. The socket is bound with `SO_REUSEADDR` (and
+`SO_REUSEPORT` where the platform has it), so a port already held by another process degrades
+to "both sockets receive" instead of "the fallback is gone".
 
 Both adapters feed `CompositeDiscovery`, which de-duplicates by `(device_id, address)` and
 emits `Lost` only when the last live source for a device disappears. A peer seen by both
@@ -557,7 +559,11 @@ prevents the "wake the webview for every heartbeat" class of bug.
 ### 9.4 Process and window policy
 
 * **Single instance** — `tauri-plugin-single-instance`: a second launch focuses the running
-  window and exits, which also makes "two instances on one machine" impossible.
+  window and exits, which also makes "two instances on one machine" impossible. Setting
+  `LOCALME_DATA_DIR` lifts the guard and points the process at its own data directory, which is
+  the only way to reproduce the two-device scenario on one computer — that is how the README's
+  two-instance check is performed, and it is deliberately an environment variable rather than a
+  setting, so it cannot be turned on by accident in a normal installation.
 * **Close to tray** — `WindowEvent::CloseRequested` is intercepted when the setting is on;
   the window is hidden and the app keeps running. When the setting is off, close quits.
 * **Autostart** — `tauri-plugin-autostart`, launched with `--minimized` when "start minimised

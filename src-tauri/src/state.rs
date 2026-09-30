@@ -104,13 +104,14 @@ pub struct Cached {
 
 /// The application state, cloned out of a Tauri handle.
 ///
-/// `AppState` is behind an `Arc`, so this copies a pointer. Taking it as an owned value keeps
-/// call sites free of the two-level dereference a `State<Arc<AppState>>` would otherwise
-/// need, and it is what makes these helpers usable from any Tauri callback without caring how
-/// it was reached.
+/// `AppState` is behind an `Arc`, so this copies a pointer. It returns `None` rather than
+/// panicking when the state has not been installed yet: the window is created while the builder
+/// is still running, so a window event can be delivered before `setup` has managed the state, and
+/// a handler that panicked in that window would take the process down on startup.
 #[must_use]
-pub fn from_handle(app: &tauri::AppHandle) -> std::sync::Arc<AppState> {
-    app.state::<std::sync::Arc<AppState>>().inner().clone()
+pub fn from_handle(app: &tauri::AppHandle) -> Option<std::sync::Arc<AppState>> {
+    app.try_state::<std::sync::Arc<AppState>>()
+        .map(|state| state.inner().clone())
 }
 
 /// Everything the host shares between its parts.

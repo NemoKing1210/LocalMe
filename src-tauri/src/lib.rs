@@ -42,6 +42,21 @@ pub const FLAG_MINIMIZED: &str = "--minimized";
 /// Nickname used only if the operating system cannot tell us the computer's name.
 const FALLBACK_NICKNAME: &str = "LocalMe user";
 
+/// Environment variable that overrides the data directory *and* lifts the single-instance guard.
+///
+/// Two instances on one machine are normally forbidden: they would share a database and advertise
+/// the same device id. That default is right, and it is a real obstacle to testing the thing this
+/// application is for — two peers that have to discover each other. Setting this variable points
+/// one instance at its own data directory and lets it run alongside the other, which is how the
+/// two-instance check in the README is performed on a single computer.
+pub const FLAG_DATA_DIR: &str = "LOCALME_DATA_DIR";
+
+/// The data directory override, when one was requested.
+#[must_use]
+pub fn data_dir_override() -> Option<std::path::PathBuf> {
+    std::env::var_os(FLAG_DATA_DIR).map(std::path::PathBuf::from)
+}
+
 /// Whether this process was started minimised into the tray.
 #[must_use]
 pub fn started_minimized() -> bool {
@@ -64,11 +79,21 @@ pub fn run() -> ExitCode {
 fn run_inner() -> Result<(), Box<dyn std::error::Error>> {
     logging::init();
 
-    tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+    let mut builder = tauri::Builder::default();
+
+    if data_dir_override().is_none() {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             // A second launch is a request to show the window that already exists.
             window::reveal(app);
-        }))
+        }));
+    } else {
+        tracing::warn!(
+            variable = FLAG_DATA_DIR,
+            "the single-instance guard is off because a data directory was given explicitly"
+        );
+    }
+
+    builder
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_process::init())
@@ -117,7 +142,9 @@ fn run_inner() -> Result<(), Box<dyn std::error::Error>> {
 
             // The tray is optional: a minimal Linux desktop without a StatusNotifier host
             // cannot show one, and that must not stop the application.
-            let state = state::from_handle(&handle);
+            let Some(state) = state::from_handle(&handle) else {
+                return Err("the application state was not installed".into());
+            };
             match tray::install(&handle, &state) {
                 Ok(()) => tray::refresh(&handle, &state),
                 Err(error) => {
@@ -130,8 +157,11 @@ fn run_inner() -> Result<(), Box<dyn std::error::Error>> {
         .on_window_event(|window, event| match event {
             WindowEvent::CloseRequested { api, .. } => {
                 let app = window.app_handle().clone();
-                let state = state::from_handle(&app);
-                if window::should_stay_in_tray(&state) {
+                // Before `setup` has installed the state there is no setting to consult, and
+                // the safe reading of "no state yet" is "quit", which is what closing does.
+                let stays = state::from_handle(&app)
+                    .is_some_and(|state| window::should_stay_in_tray(&state));
+                if stays {
                     // Closing the window is not quitting, when the user asked it not to be.
                     api.prevent_close();
                     window::hide(&app);
@@ -141,21 +171,25 @@ fn run_inner() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             WindowEvent::Focused(focused) => {
-                state::from_handle(&window.app_handle().clone())
-                    .window_focused
-                    .store(*focused, std::sync::atomic::Ordering::Relaxed);
+                if let Some(state) = state::from_handle(&window.app_handle().clone()) {
+                    state
+                        .window_focused
+                        .store(*focused, std::sync::atomic::Ordering::Relaxed);
+                }
             }
             WindowEvent::Destroyed => {
-                state::from_handle(&window.app_handle().clone())
-                    .window_visible
-                    .store(false, std::sync::atomic::Ordering::Relaxed);
+                if let Some(state) = state::from_handle(&window.app_handle().clone()) {
+                    state
+                        .window_visible
+                        .store(false, std::sync::atomic::Ordering::Relaxed);
+                }
             }
             _ => {}
         })
         .build(tauri::generate_context!())?
         .run(|app, event| {
             if let RunEvent::Exit = event
-                && let Some(core) = state::from_handle(app).take_core()
+                && let Some(core) = state::from_handle(app).and_then(|state| state.take_core())
             {
                 tracing::info!("shutting the core down");
                 tauri::async_runtime::block_on(core.shutdown());
@@ -171,7 +205,12 @@ fn run_inner() -> Result<(), Box<dyn std::error::Error>> {
 /// themed frame rather than a white one — the front end reports readiness and
 /// [`window::install_ready_gate`] reveals it.
 async fn start_core(app: &tauri::AppHandle) -> Result<Arc<AppState>, Box<dyn std::error::Error>> {
-    let data_dir = app.path().app_data_dir()?;
+    let data_dir = match data_dir_override() {
+        Some(override_dir) => override_dir,
+        None => app.path().app_data_dir()?,
+    };
+    tracing::info!(directory = %data_dir.display(), "using the data directory");
+
     let hostname = tauri_plugin_os::hostname();
     let nickname = Nickname::parse(&hostname)
         .or_else(|_| Nickname::parse(FALLBACK_NICKNAME))

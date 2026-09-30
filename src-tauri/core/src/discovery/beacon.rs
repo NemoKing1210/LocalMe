@@ -22,6 +22,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
+use socket2::{Domain, Protocol, Socket, Type};
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -57,13 +58,11 @@ const SWEEP_INTERVAL: Duration = Duration::from_secs(5);
 ///
 /// # Socket options
 ///
-/// The socket is bound to `0.0.0.0:<port>` with `SO_BROADCAST` enabled and multicast joined
-/// where the platform allows it. `SO_REUSEADDR`/`SO_REUSEPORT` are deliberately not set:
-/// `std` does not expose them, and reaching for them would mean a new dependency for a case
-/// — two instances on one machine — that mDNS already covers. The visible consequence is
-/// that a second instance on the same host fails to bind the beacon port and reports
-/// [`DiscoveryError::Beacon`]; [`CompositeDiscovery`](super::CompositeDiscovery) logs that
-/// and carries on with its other sources.
+/// The socket is bound to `0.0.0.0:<port>` with `SO_BROADCAST`, `SO_REUSEADDR` and
+/// `SO_REUSEPORT` enabled and multicast joined where the platform allows it. The reuse options
+/// matter for one specific case: the port being held by another process. Without them the
+/// second binder fails outright and discovery loses its fallback; with them both sockets
+/// receive the announcements, which is the behaviour a peer-to-peer discovery protocol wants.
 pub struct UdpBeacon {
     /// What we announce about ourselves.
     own: OwnAnnouncement,
@@ -127,9 +126,14 @@ impl Discovery for UdpBeacon {
 
         // Bind and configure synchronously: `start` reports a missing port immediately, and
         // the socket is moved into the runtime afterwards.
-        let socket =
-            std::net::UdpSocket::bind(SocketAddr::from((Ipv4Addr::UNSPECIFIED, self.port)))
-                .map_err(DiscoveryError::Beacon)?;
+        //
+        // `SO_REUSEADDR`/`SO_REUSEPORT` are set so that the beacon port being held by another
+        // process — a stale instance, a second copy of this application, anything else that
+        // picked 47821 — degrades to "both sockets receive the announcements" instead of
+        // "discovery is off". `socket2` is already in the dependency tree through `mdns-sd`;
+        // `std` still cannot express these options.
+        let socket = bind_reusable(SocketAddr::from((Ipv4Addr::UNSPECIFIED, self.port)))
+            .map_err(DiscoveryError::Beacon)?;
         socket.set_broadcast(true).map_err(DiscoveryError::Beacon)?;
         if let Err(err) = socket.set_multicast_loop_v4(false) {
             tracing::warn!(error = %err, "could not disable the beacon's multicast loopback");
@@ -236,8 +240,22 @@ impl Announcement {
     }
 }
 
-/// Encodes an announce or goodbye for our own announcement.
+/// Binds a UDP socket with the reuse options that let two processes share the port.
 ///
+/// On Windows only `SO_REUSEADDR` exists; on Unix `SO_REUSEPORT` is what actually distributes
+/// datagrams between the sockets. Setting whichever the platform has is the most that can be
+/// done from here, and both outcomes are better than refusing to start.
+fn bind_reusable(address: SocketAddr) -> io::Result<std::net::UdpSocket> {
+    let socket = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
+    socket.set_reuse_address(true)?;
+
+    #[cfg(all(unix, not(target_os = "solaris"), not(target_os = "illumos")))]
+    socket.set_reuse_port(true)?;
+
+    socket.bind(&address.into())?;
+    Ok(socket.into())
+}
+
 /// Returns `None` if serialisation fails, which cannot happen for this shape of data but
 /// must not be a panic either; every caller treats it as "nothing to send".
 fn encode(tag: Tag, own: &OwnAnnouncement) -> Option<Vec<u8>> {
@@ -483,6 +501,43 @@ async fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Two sockets on one port is the whole point of the reuse options, and it is what makes a
+    /// second instance on the same machine degrade to "both receive" instead of "no discovery".
+    #[test]
+    fn two_sockets_can_share_the_beacon_port() {
+        let first = bind_reusable(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))).expect("first bind");
+        let port = first.local_addr().expect("address").port();
+
+        let second = bind_reusable(SocketAddr::from((Ipv4Addr::LOCALHOST, port)));
+        assert!(
+            second.is_ok(),
+            "a second socket on the same port must be allowed: {:?}",
+            second.err()
+        );
+
+        let sender =
+            std::net::UdpSocket::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))).expect("sender");
+        sender
+            .send_to(b"announce", SocketAddr::from((Ipv4Addr::LOCALHOST, port)))
+            .expect("send");
+
+        // Whichever socket the platform delivers to, the datagram must arrive somewhere: that
+        // is the difference between this and a failed bind.
+        let second = second.expect("second socket");
+        let mut buffer = [0_u8; 32];
+        let received = first
+            .set_nonblocking(false)
+            .and_then(|()| first.recv(&mut buffer))
+            .or_else(|_| {
+                second.set_nonblocking(false)?;
+                second.recv(&mut buffer)
+            });
+        assert!(
+            received.is_ok(),
+            "the datagram was delivered to neither socket"
+        );
+    }
 
     /// A stand-in for a peer's announcement.
     fn own_named(nickname: &str) -> OwnAnnouncement {

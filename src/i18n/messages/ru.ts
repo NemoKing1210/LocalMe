@@ -21,6 +21,10 @@ export const ru: MessageCatalog = {
   'common.loading': 'Загрузка…',
   'common.you': 'Вы',
   'common.dismiss': 'Скрыть',
+  'common.more': 'Ещё',
+  'common.options': 'Действия',
+  'common.retry': 'Повторить',
+  'common.clear': 'Очистить',
 
   'onboarding.title': 'Добро пожаловать в LocalMe',
   'onboarding.subtitle':
@@ -50,6 +54,12 @@ export const ru: MessageCatalog = {
   'users.unread.many': '{count} непрочитанных сообщений',
   'users.forget': 'Забыть…',
   'users.muted': 'Уведомления отключены',
+  'users.openChatWith': 'Переписка с {name}',
+  'users.actionsFor': 'Действия для {name}',
+  'users.mute': 'Отключить уведомления',
+  'users.unmute': 'Включить уведомления',
+  'users.you': 'Вы ({name})',
+  'users.count': 'Человек: {count}',
 
   'forget.title': 'Забыть {name}?',
   'forget.body':
@@ -72,6 +82,10 @@ export const ru: MessageCatalog = {
   'chat.loadOlder': 'Загрузить более ранние',
   'chat.dayToday': 'Сегодня',
   'chat.dayYesterday': 'Вчера',
+  'chat.jumpToLatest': 'К последним сообщениям',
+  'chat.messageList': 'Сообщения с {name}',
+  'chat.sending': 'Отправляем сообщение',
+  'chat.historyEnd': 'Это начало переписки',
 
   'settings.title': 'Настройки',
   'settings.groupProfile': 'Профиль',
@@ -123,6 +137,15 @@ export const ru: MessageCatalog = {
   'settings.aboutVersion': 'Версия {version}',
   'settings.aboutArchitecture': 'Мессенджер для локальной сети',
   'settings.aboutLicense': 'Распространяется по лицензии MIT.',
+  'settings.aboutDiagnostics': 'Диагностика',
+  'settings.devicesKnown': 'Известно',
+  'settings.devicesForgotten': 'Забыто',
+  'settings.saveFailed': 'Не удалось сохранить настройку.',
+  'settings.historyCleared': 'Удалено сообщений: {count}.',
+  'settings.notificationsPerPeerHelp':
+    'Отдельным людям можно отключить уведомления в меню ⋮ в списке.',
+  'locale.en': 'English',
+  'locale.ru': 'Русский',
 
   'tray.open': 'Открыть LocalMe',
   'tray.mute': 'Приостановить уведомления',

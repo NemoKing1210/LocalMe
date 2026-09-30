@@ -129,7 +129,9 @@ fn build_menu(
 fn toggle_notifications(app: &AppHandle) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        let state = state::from_handle(&app);
+        let Some(state) = state::from_handle(&app) else {
+            return;
+        };
         let mut settings = match state.settings.get().await {
             Ok(settings) => settings,
             Err(error) => {

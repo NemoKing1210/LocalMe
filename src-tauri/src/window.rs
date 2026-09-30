@@ -38,7 +38,9 @@ pub fn reveal(app: &AppHandle) {
         return;
     }
 
-    let state = state::from_handle(app);
+    let Some(state) = state::from_handle(app) else {
+        return;
+    };
     let was_hidden = !state.window_visible.swap(true, Ordering::Relaxed);
     if was_hidden {
         // Everything that happened while the window was in the tray is delivered as one
@@ -62,10 +64,8 @@ pub fn hide(app: &AppHandle) {
     };
     if let Err(error) = window.hide() {
         tracing::warn!(%error, "failed to hide the main window");
-    } else {
-        state::from_handle(app)
-            .window_visible
-            .store(false, Ordering::Relaxed);
+    } else if let Some(state) = state::from_handle(app) {
+        state.window_visible.store(false, Ordering::Relaxed);
     }
 }
 
@@ -77,7 +77,10 @@ pub fn is_revealed() -> bool {
 
 /// Updates the window title so the unread count is visible without opening the window.
 pub fn refresh_title(app: &AppHandle, unread: u32) {
-    let labels = state::from_handle(app).labels_snapshot();
+    let Some(state) = state::from_handle(app) else {
+        return;
+    };
+    let labels = state.labels_snapshot();
     if let Some(window) = app.get_webview_window(MAIN_WINDOW)
         && let Err(error) = window.set_title(&labels.window_title(unread))
     {
