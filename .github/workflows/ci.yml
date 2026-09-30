@@ -1,37 +1,38 @@
 name: CI
 
 on:
+  pull_request:
   push:
     branches: [main]
-  pull_request:
+  workflow_call:
+  workflow_dispatch:
 
-# The front-end job is the same everywhere, so it runs once; the Rust jobs run on all three
-# platforms, because most of this project's risk is platform behaviour — mDNS per interface,
-# tray availability, firewall prompts — and a lint that only ever passes on Linux would tell us
-# nothing about the two platforms most users are on.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
   frontend:
-    name: Front end (lint, types, tests, build)
-    runs-on: ubuntu-latest
+    name: Front end
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - name: Setup
+        uses: ./.github/actions/setup
         with:
-          node-version: 24
-          cache: npm
-
-      - run: npm ci
+          rust: 'false'
 
       - name: Lint
         run: npm run lint
 
-      - name: Formatting
-        run: npx prettier --check .
+      - name: Format
+        run: npm run format:check
 
       - name: Types
         run: npm run typecheck
@@ -42,32 +43,28 @@ jobs:
       - name: Build
         run: npm run build
 
+  # The Rust jobs run on all three platforms: most of this project's risk is platform behaviour —
+  # mDNS per interface, tray availability, firewall prompts — and a check that only ever passes on
+  # Linux would tell us nothing about the two platforms most users are on.
   core:
     name: Core (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-22.04, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v7
 
-      - name: Linux build dependencies
-        if: matrix.os == 'ubuntu-latest'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
-            librsvg2-dev patchelf libssl-dev libxdo-dev
-
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Setup
+        uses: ./.github/actions/setup
         with:
-          components: rustfmt, clippy
+          node: 'false'
+          frontend: 'false'
 
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
-
-      - name: Formatting
+      - name: Format
         run: cargo fmt --all -- --check
         working-directory: src-tauri
 
@@ -75,59 +72,50 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
         working-directory: src-tauri
 
-      # The unit tests are pure and fast; the integration tests bind loopback sockets and run
-      # two full instances with discovery injected, so they are deterministic.
+      # The unit tests are pure and fast; the integration tests bind loopback sockets and run two
+      # full instances with discovery injected, so they are deterministic.
       - name: Tests
         run: cargo test --workspace
         working-directory: src-tauri
 
-      # The real-mDNS test is opt-in because it needs multicast to work between two daemons
-      # inside one process, which depends on the machine's interfaces. It runs here so the
-      # result is visible, and it is advisory: a runner that filters multicast is a fact about
-      # the runner, not about the code.
+      # The real-mDNS test is opt-in because it needs multicast to work between two daemons inside
+      # one process, which depends on the machine's interfaces. It runs here so the result is
+      # visible, and it is advisory: a runner that filters multicast is a fact about the runner,
+      # not about the code.
       - name: Discovery over real multicast (advisory)
         run: cargo test -p localme-core --test loopback -- --ignored
         working-directory: src-tauri
         continue-on-error: true
 
-  bundle:
-    name: Bundle (${{ matrix.os }})
-    needs: [frontend, core]
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+  versions:
+    name: Versions
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v7
 
-      - name: Linux build dependencies
-        if: matrix.os == 'ubuntu-latest'
+      - name: Setup
+        uses: ./.github/actions/setup
+        with:
+          rust: 'false'
+          frontend: 'false'
+
+      - name: Check version sync
+        run: npm run check:versions
+
+      - name: Test the version tooling
+        run: npm run test:scripts
+
+  ci:
+    name: CI
+    needs: [frontend, core, versions]
+    if: always()
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every check
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
-            librsvg2-dev patchelf libssl-dev libxdo-dev
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: npm
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
-
-      - run: npm ci
-
-      - name: Build the application and its installers
-        run: npm run tauri build
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: localme-${{ matrix.os }}
-          path: |
-            src-tauri/target/release/bundle/**
-          if-no-files-found: warn
-          retention-days: 7
+          test '${{ needs.frontend.result }}' = success
+          test '${{ needs.core.result }}' = success
+          test '${{ needs.versions.result }}' = success

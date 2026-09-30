@@ -26,6 +26,9 @@ recorded here.
 ```
 LocalMe/
 ├─ docs/ARCHITECTURE.md          # this file
+├─ AGENTS.md  CLAUDE.md          # agent/contributor map and Claude Code brief
+├─ CONTRIBUTING.md  CHANGELOG.md  LICENSE
+├─ scripts/                      # version bump, changelog extract, release tag
 ├─ src/                          # Vue 3 front end (see §10)
 ├─ src-tauri/                    # Cargo workspace root
 │  ├─ Cargo.toml                 # package `localme` (Tauri host) + workspace definition
@@ -34,7 +37,10 @@ LocalMe/
 │  ├─ icons/                     # app + tray icons
 │  ├─ src/                       # Tauri host: commands, events, tray, window policy
 │  └─ core/                      # crate `localme-core` — no Tauri, no UI
-└─ .github/workflows/ci.yml
+└─ .github/
+   ├─ workflows/ci.yml           # quality gate (front end, core matrix, versions)
+   ├─ workflows/release.yml      # tagged installer builds → draft GitHub Release
+   └─ actions/setup              # shared Node/Rust/Linux setup
 ```
 
 `localme-core` deliberately does **not** depend on `tauri`. It holds the domain, protocol,

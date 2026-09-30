@@ -1,10 +1,39 @@
-# LocalMe
+<p align="center">
+  <img src="src-tauri/icons/icon.png" width="96" height="96" alt="LocalMe">
+</p>
 
-A messenger for the local network. Launch it on two computers that share a network and they
-find each other; there is no server, no account and nothing to configure. Messages are stored
-locally on both ends, in SQLite, and the interface exists in English and Russian.
+<h1 align="center">LocalMe</h1>
 
-Built with [Tauri 2](https://tauri.app) (Rust) and Vue 3.
+<p align="center">
+  <strong>A messenger for the local network.</strong><br>
+  No server, no account, nothing to configure.
+</p>
+
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-59d5cc?style=flat-square" alt="MIT License"></a>
+  <a href="../../actions/workflows/ci.yml"><img src="../../actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <img src="https://img.shields.io/badge/Tauri-2-24C8DB?style=flat-square&logo=tauri&logoColor=white" alt="Tauri 2">
+  <img src="https://img.shields.io/badge/Vue-3-42B883?style=flat-square&logo=vuedotjs&logoColor=white" alt="Vue 3">
+  <img src="https://img.shields.io/badge/Rust-2024-DEA584?style=flat-square&logo=rust&logoColor=white" alt="Rust">
+  <img src="https://img.shields.io/badge/UI-2_languages-111716?style=flat-square" alt="2 UI languages">
+</p>
+
+<p align="center">
+  <a href="#running-it">Running it</a> ·
+  <a href="#how-it-is-built">How it is built</a> ·
+  <a href="#protocol">Protocol</a> ·
+  <a href="#ports-and-the-firewall">Ports</a> ·
+  <a href="#troubleshooting">Troubleshooting</a> ·
+  <a href="CONTRIBUTING.md">Contributing</a> ·
+  <a href="CHANGELOG.md">Changelog</a>
+</p>
+
+---
+
+Launch LocalMe on two computers that share a network and they find each other. Messages are stored
+locally on both ends, in SQLite, and the interface exists in English and Russian. Built with
+[Tauri 2](https://tauri.app) (Rust) and Vue 3. Architecture for contributors and coding agents:
+[AGENTS.md](AGENTS.md) and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Requirements
 
@@ -218,7 +247,13 @@ to the application — it documents that action-related fields are ignored. Clic
 icon** instead raises the window and opens the conversation that notified most recently, which is
 the closest equivalent available on all three platforms.
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the workflow and [AGENTS.md](AGENTS.md) for the project
+map. Every shipped change bumps the version and adds a [CHANGELOG.md](CHANGELOG.md) section;
+`npm run check:versions` keeps the version files honest.
+
 ## Licence
 
-MIT. The application icon is generated from `tools/make-icon.mjs`; avatars come from
+[MIT](LICENSE). The application icon is generated from `tools/make-icon.mjs`; avatars come from
 [blobatar](https://github.com/Alain00/blobatar) (MIT).

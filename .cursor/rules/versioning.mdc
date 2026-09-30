@@ -1,0 +1,46 @@
+---
+description: Bump SemVer and update CHANGELOG.md on every user-facing or shipped change
+alwaysApply: true
+---
+
+# Versioning and changelog
+
+Every shipped change must bump the app version and record the change in `CHANGELOG.md`. Do not leave the version or changelog for a later commit.
+
+## SemVer (`MAJOR.MINOR.PATCH`)
+
+Start is `0.1.0`. Bump the **smallest** number that matches the change:
+
+| Bump | When | Example |
+| --- | --- | --- |
+| **Patch** | Small change: bugfix, copy, docs, tweak, translation, hardening | `0.1.0` → `0.1.1` |
+| **Minor** | New user-visible capability that stays compatible | `0.1.1` → `0.2.0` |
+| **Major** | Breaking change for users or persisted data | `0.2.0` → `1.0.0` |
+
+Default to **patch** when unsure. One change set = one bump (not one bump per file).
+
+## Keep these versions in sync
+
+- `package.json`
+- `package-lock.json` (root `version` and `packages[""].version`)
+- `src-tauri/Cargo.toml`
+- `src-tauri/core/Cargo.toml`
+- `src-tauri/Cargo.lock` (`localme` and `localme-core`)
+- `src-tauri/tauri.conf.json`
+- `AGENTS.md` (the `Version:` line)
+- `CHANGELOG.md` (new `## [x.y.z] - YYYY-MM-DD` section at the top)
+
+Run `npm run version:patch` (or `minor` / `major`) to update all of them and insert a changelog
+stub, then edit the stub. `npm run check:versions` must pass.
+
+## Changelog entry
+
+Add a dated section under the heading, using `Added` / `Changed` / `Fixed` / `Removed`. Write user-facing bullets, not file lists.
+
+```markdown
+## [0.1.1] - 2026-10-01
+
+### Fixed
+
+- Reconnect no longer leaves a peer stuck in the connecting state
+```

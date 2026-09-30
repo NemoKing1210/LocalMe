@@ -13,7 +13,15 @@ configureVueProject({ rootDir: import.meta.dirname, scriptLangs: ['ts'] });
 export default defineConfigWithVueTs(
   {
     name: 'localme/ignores',
-    ignores: ['dist/**', 'node_modules/**', 'coverage/**', 'src-tauri/**', 'tools/**', 'docs/**'],
+    ignores: [
+      'dist/**',
+      'node_modules/**',
+      'coverage/**',
+      'src-tauri/**',
+      'tools/**',
+      'scripts/**',
+      'docs/**',
+    ],
   },
   {
     name: 'localme/files',
