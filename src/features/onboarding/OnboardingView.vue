@@ -5,9 +5,9 @@
  * Three decisions are worth spelling out.
  *
  * The validation is a *transcription* of `Nickname::parse` in `localme-core`, not a second
- * rule: trim, then count `char`s (the spread, not `.length`, so 32 emoji are 32 characters
- * and not 64), then reject control characters. The submit button is gated on the same
- * function that produces the error message, so "enabled" and "no error" can never disagree.
+ * rule: trim, then count code points (`Array.from`, not `.length`, so 32 emoji are 32
+ * characters and not 64), then reject control characters. The submit button is gated on the
+ * same function that produces the error message, so "enabled" and "no error" cannot disagree.
  *
  * The avatar is seeded with `"{deviceId}:{nickname}"` — exactly what the host announces to
  * every peer — so the preview is the avatar the rest of the network will draw, not a local

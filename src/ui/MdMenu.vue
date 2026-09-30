@@ -23,20 +23,17 @@ import MdIcon from './MdIcon.vue';
 import MdIconButton from './MdIconButton.vue';
 import type { IconName } from './icons';
 
-const props = withDefaults(
-  defineProps<{
-    /** The entries, in order. */
-    items: readonly {
-      readonly id: string;
-      readonly label: string;
-      readonly icon?: IconName;
-      readonly danger?: boolean;
-    }[];
-    /** The trigger's accessible name, such as "Actions for Anna". */
-    label: string;
-  }>(),
-  {},
-);
+const props = defineProps<{
+  /** The entries, in order. */
+  items: readonly {
+    readonly id: string;
+    readonly label: string;
+    readonly icon?: IconName;
+    readonly danger?: boolean;
+  }[];
+  /** The trigger's accessible name, such as "Actions for Anna". */
+  label: string;
+}>();
 
 const emit = defineEmits<{ select: [id: string] }>();
 

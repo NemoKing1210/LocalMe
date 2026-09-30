@@ -109,7 +109,9 @@ pub struct Cached {
 /// is still running, so a window event can be delivered before `setup` has managed the state, and
 /// a handler that panicked in that window would take the process down on startup.
 #[must_use]
-pub fn from_handle(app: &tauri::AppHandle) -> Option<std::sync::Arc<AppState>> {
+pub fn from_handle<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+) -> Option<std::sync::Arc<AppState>> {
     app.try_state::<std::sync::Arc<AppState>>()
         .map(|state| state.inner().clone())
 }

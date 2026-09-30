@@ -16,6 +16,17 @@
     )
 )]
 
+use std::process::ExitCode;
+use std::sync::Arc;
+
+use localme_core::domain::nickname::Nickname;
+use localme_core::runtime::{Core, CoreConfig};
+use tauri::{Manager, RunEvent, WindowEvent};
+
+pub use error::ApiError;
+use state::AppState;
+
+mod args;
 mod autostart;
 mod commands;
 mod error;
@@ -26,15 +37,40 @@ mod state;
 mod tray;
 mod window;
 
-use std::process::ExitCode;
-use std::sync::Arc;
-
-use localme_core::domain::nickname::Nickname;
-use localme_core::runtime::{Core, CoreConfig};
-use tauri::{Manager, RunEvent, WindowEvent};
-
-pub use error::ApiError;
-use state::AppState;
+/// The IPC surface, as a handler.
+///
+/// A macro rather than a function because `tauri::generate_handler!` expands to a closure over the
+/// runtime, and a macro rather than an inline list because registration is the one place that has
+/// to name every command: keeping it in one place means a command cannot be written and then
+/// quietly left out.
+macro_rules! ipc_handler {
+    () => {
+        tauri::generate_handler![
+            $crate::commands::bootstrap,
+            $crate::commands::list_peers,
+            $crate::commands::history,
+            $crate::commands::send_message,
+            $crate::commands::mark_read,
+            $crate::commands::forget_peer,
+            $crate::commands::restore_peer,
+            $crate::commands::set_peer_muted,
+            $crate::commands::known_devices,
+            $crate::commands::clear_history,
+            $crate::commands::own_profile,
+            $crate::commands::set_nickname,
+            $crate::commands::complete_onboarding,
+            $crate::commands::get_settings,
+            $crate::commands::update_settings,
+            $crate::commands::is_autostart_enabled,
+            $crate::commands::set_ui_labels,
+            $crate::commands::set_active_chat,
+            $crate::commands::show_window,
+            $crate::commands::hide_window,
+            $crate::commands::quit,
+            $crate::commands::diagnostics,
+        ]
+    };
+}
 
 /// Command-line flag set by the autostart entry when a tray-only launch was requested.
 pub const FLAG_MINIMIZED: &str = "--minimized";
@@ -101,30 +137,7 @@ fn run_inner() -> Result<(), Box<dyn std::error::Error>> {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             Some(vec![FLAG_MINIMIZED]),
         ))
-        .invoke_handler(tauri::generate_handler![
-            commands::bootstrap,
-            commands::list_peers,
-            commands::history,
-            commands::send_message,
-            commands::mark_read,
-            commands::forget_peer,
-            commands::restore_peer,
-            commands::set_peer_muted,
-            commands::known_devices,
-            commands::clear_history,
-            commands::own_profile,
-            commands::set_nickname,
-            commands::complete_onboarding,
-            commands::get_settings,
-            commands::update_settings,
-            commands::is_autostart_enabled,
-            commands::set_ui_labels,
-            commands::set_active_chat,
-            commands::show_window,
-            commands::hide_window,
-            commands::quit,
-            commands::diagnostics,
-        ])
+        .invoke_handler(ipc_handler!())
         .setup(|app| {
             let handle = app.handle().clone();
             tracing::info!(
@@ -209,7 +222,7 @@ async fn start_core(app: &tauri::AppHandle) -> Result<Arc<AppState>, Box<dyn std
         Some(override_dir) => override_dir,
         None => app.path().app_data_dir()?,
     };
-    tracing::info!(directory = %data_dir.display(), "using the data directory");
+    tracing::info!(path = %data_dir.display(), "using an explicitly configured data directory");
 
     let hostname = tauri_plugin_os::hostname();
     let nickname = Nickname::parse(&hostname)

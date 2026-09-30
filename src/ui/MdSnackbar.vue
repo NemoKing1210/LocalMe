@@ -29,7 +29,11 @@ const emit = defineEmits<{ dismiss: [] }>();
       aria-live="polite"
     >
       <span class="md-typescale-body-medium md-snackbar__text">{{ text }}</span>
-      <button class="md-snackbar__action md-typescale-label-large" type="button" @click="emit('dismiss')">
+      <button
+        class="md-snackbar__action md-typescale-label-large"
+        type="button"
+        @click="emit('dismiss')"
+      >
         <slot name="action">OK</slot>
       </button>
     </div>
@@ -79,7 +83,8 @@ const emit = defineEmits<{ dismiss: [] }>();
 .md-snackbar-leave-active {
   transition:
     opacity var(--md-sys-motion-duration-medium2) var(--md-sys-motion-easing-emphasized-decelerate),
-    transform var(--md-sys-motion-duration-medium2) var(--md-sys-motion-easing-emphasized-decelerate);
+    transform var(--md-sys-motion-duration-medium2)
+      var(--md-sys-motion-easing-emphasized-decelerate);
 }
 
 .md-snackbar-enter-from,

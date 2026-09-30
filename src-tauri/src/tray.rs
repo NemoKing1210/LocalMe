@@ -10,9 +10,9 @@
 //! better than two items where one is always wrong.
 
 use localme_core::services::Settings;
-use tauri::AppHandle;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{AppHandle, Runtime};
 
 use crate::state::{self, AppState};
 
@@ -30,7 +30,7 @@ const MENU_QUIT: &str = "localme:quit";
 /// Returns the platform error if the tray cannot be created — on Linux this means no
 /// StatusNotifier or AppIndicator host is running, which the caller reports rather than
 /// treating as fatal.
-pub fn install(app: &AppHandle, state: &AppState) -> tauri::Result<()> {
+pub fn install<R: Runtime>(app: &AppHandle<R>, state: &AppState) -> tauri::Result<()> {
     let menu = build_menu(app, &state.labels_snapshot(), &state.settings_snapshot())?;
     let tooltip = state.labels_snapshot().tooltip(unread(state));
 
@@ -73,7 +73,7 @@ pub fn install(app: &AppHandle, state: &AppState) -> tauri::Result<()> {
 }
 
 /// Rebuilds the menu and the tooltip from the current labels, settings and unread count.
-pub fn refresh(app: &AppHandle, state: &AppState) {
+pub fn refresh<R: Runtime>(app: &AppHandle<R>, state: &AppState) {
     let Some(tray) = app.tray_by_id(TRAY_ID) else {
         return;
     };
@@ -98,11 +98,11 @@ fn unread(state: &AppState) -> u32 {
     state.unread.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-fn build_menu(
-    app: &AppHandle,
+fn build_menu<R: Runtime>(
+    app: &AppHandle<R>,
     labels: &crate::state::UiLabels,
     settings: &Settings,
-) -> tauri::Result<Menu<tauri::Wry>> {
+) -> tauri::Result<Menu<R>> {
     let open = MenuItem::with_id(app, MENU_OPEN, &labels.open, true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
     let toggle_text = if settings.notifications.enabled {
@@ -126,7 +126,7 @@ fn build_menu(
 /// Flips the global notification switch, from the tray.
 ///
 /// The same flag the settings screen edits, so the two surfaces cannot disagree.
-fn toggle_notifications(app: &AppHandle) {
+fn toggle_notifications<R: Runtime>(app: &AppHandle<R>) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let Some(state) = state::from_handle(&app) else {

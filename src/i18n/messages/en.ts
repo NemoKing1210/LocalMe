@@ -24,12 +24,12 @@ export const en = {
   'common.delete': 'Delete',
   'common.search': 'Search',
   'common.retry': 'Retry',
+  'common.back': 'Back',
   'common.loading': 'Loading…',
   'common.you': 'You',
   'common.dismiss': 'Dismiss',
   'common.more': 'More',
   'common.options': 'Options',
-  'common.retry': 'Retry',
   'common.clear': 'Clear',
 
   'onboarding.title': 'Welcome to LocalMe',
@@ -92,6 +92,7 @@ export const en = {
   'chat.historyEnd': 'This is the beginning of the conversation',
 
   'settings.title': 'Settings',
+  'settings.close': 'Back to messages',
   'settings.groupProfile': 'Profile',
   'settings.groupAppearance': 'Appearance',
   'settings.groupLanguage': 'Language',

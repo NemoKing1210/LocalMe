@@ -14,6 +14,7 @@
 
 use localme_core::domain::message::{ChatMessage, Direction};
 use localme_core::domain::peer::PeerView;
+use tauri::Runtime;
 use tauri_plugin_notification::NotificationExt;
 
 use crate::state::AppState;
@@ -44,8 +45,8 @@ pub fn should_notify(state: &AppState, peer: &PeerView, message: &ChatMessage) -
 ///
 /// Returns whether one was shown. The caller uses that to record the peer as the last
 /// notified, which drives the tray-click behaviour.
-pub fn show_message(
-    app: &tauri::AppHandle,
+pub fn show_message<R: Runtime>(
+    app: &tauri::AppHandle<R>,
     state: &AppState,
     peer: &PeerView,
     message: &ChatMessage,

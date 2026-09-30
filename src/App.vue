@@ -120,7 +120,11 @@ function backToList(): void {
 </script>
 
 <template>
-  <div class="app" :data-wide="wide ? 'true' : 'false'" :data-detail="showDetail ? 'true' : 'false'">
+  <div
+    class="app"
+    :data-wide="wide ? 'true' : 'false'"
+    :data-detail="showDetail ? 'true' : 'false'"
+  >
     <div v-if="loading" class="app__centred">
       <span class="app__spinner" aria-hidden="true" />
       <span class="md-typescale-body-medium">{{ i18n.t('common.loading') }}</span>
@@ -139,12 +143,7 @@ function backToList(): void {
       </div>
       <main class="app__detail">
         <SettingsView v-if="ui.screen === 'settings'" @close="ui.goTo('chat')" />
-        <ChatView
-          v-else
-          :peer="peers.selected"
-          :show-back="!wide"
-          @back="backToList"
-        />
+        <ChatView v-else :peer="peers.selected" :show-back="!wide" @back="backToList" />
       </main>
     </template>
 
@@ -160,6 +159,10 @@ function backToList(): void {
 <style scoped>
 .app {
   display: grid;
+  /* One row, exactly as tall as the container. Without this the row is `auto`-sized, so the
+     tallest pane decides the height and a long conversation stretches the shell past the
+     window instead of scrolling inside it. */
+  grid-template-rows: 1fr;
   height: 100%;
   background: var(--md-sys-color-surface);
   color: var(--md-sys-color-on-surface);

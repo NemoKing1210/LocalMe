@@ -109,8 +109,7 @@ const controlId = useId();
   background: var(--md-sys-color-outline);
   transform: translateY(-50%);
   transition:
-    inset-inline-start var(--md-sys-motion-duration-medium1)
-      var(--md-sys-motion-easing-emphasized),
+    inset-inline-start var(--md-sys-motion-duration-medium1) var(--md-sys-motion-easing-emphasized),
     width var(--md-sys-motion-duration-medium1) var(--md-sys-motion-easing-emphasized),
     height var(--md-sys-motion-duration-medium1) var(--md-sys-motion-easing-emphasized),
     background-color var(--md-sys-motion-duration-short3) var(--md-sys-motion-easing-standard);

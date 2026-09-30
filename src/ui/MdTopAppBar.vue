@@ -15,12 +15,14 @@
  * The background is the surface, not a container role, so the bar reads as part of the pane
  * rather than as a card floating over it.
  */
+// The `| undefined` is what lets the `undefined` default typecheck under
+// `exactOptionalPropertyTypes`; the prop's type is the same either way.
 withDefaults(
   defineProps<{
     /** The headline. */
     title: string;
     /** A secondary line under the headline, such as a peer's presence. */
-    subtitle?: string;
+    subtitle?: string | undefined;
   }>(),
   { subtitle: undefined },
 );

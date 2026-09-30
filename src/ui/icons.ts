@@ -11,15 +11,26 @@
  * geometry we do not control is an icon that cannot be adjusted to sit optically right next to
  * our own type.
  */
-import { computed } from 'vue';
-
 /** One drawing primitive. */
 type Shape =
   | { readonly kind: 'path'; readonly d: string }
-  | { readonly kind: 'line'; readonly x1: number; readonly y1: number; readonly x2: number; readonly y2: number }
+  | {
+      readonly kind: 'line';
+      readonly x1: number;
+      readonly y1: number;
+      readonly x2: number;
+      readonly y2: number;
+    }
   | { readonly kind: 'polyline'; readonly points: string }
   | { readonly kind: 'circle'; readonly cx: number; readonly cy: number; readonly r: number }
-  | { readonly kind: 'rect'; readonly x: number; readonly y: number; readonly width: number; readonly height: number; readonly rx: number }
+  | {
+      readonly kind: 'rect';
+      readonly x: number;
+      readonly y: number;
+      readonly width: number;
+      readonly height: number;
+      readonly rx: number;
+    }
   | { readonly kind: 'dot'; readonly cx: number; readonly cy: number; readonly r: number };
 
 /** Eight teeth around a hub, which is all a settings glyph needs to be recognised. */
@@ -120,10 +131,7 @@ export const ICONS: Record<string, readonly Shape[]> = {
     { kind: 'dot', cx: 12, cy: 17, r: 1.05 },
   ],
   bell: BELL,
-  'bell-off': [
-    ...BELL,
-    { kind: 'line', x1: 4, y1: 4, x2: 20, y2: 20 },
-  ],
+  'bell-off': [...BELL, { kind: 'line', x1: 4, y1: 4, x2: 20, y2: 20 }],
   offline: [
     { kind: 'circle', cx: 12, cy: 12, r: 9 },
     { kind: 'line', x1: 5.6, y1: 5.6, x2: 18.4, y2: 18.4 },
@@ -133,7 +141,10 @@ export const ICONS: Record<string, readonly Shape[]> = {
     { kind: 'polyline', points: '12,6.8 12,12.4 16.2,14.8' },
   ],
   chat: [
-    { kind: 'path', d: 'M3.5 6.6A2.6 2.6 0 0 1 6.1 4h11.8a2.6 2.6 0 0 1 2.6 2.6v7a2.6 2.6 0 0 1-2.6 2.6H9.4L4 20z' },
+    {
+      kind: 'path',
+      d: 'M3.5 6.6A2.6 2.6 0 0 1 6.1 4h11.8a2.6 2.6 0 0 1 2.6 2.6v7a2.6 2.6 0 0 1-2.6 2.6H9.4L4 20z',
+    },
   ],
   trash: [
     { kind: 'line', x1: 3.8, y1: 6.8, x2: 20.2, y2: 6.8 },
@@ -142,10 +153,7 @@ export const ICONS: Record<string, readonly Shape[]> = {
     { kind: 'line', x1: 10.2, y1: 10.6, x2: 10.2, y2: 17.2 },
     { kind: 'line', x1: 13.8, y1: 10.6, x2: 13.8, y2: 17.2 },
   ],
-  settings: [
-    { kind: 'circle', cx: 12, cy: 12, r: 3.3 },
-    ...gearTeeth(),
-  ],
+  settings: [{ kind: 'circle', cx: 12, cy: 12, r: 3.3 }, ...gearTeeth()],
   palette: [
     { kind: 'circle', cx: 12, cy: 12, r: 9 },
     { kind: 'dot', cx: 8.2, cy: 9.2, r: 1.35 },
@@ -164,13 +172,8 @@ export const ICONS: Record<string, readonly Shape[]> = {
     { kind: 'path', d: 'M15.4 9.4a3.8 3.8 0 0 1 0 5.2' },
     { kind: 'path', d: 'M18.2 6.8a7.4 7.4 0 0 1 0 10.4' },
   ],
-  sun: [
-    { kind: 'circle', cx: 12, cy: 12, r: 4.1 },
-    ...sunRays(),
-  ],
-  moon: [
-    { kind: 'path', d: 'M20.4 14.6A8.6 8.6 0 0 1 9.4 3.6a8.6 8.6 0 1 0 11 11z' },
-  ],
+  sun: [{ kind: 'circle', cx: 12, cy: 12, r: 4.1 }, ...sunRays()],
+  moon: [{ kind: 'path', d: 'M20.4 14.6A8.6 8.6 0 0 1 9.4 3.6a8.6 8.6 0 1 0 11 11z' }],
   display: [
     { kind: 'rect', x: 2.8, y: 4.2, width: 18.4, height: 12.4, rx: 2 },
     { kind: 'line', x1: 9, y1: 20, x2: 15, y2: 20 },
@@ -200,4 +203,3 @@ export const ICONS: Record<string, readonly Shape[]> = {
 
 /** Every icon name, so a typo is caught by the type checker at the call site. */
 export type IconName = keyof typeof ICONS;
-

@@ -31,9 +31,7 @@ export const usePeerStore = defineStore('peers', () => {
     () => peers.value.find((peer) => peer.deviceId === selectedId.value) ?? null,
   );
 
-  const unreadTotal = computed(() =>
-    peers.value.reduce((total, peer) => total + peer.unread, 0),
-  );
+  const unreadTotal = computed(() => peers.value.reduce((total, peer) => total + peer.unread, 0));
 
   function get(deviceId: DeviceId): Peer | undefined {
     return peers.value.find((peer) => peer.deviceId === deviceId);

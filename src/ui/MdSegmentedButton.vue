@@ -20,19 +20,16 @@ import { ref } from 'vue';
 import MdIcon from './MdIcon.vue';
 import type { IconName } from './icons';
 
-const props = withDefaults(
-  defineProps<{
-    /** The `value` of the selected option. */
-    modelValue: string;
-    /** The segments, in order. */
-    options: readonly {
-      readonly value: string;
-      readonly label: string;
-      readonly icon?: IconName;
-    }[];
-  }>(),
-  {},
-);
+const props = defineProps<{
+  /** The `value` of the selected option. */
+  modelValue: string;
+  /** The segments, in order. */
+  options: readonly {
+    readonly value: string;
+    readonly label: string;
+    readonly icon?: IconName;
+  }[];
+}>();
 
 const emit = defineEmits<{ 'update:modelValue': [value: string] }>();
 

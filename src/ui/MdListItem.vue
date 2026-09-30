@@ -21,11 +21,13 @@
 import { computed } from 'vue';
 
 const props = withDefaults(
+  // The `| undefined` is what lets the `undefined` default typecheck under
+  // `exactOptionalPropertyTypes`; the prop's type is the same either way.
   defineProps<{
     /** The primary line: the peer's nickname. */
     headline: string;
     /** A secondary line, used when the `subtitle` slot is not supplied. */
-    supporting?: string;
+    supporting?: string | undefined;
     /** How the supporting line is coloured. `muted` is the quieter, greyer look. */
     supportingTone?: 'default' | 'muted' | 'error';
     /** Whether this row is the current selection. */

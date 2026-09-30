@@ -82,16 +82,16 @@ the connection before anything is allocated for it.
 
 `v` is the protocol version, `t` the frame type.
 
-| `t` | Direction | Fields | Meaning |
-| --- | --- | --- | --- |
-| `hello` | dialer → acceptor | `device_id, nickname, avatar_seed, listen_port, protocol_version` | open a session |
-| `welcome` | acceptor → dialer | the same shape | accept, and exchange identity symmetrically |
-| `heartbeat` | both | `seq` | liveness, one frame every 5 s |
-| `chat` | both | `id, body` | a message; the sender is the connection, not a field |
-| `chat_ack` | both | `id` | "stored here" — sent only after the row is committed |
-| `profile` | both | `nickname, avatar_seed` | a rename, broadcast to every live connection |
-| `goodbye` | both | `reason` | `shutdown`, `superseded` or `error` |
-| `error` | both | `code, message` | a protocol error, then the connection closes |
+| `t`         | Direction         | Fields                                                            | Meaning                                              |
+| ----------- | ----------------- | ----------------------------------------------------------------- | ---------------------------------------------------- |
+| `hello`     | dialer → acceptor | `device_id, nickname, avatar_seed, listen_port, protocol_version` | open a session                                       |
+| `welcome`   | acceptor → dialer | the same shape                                                    | accept, and exchange identity symmetrically          |
+| `heartbeat` | both              | `seq`                                                             | liveness, one frame every 5 s                        |
+| `chat`      | both              | `id, body`                                                        | a message; the sender is the connection, not a field |
+| `chat_ack`  | both              | `id`                                                              | "stored here" — sent only after the row is committed |
+| `profile`   | both              | `nickname, avatar_seed`                                           | a rename, broadcast to every live connection         |
+| `goodbye`   | both              | `reason`                                                          | `shutdown`, `superseded` or `error`                  |
+| `error`     | both              | `code, message`                                                   | a protocol error, then the connection closes         |
 
 A peer is online when discovery has seen it, a connection to it is established and it is still
 sending heartbeats; silence for 15 s (three intervals) marks it offline. When two peers dial each
@@ -107,11 +107,11 @@ de-duplicated by device id, and our own device id is filtered out at the boundar
 
 ## Ports and the firewall
 
-| Port | Protocol | Purpose |
-| --- | --- | --- |
-| 47820 | TCP | peer connections. If it is taken, an ephemeral port is used and advertised through discovery |
-| 47821 | UDP | the discovery beacon, broadcast to `255.255.255.255` and multicast to `239.255.77.77` |
-| 5353 | UDP | mDNS, shared with the operating system's own responder |
+| Port  | Protocol | Purpose                                                                                      |
+| ----- | -------- | -------------------------------------------------------------------------------------------- |
+| 47820 | TCP      | peer connections. If it is taken, an ephemeral port is used and advertised through discovery |
+| 47821 | UDP      | the discovery beacon, broadcast to `255.255.255.255` and multicast to `239.255.77.77`        |
+| 5353  | UDP      | mDNS, shared with the operating system's own responder                                       |
 
 **Windows** shows a firewall prompt the first time the application listens. Accept it for private
 networks. If you dismissed it, add an inbound rule:
@@ -157,11 +157,11 @@ unusable it is renamed to `localme.db.corrupt-<timestamp>` beside the original a
 database is created; the application tells you the name of the preserved file, so nothing is
 lost silently. The data directory is:
 
-| Platform | Path |
-| --- | --- |
-| Windows | `%APPDATA%\dev.localme.desktop` |
-| macOS | `~/Library/Application Support/dev.localme.desktop` |
-| Linux | `~/.local/share/dev.localme.desktop` |
+| Platform | Path                                                |
+| -------- | --------------------------------------------------- |
+| Windows  | `%APPDATA%\dev.localme.desktop`                     |
+| macOS    | `~/Library/Application Support/dev.localme.desktop` |
+| Linux    | `~/.local/share/dev.localme.desktop`                |
 
 **Two instances on one machine.** The second launch focuses the first window and exits. That is
 deliberate: two copies would fight over the same database and advertise the same device id.

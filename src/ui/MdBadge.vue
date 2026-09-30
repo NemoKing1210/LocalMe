@@ -11,9 +11,12 @@
 import { computed } from 'vue';
 
 const props = withDefaults(
+  // The `| undefined` is not decoration: an optional prop already has that type, but
+  // `exactOptionalPropertyTypes` only accepts an explicit `undefined` default — which
+  // `vue/require-default-prop` demands for every optional prop — when it is written out.
   defineProps<{
     /** The count. Nothing is rendered when absent or zero. */
-    value?: number;
+    value?: number | undefined;
     /** The largest count shown in full; above it the badge reads `max+`. */
     max?: number;
   }>(),

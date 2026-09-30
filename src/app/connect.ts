@@ -27,9 +27,7 @@ export async function connectCoreEvents(): Promise<() => void> {
 
   /** Replaces one row of the list without disturbing the others. */
   function replacePeer(updated: Peer): void {
-    const next = peers.peers.map((peer) =>
-      peer.deviceId === updated.deviceId ? updated : peer,
-    );
+    const next = peers.peers.map((peer) => (peer.deviceId === updated.deviceId ? updated : peer));
     peers.replace(next);
   }
 

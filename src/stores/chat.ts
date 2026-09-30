@@ -16,13 +16,15 @@ import type { DeviceId, Message, PageCursor } from '@/ipc';
 const PAGE_SIZE = 50;
 
 /**
- * Whether `right` sorts after `left`.
+ * Whether `left` sorts strictly before `right`.
  *
  * Timestamp first, identifier second — the same total order the storage index uses, so a
- * conversation loaded by pages and extended by live messages cannot interleave differently
- * from the way it was stored.
+ * conversation loaded by pages and extended by live messages cannot interleave differently from
+ * the way it was stored. The name says "before", not "after": the previous version of this
+ * function had the right body and the wrong name, and the call site then read it backwards and
+ * inserted every new message at the front of the log.
  */
-function isAfter(left: Message, right: Message): boolean {
+function precedes(left: Message, right: Message): boolean {
   return left.sentAt === right.sentAt
     ? left.id.localeCompare(right.id) < 0
     : left.sentAt < right.sentAt;
@@ -109,8 +111,10 @@ export const useChatStore = defineStore('chat', () => {
       return;
     }
     // Sorted on insert rather than on read: the list is rendered on every scroll, and a
-    // computed that rebuilds the array would invalidate it every time.
-    const index = messages.value.findIndex((known) => isAfter(known, message));
+    // computed that rebuilt the array would invalidate it on every frame. The insertion point
+    // is the first message that sorts *after* the new one, so a message that arrives out of
+    // order — a page being merged, a clock moving — still lands in the right place.
+    const index = messages.value.findIndex((known) => precedes(message, known));
     const next = [...messages.value];
     next.splice(index === -1 ? next.length : index, 0, message);
     messages.value = next;
@@ -137,6 +141,7 @@ export const useChatStore = defineStore('chat', () => {
     hasMore,
     sending,
     pendingCount,
+    oldestCursor,
     open,
     loadOlder,
     send,

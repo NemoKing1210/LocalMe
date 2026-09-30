@@ -134,7 +134,7 @@ async function onForgetConfirmed(deleteHistory: boolean): Promise<void> {
           v-for="row in rows"
           :key="row.key"
           class="users__row"
-          :style="{ transform: `translateY(${row.start}px)` }"
+          :style="{ top: `${row.start}px` }"
         >
           <UserListItem
             :peer="row.peer"
@@ -177,7 +177,9 @@ async function onForgetConfirmed(deleteHistory: boolean): Promise<void> {
 }
 
 /* Rows are absolutely positioned because their order in the DOM is the order of the visible
-   slice, not the order of the list; `translateY` places them at their real offset. */
+   slice, not the order of the list. `top` rather than `transform: translateY` places them at
+   their offset on purpose: a transform would make every row its own stacking context, and the
+   overflow menu opened from a row could then never paint above the rows below it. */
 .users__row {
   position: absolute;
   inset-inline: 0;

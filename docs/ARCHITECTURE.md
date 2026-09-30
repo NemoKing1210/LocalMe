@@ -548,6 +548,16 @@ runtime validation at the boundary (`assertNever` on unknown event names, exhaus
 command results) and is checked by `vue-tsc` in strict mode against the DTO shapes, which is
 the property that actually matters: a changed Rust field breaks the front-end build.
 
+**How the layer is tested.** A command is three statements — parse, call one service method,
+let the error convert — and the parsing is the only part with logic of its own, so it lives in
+`src-tauri/src/args.rs` with unit tests covering every rejection path and the `field` name each
+rejection reports (the interface uses that name to mark the offending input). The commands are
+then small enough to read, and the behaviour behind them is covered by the core's integration
+suite. Driving them through Tauri's mock runtime would be stronger, and the attempt is recorded
+here rather than silently dropped: on the development machine `tauri::test` produces a binary
+the Windows loader refuses to start (`STATUS_ENTRYPOINT_NOT_FOUND`), before any test runs. That
+harness was removed rather than shipped untested.
+
 ### 9.3 Events and the hidden-window rule
 
 `CoreEvent`s are forwarded to the webview only when the window is visible. While the window is
@@ -569,14 +579,24 @@ prevents the "wake the webview for every heartbeat" class of bug.
 * **Autostart** — `tauri-plugin-autostart`, launched with `--minimized` when "start minimised
   in tray" is enabled; the flag is parsed at startup to decide whether to show the window.
 * **Tray** — `TrayIconBuilder` with a menu (Open, Disable notifications, Quit) and a tooltip
-  carrying the unread count. The icon is a static asset; the unread indication is the tooltip
-  plus the window title, because per-platform tray *badges* (macOS
-  `NSApplication.dockTile`, Windows overlay icons) are not exposed by Tauri 2 in a way that
-  works identically on Linux.
+  carrying the unread count. The unread indication is the tooltip plus the window title
+  (`LocalMe (3)`), because per-platform tray *badges* (macOS `NSApplication.dockTile`, Windows
+  overlay icons) are not exposed by Tauri 2 in a way that works identically on Linux. Left click
+  raises the window; the menu is on the right button.
 * **Notifications** — `tauri-plugin-notification`, suppressed when the window has focus *and*
-  the active chat is the sender's. Permission is requested on first need, not at startup.
-  The platform behaviour of click-to-open-chat differs (§12), so the payload carries the
-  device id and the tray/notification action opens the chat.
+  the active chat is the sender's. The plugin documents that on desktop it uses only the title,
+  body, icon and sound of a notification and **ignores the action-related fields**, so a click on
+  a notification is not reported back to the application on any platform. The substitute is
+  implemented rather than promised: the host remembers the peer whose message produced the most
+  recent notification, and when the window is raised — the documented path being the tray icon —
+  it opens that conversation. The sound toggle is applied as far as the platform allows
+  (a named sound when on; unset when off, which on Windows still plays the default, because the
+  plugin exposes no way to force silence).
+* **Menu labels** — the tray and a notification are drawn outside the web view, so their text
+  cannot come from the front end's catalogue at the moment they are shown. The front end pushes
+  the strings once, and again on a language change, through `set_ui_labels`. That keeps one
+  translation catalogue instead of a second one in Rust, at the cost of the tray being in English
+  for the few milliseconds between process start and the first render.
 
 ### 9.5 Capabilities
 

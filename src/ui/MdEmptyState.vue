@@ -15,13 +15,15 @@ import MdIcon from './MdIcon.vue';
 import type { IconName } from './icons';
 
 withDefaults(
+  // The `| undefined` is what lets the `undefined` defaults typecheck under
+  // `exactOptionalPropertyTypes`; the props' types are the same either way.
   defineProps<{
     /** The headline. */
     title: string;
     /** A sentence explaining why the surface is empty, or what to do about it. */
-    body?: string;
+    body?: string | undefined;
     /** A large illustration glyph. */
-    icon?: IconName;
+    icon?: IconName | undefined;
   }>(),
   { body: undefined, icon: undefined },
 );

@@ -11,15 +11,13 @@
 
 use std::sync::Arc;
 
-use localme_core::domain::ids::DeviceId;
-use localme_core::domain::message::{ChatMessage, MessageBody};
-use localme_core::domain::nickname::Nickname;
+use localme_core::domain::message::ChatMessage;
 use localme_core::domain::peer::{PeerProfile, PeerView};
 use localme_core::ports::store::{HistoryCursor, KnownDevice};
-use localme_core::protocol::MAX_BODY_CHARS;
 use localme_core::services::Settings;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Runtime, State};
 
+use crate::args::{self, PageCursor};
 use crate::error::ApiError;
 use crate::state::{AppState, UiLabels};
 use crate::{tray, window};
@@ -44,30 +42,6 @@ pub struct Bootstrap {
     pub version: String,
 }
 
-/// Where a page of history should start.
-#[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PageCursor {
-    /// Timestamp of the last row already returned.
-    pub sent_at_ms: i64,
-    /// Identifier of the last row already returned.
-    pub id: String,
-}
-
-impl TryFrom<PageCursor> for HistoryCursor {
-    type Error = ApiError;
-
-    fn try_from(value: PageCursor) -> Result<Self, Self::Error> {
-        Ok(Self {
-            sent_at_ms: value.sent_at_ms,
-            id: value
-                .id
-                .parse()
-                .map_err(|error| ApiError::invalid_input("cursor.id", error))?,
-        })
-    }
-}
-
 /// The identity and the user list, so a lost web view can resynchronise with one call.
 ///
 /// # Errors
@@ -89,6 +63,17 @@ pub async fn bootstrap(state: State<'_, Arc<AppState>>) -> Result<Bootstrap, Api
             ),
             None => (0, None, None),
         };
+
+    // The one line that says the whole IPC path worked: the web view reached the host, the host
+    // read the session and the settings actor, and the answer is on its way back. Without this,
+    // a front end that failed to talk to the host would look identical to one that simply had
+    // nothing to show.
+    tracing::info!(
+        peers = peers.len(),
+        onboarded = settings.onboarded,
+        locale = settings.locale.tag(),
+        "the interface asked for its initial state"
+    );
 
     Ok(Bootstrap {
         profile,
@@ -123,7 +108,7 @@ pub async fn history(
     before: Option<PageCursor>,
     limit: Option<u32>,
 ) -> Result<Vec<ChatMessage>, ApiError> {
-    let peer = parse_device_id(&peer_id)?;
+    let peer = args::device_id(&peer_id)?;
     let cursor = before.map(HistoryCursor::try_from).transpose()?;
     let limit = limit.unwrap_or(localme_core::protocol::limits::HISTORY_PAGE_SIZE);
     Ok(state.session.history(peer, cursor, limit).await?)
@@ -142,21 +127,8 @@ pub async fn send_message(
     peer_id: String,
     body: String,
 ) -> Result<ChatMessage, ApiError> {
-    let peer = parse_device_id(&peer_id)?;
-    let body = MessageBody::parse(&body).map_err(|error| {
-        let message = error.to_string();
-        if matches!(error, localme_core::error::DomainError::BodyTooLong { .. }) {
-            ApiError::InvalidInput {
-                field: "body".to_owned(),
-                message: format!("{message} ({MAX_BODY_CHARS} characters maximum)"),
-            }
-        } else {
-            ApiError::InvalidInput {
-                field: "body".to_owned(),
-                message,
-            }
-        }
-    })?;
+    let peer = args::device_id(&peer_id)?;
+    let body = args::message_body(&body)?;
     Ok(state.session.send_message(peer, body).await?)
 }
 
@@ -167,7 +139,7 @@ pub async fn send_message(
 /// [`ApiError::ShuttingDown`] if the core has stopped.
 #[tauri::command]
 pub async fn mark_read(state: State<'_, Arc<AppState>>, peer_id: String) -> Result<u32, ApiError> {
-    let peer = parse_device_id(&peer_id)?;
+    let peer = args::device_id(&peer_id)?;
     Ok(state.session.mark_read(peer).await?)
 }
 
@@ -182,7 +154,7 @@ pub async fn forget_peer(
     peer_id: String,
     delete_history: bool,
 ) -> Result<(), ApiError> {
-    let peer = parse_device_id(&peer_id)?;
+    let peer = args::device_id(&peer_id)?;
     Ok(state.session.forget(peer, delete_history).await?)
 }
 
@@ -196,7 +168,7 @@ pub async fn restore_peer(
     state: State<'_, Arc<AppState>>,
     peer_id: String,
 ) -> Result<(), ApiError> {
-    let peer = parse_device_id(&peer_id)?;
+    let peer = args::device_id(&peer_id)?;
     Ok(state.session.restore(peer).await?)
 }
 
@@ -211,7 +183,7 @@ pub async fn set_peer_muted(
     peer_id: String,
     muted: bool,
 ) -> Result<(), ApiError> {
-    let peer = parse_device_id(&peer_id)?;
+    let peer = args::device_id(&peer_id)?;
     Ok(state.session.set_muted(peer, muted).await?)
 }
 
@@ -256,8 +228,7 @@ pub async fn set_nickname(
     state: State<'_, Arc<AppState>>,
     nickname: String,
 ) -> Result<PeerProfile, ApiError> {
-    let nickname =
-        Nickname::parse(&nickname).map_err(|error| ApiError::invalid_input("nickname", error))?;
+    let nickname = args::nickname(&nickname)?;
     Ok(state.session.set_nickname(nickname).await?)
 }
 
@@ -267,13 +238,12 @@ pub async fn set_nickname(
 ///
 /// [`ApiError::InvalidInput`] for a nickname that does not validate.
 #[tauri::command]
-pub async fn complete_onboarding(
-    app: AppHandle,
+pub async fn complete_onboarding<R: Runtime>(
+    app: AppHandle<R>,
     state: State<'_, Arc<AppState>>,
     nickname: String,
 ) -> Result<PeerProfile, ApiError> {
-    let nickname =
-        Nickname::parse(&nickname).map_err(|error| ApiError::invalid_input("nickname", error))?;
+    let nickname = args::nickname(&nickname)?;
     let profile = state.session.set_nickname(nickname).await?;
 
     let mut settings = state.settings.get().await?;
@@ -301,8 +271,8 @@ pub async fn get_settings(state: State<'_, Arc<AppState>>) -> Result<Settings, A
 /// [`ApiError::Storage`] if the file could not be written; the previous document stays in
 /// effect.
 #[tauri::command]
-pub async fn update_settings(
-    app: AppHandle,
+pub async fn update_settings<R: Runtime>(
+    app: AppHandle<R>,
     state: State<'_, Arc<AppState>>,
     settings: Settings,
 ) -> Result<Settings, ApiError> {
@@ -319,7 +289,7 @@ pub async fn update_settings(
 ///
 /// [`ApiError::Internal`] if the platform refused to answer.
 #[tauri::command]
-pub fn is_autostart_enabled(app: AppHandle) -> Result<bool, ApiError> {
+pub fn is_autostart_enabled<R: Runtime>(app: AppHandle<R>) -> Result<bool, ApiError> {
     crate::autostart::is_enabled(&app)
 }
 
@@ -329,8 +299,8 @@ pub fn is_autostart_enabled(app: AppHandle) -> Result<bool, ApiError> {
 ///
 /// [`ApiError::Internal`] if the tray could not be rebuilt.
 #[tauri::command]
-pub fn set_ui_labels(
-    app: AppHandle,
+pub fn set_ui_labels<R: Runtime>(
+    app: AppHandle<R>,
     state: State<'_, Arc<AppState>>,
     labels: UiLabels,
 ) -> Result<(), ApiError> {
@@ -346,7 +316,7 @@ pub fn set_active_chat(
     state: State<'_, Arc<AppState>>,
     peer_id: Option<String>,
 ) -> Result<(), ApiError> {
-    let peer = peer_id.as_deref().map(parse_device_id).transpose()?;
+    let peer = peer_id.as_deref().map(args::device_id).transpose()?;
     state.set_active_chat(peer);
     // Opening a conversation is also how the user acknowledges the notification for it.
     if peer.is_some() {
@@ -361,7 +331,7 @@ pub fn set_active_chat(
 ///
 /// [`ApiError::Internal`] if the window cannot be shown.
 #[tauri::command]
-pub fn show_window(app: AppHandle) -> Result<(), ApiError> {
+pub fn show_window<R: Runtime>(app: AppHandle<R>) -> Result<(), ApiError> {
     window::reveal(&app);
     Ok(())
 }
@@ -372,7 +342,7 @@ pub fn show_window(app: AppHandle) -> Result<(), ApiError> {
 ///
 /// [`ApiError::Internal`] if the window cannot be hidden.
 #[tauri::command]
-pub fn hide_window(app: AppHandle) -> Result<(), ApiError> {
+pub fn hide_window<R: Runtime>(app: AppHandle<R>) -> Result<(), ApiError> {
     window::hide(&app);
     Ok(())
 }
@@ -386,7 +356,7 @@ pub fn hide_window(app: AppHandle) -> Result<(), ApiError> {
 ///
 /// Never in practice; the `Result` keeps the signature uniform.
 #[tauri::command]
-pub fn quit(app: AppHandle) -> Result<(), ApiError> {
+pub fn quit<R: Runtime>(app: AppHandle<R>) -> Result<(), ApiError> {
     tracing::info!("quit requested from the interface");
     app.exit(0);
     Ok(())
@@ -423,43 +393,4 @@ pub fn diagnostics(state: State<'_, Arc<AppState>>) -> Diagnostics {
         device_id,
         platform: tauri_plugin_os::platform().to_owned(),
     }
-}
-
-fn parse_device_id(value: &str) -> Result<DeviceId, ApiError> {
-    value
-        .parse()
-        .map_err(|error| ApiError::invalid_input("peerId", error))
-}
-
-/// Every command this application exposes.
-///
-/// Listed once so the handler registration and the tests cannot drift apart.
-#[macro_export]
-macro_rules! ipc_commands {
-    () => {
-        tauri::generate_handler![
-            $crate::commands::bootstrap,
-            $crate::commands::list_peers,
-            $crate::commands::history,
-            $crate::commands::send_message,
-            $crate::commands::mark_read,
-            $crate::commands::forget_peer,
-            $crate::commands::restore_peer,
-            $crate::commands::set_peer_muted,
-            $crate::commands::known_devices,
-            $crate::commands::clear_history,
-            $crate::commands::own_profile,
-            $crate::commands::set_nickname,
-            $crate::commands::complete_onboarding,
-            $crate::commands::get_settings,
-            $crate::commands::update_settings,
-            $crate::commands::is_autostart_enabled,
-            $crate::commands::set_ui_labels,
-            $crate::commands::set_active_chat,
-            $crate::commands::show_window,
-            $crate::commands::hide_window,
-            $crate::commands::quit,
-            $crate::commands::diagnostics,
-        ]
-    };
 }

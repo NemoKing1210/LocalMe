@@ -53,6 +53,13 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
 
+[features]
+# Without this the front end is loaded from `devUrl`, which is what `tauri dev` wants and what
+# any standalone binary must not do. The Tauri CLI enables it for release builds; declaring it
+# here is what lets `cargo build --features custom-protocol` produce a self-contained binary,
+# which is how the two-instance check in the README is run.
+custom-protocol = ["tauri/custom-protocol"]
+
 [profile.release]
 opt-level = "s"
 lto = true

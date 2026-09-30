@@ -37,6 +37,10 @@ export default defineConfigWithVueTs(
         { order: ['defineOptions', 'defineProps', 'defineEmits', 'defineSlots'] },
       ],
       'vue/no-unused-properties': 'off',
+      // Optional props declared with TypeScript types are `undefined` when absent, so a
+      // `withDefaults` entry saying exactly that would be noise without changing behaviour.
+      // The rule exists for the options API, where an absent prop had to be spelled out.
+      'vue/require-default-prop': 'off',
 
       // Message bodies and nicknames are rendered as text, never as markup.
       'no-restricted-syntax': [

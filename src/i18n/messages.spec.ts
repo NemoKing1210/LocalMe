@@ -50,10 +50,9 @@ describe('message catalogues', () => {
       for (const key of baseKeys) {
         const reference = placeholders(en[key]);
         const translated = catalogue[key];
-        expect(
-          placeholders(translated),
-          `${locale}:${key} — "{…}" placeholders differ`,
-        ).toEqual(reference);
+        expect(placeholders(translated), `${locale}:${key} — "{…}" placeholders differ`).toEqual(
+          reference,
+        );
       }
     }
   });
@@ -73,9 +72,7 @@ describe('message catalogues', () => {
         ).toBe(true);
         // Every plural variant must interpolate the count, or the number would be missing
         // from exactly the languages that needed a special form.
-        expect(catalogue[key as keyof typeof catalogue], `${locale}: ${key}`).toContain(
-          '{count}',
-        );
+        expect(catalogue[key as keyof typeof catalogue], `${locale}: ${key}`).toContain('{count}');
       }
     }
   });

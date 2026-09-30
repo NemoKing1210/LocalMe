@@ -3,7 +3,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use tauri::{AppHandle, Listener, Manager};
+use tauri::{AppHandle, Listener, Manager, Runtime};
 
 use crate::events;
 use crate::state::{self, AppState};
@@ -26,7 +26,7 @@ const READY_FALLBACK: Duration = Duration::from_secs(15);
 static REVEALED: AtomicBool = AtomicBool::new(false);
 
 /// Shows the main window and gives it focus. Idempotent.
-pub fn reveal(app: &AppHandle) {
+pub fn reveal<R: Runtime>(app: &AppHandle<R>) {
     REVEALED.store(true, Ordering::Relaxed);
 
     let Some(window) = app.get_webview_window(MAIN_WINDOW) else {
@@ -58,7 +58,7 @@ pub fn reveal(app: &AppHandle) {
 }
 
 /// Hides the main window, leaving the process and its connections alive.
-pub fn hide(app: &AppHandle) {
+pub fn hide<R: Runtime>(app: &AppHandle<R>) {
     let Some(window) = app.get_webview_window(MAIN_WINDOW) else {
         return;
     };
@@ -76,7 +76,7 @@ pub fn is_revealed() -> bool {
 }
 
 /// Updates the window title so the unread count is visible without opening the window.
-pub fn refresh_title(app: &AppHandle, unread: u32) {
+pub fn refresh_title<R: Runtime>(app: &AppHandle<R>, unread: u32) {
     let Some(state) = state::from_handle(app) else {
         return;
     };
@@ -92,7 +92,7 @@ pub fn refresh_title(app: &AppHandle, unread: u32) {
 ///
 /// With `--minimized` (an autostart launch) the window is never revealed at startup: the
 /// application starts in the tray and the user opens it when they want it.
-pub fn install_ready_gate(app: &AppHandle) {
+pub fn install_ready_gate<R: Runtime>(app: &AppHandle<R>) {
     let handle = app.clone();
     app.listen(READY_EVENT, move |_event| {
         if crate::started_minimized() {

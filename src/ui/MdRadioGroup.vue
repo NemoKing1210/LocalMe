@@ -15,21 +15,18 @@
  */
 import { useId } from 'vue';
 
-withDefaults(
-  defineProps<{
-    /** The `value` of the selected option. */
-    modelValue: string;
-    /** The group's accessible name. */
-    label: string;
-    /** The options, in order. */
-    options: readonly {
-      readonly value: string;
-      readonly label: string;
-      readonly description?: string;
-    }[];
-  }>(),
-  {},
-);
+defineProps<{
+  /** The `value` of the selected option. */
+  modelValue: string;
+  /** The group's accessible name. */
+  label: string;
+  /** The options, in order. */
+  options: readonly {
+    readonly value: string;
+    readonly label: string;
+    readonly description?: string;
+  }[];
+}>();
 
 const emit = defineEmits<{ 'update:modelValue': [value: string] }>();
 

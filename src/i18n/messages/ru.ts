@@ -18,12 +18,12 @@ export const ru: MessageCatalog = {
   'common.delete': 'Удалить',
   'common.search': 'Поиск',
   'common.retry': 'Повторить',
+  'common.back': 'Назад',
   'common.loading': 'Загрузка…',
   'common.you': 'Вы',
   'common.dismiss': 'Скрыть',
   'common.more': 'Ещё',
   'common.options': 'Действия',
-  'common.retry': 'Повторить',
   'common.clear': 'Очистить',
 
   'onboarding.title': 'Добро пожаловать в LocalMe',
@@ -88,6 +88,7 @@ export const ru: MessageCatalog = {
   'chat.historyEnd': 'Это начало переписки',
 
   'settings.title': 'Настройки',
+  'settings.close': 'К списку сообщений',
   'settings.groupProfile': 'Профиль',
   'settings.groupAppearance': 'Оформление',
   'settings.groupLanguage': 'Язык',

@@ -69,14 +69,14 @@ function describe(error: ApiError): string {
     case 'internal':
       return `internal: ${error.message}`;
   }
+  // The switch covers every variant of `ApiError`; this line exists so the function is total
+  // for the linter, and would only be reached if the host sent a tag this build does not know.
+  return 'the host reported a failure this build does not understand';
 }
 
 function isApiError(value: unknown): value is ApiError {
   return (
-    typeof value === 'object' &&
-    value !== null &&
-    'kind' in value &&
-    typeof value.kind === 'string'
+    typeof value === 'object' && value !== null && 'kind' in value && typeof value.kind === 'string'
   );
 }
 

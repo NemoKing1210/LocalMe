@@ -41,7 +41,13 @@ const shapes = computed(() => ICONS[props.name]);
   >
     <template v-for="(shape, index) in shapes" :key="index">
       <path v-if="shape.kind === 'path'" :d="shape.d" />
-      <line v-else-if="shape.kind === 'line'" :x1="shape.x1" :y1="shape.y1" :x2="shape.x2" :y2="shape.y2" />
+      <line
+        v-else-if="shape.kind === 'line'"
+        :x1="shape.x1"
+        :y1="shape.y1"
+        :x2="shape.x2"
+        :y2="shape.y2"
+      />
       <polyline v-else-if="shape.kind === 'polyline'" :points="shape.points" />
       <circle v-else-if="shape.kind === 'circle'" :cx="shape.cx" :cy="shape.cy" :r="shape.r" />
       <rect
@@ -52,14 +58,7 @@ const shapes = computed(() => ICONS[props.name]);
         :height="shape.height"
         :rx="shape.rx"
       />
-      <circle
-        v-else
-        :cx="shape.cx"
-        :cy="shape.cy"
-        :r="shape.r"
-        fill="currentColor"
-        stroke="none"
-      />
+      <circle v-else :cx="shape.cx" :cy="shape.cy" :r="shape.r" fill="currentColor" stroke="none" />
     </template>
   </svg>
 </template>

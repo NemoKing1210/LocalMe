@@ -18,17 +18,21 @@
  * sheet collapses transition durations to zero, which is why this component carries its own
  * tempo instead of reading the motion tokens.
  *
- * The ring is `currentColor`, so a caller colours it by setting `color` — the same mechanism
- * every other component in this directory uses.
+ * The ring is `currentColor`, set here to the primary role — that is what an indeterminate
+ * indicator means in M3, and it is what a bare `<MdCircularProgress />` should look like. A
+ * caller that needs another tone sets `color` on the component itself, where an inline style
+ * beats this rule.
  */
 import { computed } from 'vue';
 
 const props = withDefaults(
+  // The `| undefined` is what lets the `undefined` default typecheck under
+  // `exactOptionalPropertyTypes`; the prop's type is the same either way.
   defineProps<{
     /** Box size in pixels. */
     size?: number;
     /** What is loading; omit only when an adjacent label already says so. */
-    label?: string;
+    label?: string | undefined;
   }>(),
   { size: 24, label: undefined },
 );

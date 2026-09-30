@@ -100,10 +100,18 @@ defineExpose({ focus });
       <MdIcon v-if="error !== null" name="error" :size="20" class="md-field__trailing" />
     </div>
     <div class="md-field__footer">
-      <span v-if="error !== null" :id="`${fieldId}-help`" class="md-typescale-body-small md-field__help">
+      <span
+        v-if="error !== null"
+        :id="`${fieldId}-help`"
+        class="md-typescale-body-small md-field__help"
+      >
         {{ error }}
       </span>
-      <span v-else-if="supportingText" :id="`${fieldId}-help`" class="md-typescale-body-small md-field__help">
+      <span
+        v-else-if="supportingText"
+        :id="`${fieldId}-help`"
+        class="md-typescale-body-small md-field__help"
+      >
         {{ supportingText }}
       </span>
       <span v-if="counter" class="md-typescale-body-small md-field__counter">{{ counter }}</span>
@@ -128,8 +136,7 @@ defineExpose({ focus });
   border: 1px solid var(--md-sys-color-outline);
   border-radius: var(--md-sys-shape-corner-extra-small);
   background: var(--md-sys-color-surface-container-highest);
-  transition: border-color var(--md-sys-motion-duration-short3)
-    var(--md-sys-motion-easing-standard);
+  transition: border-color var(--md-sys-motion-duration-short3) var(--md-sys-motion-easing-standard);
 }
 
 .md-field__box:focus-within {
