@@ -1,0 +1,11 @@
+{
+  "extends": "@vue/tsconfig/tsconfig.json",
+  "include": ["vite.config.ts"],
+  "compilerOptions": {
+    "composite": true,
+    "noEmit": true,
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.node.tsbuildinfo",
+    "types": ["node"],
+    "strict": true
+  }
+}
