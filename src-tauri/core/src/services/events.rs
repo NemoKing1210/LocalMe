@@ -11,7 +11,12 @@ use crate::domain::nickname::Nickname;
 use crate::domain::peer::PeerView;
 
 /// Something the host application should know about.
-#[derive(Debug, Clone)]
+///
+/// Serialised with camelCase field names, because these payloads *are* the interface's API:
+/// the TypeScript declarations in `src/ipc` are written to match this derivation, and a field
+/// renamed here breaks the front-end build.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum CoreEvent {
     /// The user list changed: presence, unread counts, nicknames, or its membership.
     ///
@@ -21,7 +26,13 @@ pub enum CoreEvent {
         peers: Vec<PeerView>,
     },
     /// A message was stored, incoming or outgoing.
+    ///
+    /// Carries the peer's row as well as the message, because every consumer of this event
+    /// needs both: the interface to label the notification and to move the conversation up the
+    /// list, the notification layer to know the sender's name and whether they are muted.
     Message {
+        /// The conversation's peer, as the list shows it.
+        peer: PeerView,
         /// The stored row, including its final status.
         message: ChatMessage,
     },
@@ -53,7 +64,8 @@ pub enum CoreEvent {
 }
 
 /// Severity of a [`CoreEvent::Notice`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum NoticeLevel {
     /// Worth knowing, not a problem.
     Info,

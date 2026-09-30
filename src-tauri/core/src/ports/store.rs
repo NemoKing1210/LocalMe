@@ -67,7 +67,8 @@ impl StoredPeer {
 }
 
 /// A device known to this installation, for the settings screen.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct KnownDevice {
     /// The device identifier.
     pub device_id: DeviceId,

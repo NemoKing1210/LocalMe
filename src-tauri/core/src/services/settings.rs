@@ -132,6 +132,12 @@ impl Default for SystemSettings {
 pub struct Settings {
     /// Schema version, used to migrate a file written by an older build.
     pub version: u32,
+    /// Whether the first-run screen has been completed.
+    ///
+    /// This is not derivable from the nickname: the first launch already writes a default
+    /// nickname, so without a separate flag the welcome screen could not tell "a fresh
+    /// install" from "a user who kept the name we suggested".
+    pub onboarded: bool,
     /// Appearance.
     pub appearance: AppearanceSettings,
     /// Interface language.
@@ -146,6 +152,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             version: SETTINGS_VERSION,
+            onboarded: false,
             appearance: AppearanceSettings::default(),
             locale: Locale::En,
             notifications: NotificationSettings::default(),
@@ -375,6 +382,10 @@ mod tests {
     fn defaults_are_sane() {
         let settings = Settings::default();
         assert_eq!(settings.version, SETTINGS_VERSION);
+        assert!(
+            !settings.onboarded,
+            "a fresh install has not been onboarded"
+        );
         assert_eq!(settings.locale, Locale::En);
         assert_eq!(settings.appearance.theme, ThemeMode::System);
         assert_eq!(settings.appearance.accent, "#6750A4");

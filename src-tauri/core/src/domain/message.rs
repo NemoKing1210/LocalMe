@@ -1,12 +1,15 @@
 //! Chat messages.
 
+use serde::{Deserialize, Serialize};
+
 use crate::domain::clock::UnixMillis;
 use crate::domain::ids::{DeviceId, MessageId};
 use crate::error::DomainError;
 use crate::protocol::limits::MAX_BODY_CHARS;
 
 /// Which way a stored message travelled.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum Direction {
     /// Received from the peer.
     Incoming,
@@ -51,7 +54,8 @@ impl Direction {
 ///
 /// `Received` is what an incoming row stores; it exists so both directions share one type
 /// and the UI can render a single status column without a special case.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum MessageStatus {
     /// Written to the outbound queue, not yet acknowledged.
     Sending,
@@ -110,8 +114,19 @@ impl MessageStatus {
 /// * control characters other than `\n` and `\t` are rejected — the body is rendered as
 ///   text, and forward-compatibility with terminal-ish renderers is not worth the ambiguity;
 /// * the character count is bounded by [`MAX_BODY_CHARS`].
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+///
+/// On the wire and over IPC it is a plain string, and deserialising it runs the same
+/// validation as [`MessageBody::parse`], so an invalid body cannot enter through serde.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+#[serde(transparent)]
 pub struct MessageBody(String);
+
+impl<'de> Deserialize<'de> for MessageBody {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = String::deserialize(deserializer)?;
+        Self::parse(&raw).map_err(serde::de::Error::custom)
+    }
+}
 
 impl MessageBody {
     /// Validates and normalises a body.
@@ -167,7 +182,12 @@ impl MessageBody {
 }
 
 /// A stored chat message.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// The field names here are the ones the interface receives, which is why the type is
+/// serialised rather than copied into a separate DTO: a parallel type would be one more place
+/// for a rename to be forgotten.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ChatMessage {
     /// Globally unique, time-ordered identifier.
     pub id: MessageId,

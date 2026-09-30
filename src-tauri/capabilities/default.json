@@ -27,7 +27,7 @@
     "autostart:allow-enable",
     "autostart:allow-disable",
     "autostart:allow-is-enabled",
-    "store:default",
+
     "os:allow-hostname",
     "os:allow-locale",
     "os:allow-platform",

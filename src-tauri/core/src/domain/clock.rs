@@ -10,8 +10,14 @@
 
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+use serde::{Deserialize, Serialize};
+
 /// Milliseconds since the Unix epoch, as observed by the local clock.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+///
+/// Serialised as a bare number: it crosses the IPC boundary as a number, and a wrapper object
+/// would only make the TypeScript side unwrap it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct UnixMillis(pub i64);
 
 impl UnixMillis {

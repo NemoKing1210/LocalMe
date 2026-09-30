@@ -762,9 +762,7 @@ impl<C: Clock, S: Store> Session<C, S> {
         if let Err(error) = self.store.insert_message(&message).await {
             tracing::warn!(%error, "failed to store the outgoing message");
             message.status = MessageStatus::Failed;
-            let _ = self.events.send(CoreEvent::Message {
-                message: message.clone(),
-            });
+            self.emit_message(peer, &message);
             return Ok(message);
         }
 
@@ -789,9 +787,7 @@ impl<C: Clock, S: Store> Session<C, S> {
         if status == MessageStatus::Sent {
             self.note_activity(peer, message.sent_at.as_i64());
         }
-        let _ = self.events.send(CoreEvent::Message {
-            message: message.clone(),
-        });
+        self.emit_message(peer, &message);
         self.emit_peers();
         Ok(message)
     }
@@ -1007,7 +1003,9 @@ impl<C: Clock, S: Store> Session<C, S> {
             Ok(true) => {
                 entry.stored.unread = entry.stored.unread.saturating_add(1);
                 entry.note_activity(now.as_i64());
+                let peer_view = entry.view();
                 let _ = self.events.send(CoreEvent::Message {
+                    peer: peer_view,
                     message: message.clone(),
                 });
             }
@@ -1252,6 +1250,15 @@ impl<C: Clock, S: Store> Session<C, S> {
 
     // ---- Output ---------------------------------------------------------------
 
+    /// One peer's row, as the interface shows it.
+    ///
+    /// `None` when the device is not in the list, which can happen when a peer is forgotten
+    /// in the same turn that its message was stored. Callers drop the event rather than
+    /// inventing a name for a device they can no longer describe.
+    fn peer_view(&self, peer: DeviceId) -> Option<PeerView> {
+        self.peers.get(&peer).map(PeerEntry::view)
+    }
+
     fn arranged_peers(&self) -> Vec<PeerView> {
         PeerView::arrange(
             self.peers
@@ -1261,6 +1268,20 @@ impl<C: Clock, S: Store> Session<C, S> {
                 .collect::<Vec<_>>(),
             "",
         )
+    }
+
+    /// Publishes a stored message together with the peer's row.
+    ///
+    /// Dropped when the peer is no longer in the list, which can only happen if it was
+    /// forgotten in the same turn — in which case there is nothing to label the event with.
+    fn emit_message(&self, peer: DeviceId, message: &ChatMessage) {
+        let Some(view) = self.peer_view(peer) else {
+            return;
+        };
+        let _ = self.events.send(CoreEvent::Message {
+            peer: view,
+            message: message.clone(),
+        });
     }
 
     fn emit_peers(&self) {

@@ -54,7 +54,8 @@ impl Handshake {
 }
 
 /// A device's public identity: what it calls itself and what its avatar looks like.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PeerProfile {
     /// Stable identifier.
     pub device_id: DeviceId,
@@ -88,7 +89,11 @@ impl PeerProfile {
 }
 
 /// One row of the user list.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// This is the shape the interface renders, so it is serialised directly rather than copied
+/// into a transport DTO: the ordering rule and the fields travel together.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PeerView {
     /// Stable identifier, serialised as a UUID string over IPC.
     pub device_id: DeviceId,
