@@ -1983,7 +1983,7 @@ checksum = "47d9d19d1d6efa0109d2f65ff4c85cddd50bd572e5a00127ab10987290bcefae"
 
 [[package]]
 name = "localme"
-version = "0.2.1"
+version = "0.5.0"
 dependencies = [
  "localme-core",
  "serde",
@@ -2001,12 +2001,13 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "webview2-com",
+ "windows 0.62.2",
  "windows-core 0.62.2",
 ]
 
 [[package]]
 name = "localme-core"
-version = "0.2.1"
+version = "0.5.0"
 dependencies = [
  "mdns-sd",
  "rusqlite",

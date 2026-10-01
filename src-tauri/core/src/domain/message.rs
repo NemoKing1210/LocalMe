@@ -181,6 +181,49 @@ impl MessageBody {
     }
 }
 
+/// Characters kept from a body in a [`MessagePreview`].
+///
+/// The peer list is re-sent on every presence tick, so carrying a full [`MAX_BODY_CHARS`] body
+/// per peer would put multiples of a conversation on the wire to draw one truncated line.
+pub const MAX_PREVIEW_CHARS: usize = 160;
+
+/// The newest message in a conversation, reduced to what the user list draws.
+///
+/// Deliberately not a [`ChatMessage`]: the list needs the direction and a short body, and
+/// nothing else the message carries — its identifier, statuses and receive time are the chat
+/// view's business.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MessagePreview {
+    /// Which way the newest message travelled.
+    pub direction: Direction,
+    /// The body, bounded to [`MAX_PREVIEW_CHARS`] with a trailing ellipsis when it was cut.
+    pub body: String,
+}
+
+impl MessagePreview {
+    /// Builds a preview from a message body.
+    #[must_use]
+    pub fn new(body: &MessageBody, direction: Direction) -> Self {
+        Self {
+            direction,
+            body: summarise(body.as_str()),
+        }
+    }
+}
+
+/// Cuts `text` to [`MAX_PREVIEW_CHARS`], marking the cut so a clipped word is not read as the
+/// whole message.
+fn summarise(text: &str) -> String {
+    let mut chars = text.chars();
+    let head: String = chars.by_ref().take(MAX_PREVIEW_CHARS).collect();
+    if chars.next().is_some() {
+        format!("{head}…")
+    } else {
+        head
+    }
+}
+
 /// A stored chat message.
 ///
 /// The field names here are the ones the interface receives, which is why the type is
@@ -269,6 +312,22 @@ mod tests {
         assert_eq!(body.as_str(), "Привет 👋 こんにちは 𝔘𝔫𝔦𝔠𝔬𝔡𝔢");
         // 6 + 1 + 1 + 1 + 5 + 1 + 7 characters: astral characters count as one each.
         assert_eq!(body.char_count(), 22);
+    }
+
+    #[test]
+    fn a_short_body_is_previewed_whole() {
+        let body = MessageBody::parse("see you at six").expect("valid");
+        let preview = MessagePreview::new(&body, Direction::Outgoing);
+        assert_eq!(preview.body, "see you at six");
+        assert_eq!(preview.direction, Direction::Outgoing);
+    }
+
+    #[test]
+    fn a_long_body_is_cut_to_the_preview_limit_with_an_ellipsis() {
+        let body = MessageBody::parse(&"я".repeat(MAX_PREVIEW_CHARS + 40)).expect("valid");
+        let preview = MessagePreview::new(&body, Direction::Incoming);
+        assert_eq!(preview.body.chars().count(), MAX_PREVIEW_CHARS + 1);
+        assert!(preview.body.ends_with('…'));
     }
 
     #[test]

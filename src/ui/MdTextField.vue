@@ -4,8 +4,11 @@
  *
  * The filled variant, with a floating label. The label is a real `<label>` bound to the input
  * by id rather than a `<legend>` or an aria attribute, so the accessible name comes from the
- * browser's own machinery; the floating behaviour is pure CSS driven by `:focus-within` and a
- * class set from the value, which keeps it correct when the field is filled programmatically.
+ * browser's own machinery; the floating behaviour is one class, set while the field is focused
+ * or holds a value. Focus is tracked in the component rather than left to `:focus-within`
+ * because the same condition decides the placeholder: the label only moves out of the way when
+ * the text underneath it is allowed to be seen. Reading the value means the label stays up when
+ * the field is filled programmatically too.
  */
 import { computed, ref, useId } from 'vue';
 
@@ -52,8 +55,10 @@ const emit = defineEmits<{
 
 const fieldId = useId();
 const input = ref<HTMLInputElement | null>(null);
+const focused = ref(false);
 
-const floated = computed(() => props.modelValue.length > 0);
+/** The label leaves the text line while the field is focused, not only once it holds something. */
+const floated = computed(() => focused.value || props.modelValue.length > 0);
 const error = computed(() => props.errorText ?? null);
 const counter = computed(() =>
   props.showCounter && props.maxlength !== undefined
@@ -118,6 +123,8 @@ defineExpose({ focus });
           :aria-invalid="error !== null"
           :aria-describedby="error !== null || supportingText ? `${fieldId}-help` : undefined"
           :autofocus="autofocus"
+          @focus="focused = true"
+          @blur="focused = false"
           @input="onInput"
           @keydown.enter.prevent="emit('submit')"
         />

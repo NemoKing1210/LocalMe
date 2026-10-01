@@ -116,6 +116,14 @@ watch(
 
 .shell__list {
   min-width: 0;
+  /* A grid item's automatic minimum size is its content, so the single `1fr` row would stretch
+     to the height of the whole people list — thousands of pixels for a long one — and the list
+     column would hang past the window with nothing to scroll. Clipping the column and zeroing
+     its minimum is what lets the row stay one window tall and hands the overflow to the
+     `overflow-y: auto` inside `UserListView`. `.shell__detail` needs the same treatment for the
+     same reason (it also holds a scrolling page). */
+  min-height: 0;
+  overflow: hidden;
   border-inline-end: 1px solid var(--md-sys-color-outline-variant);
   background: var(--md-sys-color-surface-container-low);
 }

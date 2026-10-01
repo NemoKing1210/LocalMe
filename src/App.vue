@@ -2,11 +2,12 @@
 /**
  * The application root.
  *
- * It owns the three facts that are about the process rather than about a page — whether the
- * host answered, whether the first-run screen is still owed, and the two host calls that are
- * about the window instead of about data — and then hands the window to the router. The pages
- * themselves (a conversation, settings) are route components, so nothing here decides which
- * one is on screen; that is the address.
+ * It owns the facts that are about the process rather than about a page — whether the host
+ * answered, whether the first-run screen is still owed, and the host calls that are about the
+ * window instead of about data: the strings the tray and a notification are drawn with, and the
+ * colour of the native frame — and then hands the window to the router. The pages themselves (a
+ * conversation, settings) are route components, so nothing here decides which one is on screen;
+ * that is the address.
  */
 import { MotionConfig } from 'motion-v';
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
@@ -20,12 +21,14 @@ import OnboardingView from '@/features/onboarding/OnboardingView.vue';
 import { usePeerStore } from '@/stores/peers';
 import { useSettingsStore } from '@/stores/settings';
 import { useUiStore } from '@/stores/ui';
+import { useTheme } from '@/theme/useTheme';
 import MdSnackbar from '@/ui/MdSnackbar.vue';
 
 const peers = usePeerStore();
 const settings = useSettingsStore();
 const ui = useUiStore();
 const i18n = useI18n();
+const theme = useTheme();
 
 const loading = ref(true);
 const failure = ref(false);
@@ -76,6 +79,18 @@ watch(
       tooltipUnread: i18n.t('tray.tooltipUnread'),
       newMessage: i18n.t('notification.newMessage'),
     });
+  },
+  { immediate: true },
+);
+
+// The native frame is drawn by the operating system, so it cannot read the custom properties the
+// theme writes onto the document. The resolved pair is pushed across instead, whenever the
+// palette changes — which is the accent, the mode, or a light/dark flip the system made while
+// the mode is "system". An immediate run is what colours the frame before the window is shown.
+watch(
+  () => theme.scheme.value,
+  (scheme) => {
+    void ipc.setWindowAccent(scheme.primary, scheme['on-primary']);
   },
   { immediate: true },
 );

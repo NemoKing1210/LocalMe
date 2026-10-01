@@ -15,7 +15,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use localme_core::domain::ids::DeviceId;
-use localme_core::domain::message::{MessageBody, MessageStatus};
+use localme_core::domain::message::{Direction, MessageBody, MessageStatus};
 use localme_core::domain::nickname::Nickname;
 use localme_core::domain::peer::PeerView;
 use localme_core::ports::discovery::{DiscoveredPeer, DiscoveryEvent};
@@ -206,6 +206,23 @@ async fn two_instances_connect_and_exchange_messages() {
         Some(1)
     );
 
+    // Both ends of the exchange show the message as their list's second line.
+    let seen_by_boris = boris
+        .peer(anna.device_id())
+        .await
+        .and_then(|peer| peer.last_message)
+        .expect("boris previews what he received");
+    assert_eq!(seen_by_boris.direction, Direction::Incoming);
+    assert_eq!(seen_by_boris.body, "привет, Борис");
+
+    let seen_by_anna = anna
+        .peer(boris.device_id())
+        .await
+        .and_then(|peer| peer.last_message)
+        .expect("anna previews what she sent");
+    assert_eq!(seen_by_anna.direction, Direction::Outgoing);
+    assert_eq!(seen_by_anna.body, "привет, Борис");
+
     // boris → anna, so both directions are covered.
     boris
         .core
@@ -228,6 +245,15 @@ async fn two_instances_connect_and_exchange_messages() {
         },
     )
     .await;
+
+    // anna's list now previews the reply, not what she sent.
+    let reply_preview = anna
+        .peer(boris.device_id())
+        .await
+        .and_then(|peer| peer.last_message)
+        .expect("anna previews the reply");
+    assert_eq!(reply_preview.direction, Direction::Incoming);
+    assert_eq!(reply_preview.body, "привет, Аня");
 
     // Reading clears the badge and is reported.
     let changed = boris

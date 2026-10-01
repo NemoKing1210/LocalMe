@@ -625,6 +625,16 @@ variant the front end subscribes to.
   the strings once, and again on a language change, through `set_ui_labels`. That keeps one
   translation catalogue instead of a second one in Rust, at the cost of the tray being in English
   for the few milliseconds between process start and the first render.
+* **Window frame** — the title bar is the accent colour, and the palette it comes from is the
+  front end's (Material's tonal algorithm runs there, from the accent and the effective mode), so
+  the front end pushes the resolved `primary`/`onPrimary` pair over `set_window_accent` whenever
+  the palette changes. On Windows 11 the host colours the frame the system draws, through
+  `DWMWA_CAPTION_COLOR`/`DWMWA_BORDER_COLOR`/`DWMWA_TEXT_COLOR` (`src-tauri/src/window.rs`) —
+  the OS keeps ownership of the title bar, its buttons and its hit-testing. A pre-22000 Windows
+  build refuses the attributes, and on macOS and Linux the window manager owns the frame with no
+  equivalent hook, so there the frame simply stays the system's: the alternative — drawing a
+  title bar in the web view — would have to reimplement every platform's buttons and snap
+  behaviour. The two colours travel together because the label has to contrast with the bar.
 * **Web view policy** — WebView2 ships Microsoft Edge's *general* autofill switched on, and that
   is why focusing an ordinary text field could offer to fill in a saved name or address inside a
   local-network messenger. It is a browser feature, not a form feature: no attribute, header or
@@ -768,12 +778,17 @@ zero dependencies. Rendering uses the string API:
 const svg = blobatarUri(seed, { background: 'squircle', size: 96 });   // data: URI
 ```
 
-one `<img>` per avatar. The Vue adapter was not used: the adapter renders inline animated
-SVG, and an idle animation per row in a virtualised list is exactly the kind of
-always-running work this project is trying not to do. Static `<img src="data:…">` is
-composited by the browser with no per-frame cost. Rendered URIs are memoised in an LRU keyed
-by `(seed, size)` in `composables/useAvatar.ts`, so a re-render or a list scroll never
-re-generates the same avatar.
+one `<img>` per avatar: composited by the browser with no per-frame cost. Rendered URIs are
+memoised in a module-level cache keyed by `(seed, size)` inside `ui/MdAvatar.vue`, so a
+re-render or a list scroll never re-generates the same avatar.
+
+`MdAvatar`'s `animate` prop opts one avatar into the package's Vue adapter instead: the same
+drawing as inline animated SVG, about a dozen DOM nodes rather than one `<img>`. That trade is
+paid only where a single avatar is on screen — the Settings profile header and the open
+conversation's top app bar, both `always` — plus `hover` for the short known-devices list,
+which animates one row at a time. The virtualised people list stays on the static `<img>`,
+which is the whole point of keeping both modes. `blobatar/motion.css` goes fully static under
+`prefers-reduced-motion`, so no extra guard is written for it.
 
 The **seed is received from the peer**, never derived from IP or nickname locally: two devices
 must agree pixel-for-pixel, and only the peer's own announcement is authoritative.

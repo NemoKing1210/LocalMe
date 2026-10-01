@@ -38,11 +38,11 @@ export const ru: MessageCatalog = {
   'onboarding.avatarPreview': 'Так будет выглядеть ваш аватар',
   'onboarding.submit': 'Начать общение',
 
-  'users.title': 'Люди',
+  'users.title': 'Пользователи',
   'users.emptyTitle': 'Пока никого нет',
   'users.emptyBody':
     'Убедитесь, что другой компьютер в той же сети и LocalMe запущен. Обнаружение обычно занимает несколько секунд.',
-  'users.searchPlaceholder': 'Поиск людей',
+  'users.searchPlaceholder': 'Поиск пользователей',
   'users.clearSearch': 'Очистить поиск',
   'users.searchEmpty': 'Никто не найден по запросу «{query}».',
   'users.online': 'в сети',
@@ -60,6 +60,7 @@ export const ru: MessageCatalog = {
   'users.mute': 'Отключить уведомления',
   'users.unmute': 'Включить уведомления',
   'users.you': 'Вы ({name})',
+  'users.youPreview': 'Вы: {body}',
   'users.count': 'Человек: {count}',
 
   'forget.title': 'Забыть {name}?',
@@ -166,7 +167,7 @@ export const ru: MessageCatalog = {
   'settings.saveFailed': 'Не удалось сохранить настройку.',
   'settings.historyCleared': 'Удалено сообщений: {count}.',
   'settings.notificationsPerPeerHelp':
-    'Отдельным людям можно отключить уведомления в меню ⋮ в списке.',
+    'Отдельным пользователям можно отключить уведомления в меню ⋮ в списке.',
   'locale.en': 'English',
   'locale.ru': 'Русский',
   'locale.es': 'Español',

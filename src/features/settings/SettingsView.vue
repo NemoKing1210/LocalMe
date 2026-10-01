@@ -406,7 +406,12 @@ onMounted(() => {
         </h2>
         <div v-if="profile" class="settings__card">
           <div class="settings__profile">
-            <MdAvatar :seed="profile.avatarSeed" :name="profile.nickname" :size="72" />
+            <MdAvatar
+              :seed="profile.avatarSeed"
+              :name="profile.nickname"
+              :size="72"
+              animate="always"
+            />
             <div class="settings__profile-field" @focusout="commitNickname">
               <MdTextField
                 v-bind="nicknameFieldProps"
@@ -552,6 +557,7 @@ onMounted(() => {
                     :name="device.nickname"
                     :size="40"
                     :dimmed="device.forgotten"
+                    animate="hover"
                   />
                 </template>
                 <template #trailing>

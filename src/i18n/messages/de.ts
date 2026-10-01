@@ -59,6 +59,7 @@ export const de: MessageCatalog = {
   'users.mute': 'Benachrichtigungen stummschalten',
   'users.unmute': 'Benachrichtigungen wieder einschalten',
   'users.you': 'Du ({name})',
+  'users.youPreview': 'Du: {body}',
   'users.count': 'Personen: {count}',
 
   'forget.title': '{name} vergessen?',

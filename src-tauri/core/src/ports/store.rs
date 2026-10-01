@@ -12,7 +12,7 @@
 //!   so the settings screen can still list the device.
 
 use crate::domain::ids::{AvatarSeed, DeviceId, MessageId};
-use crate::domain::message::{ChatMessage, MessageStatus};
+use crate::domain::message::{ChatMessage, MessagePreview, MessageStatus};
 use crate::domain::nickname::Nickname;
 use crate::domain::peer::PeerProfile;
 use crate::error::StorageError;
@@ -56,6 +56,8 @@ pub struct StoredPeer {
     pub forgotten: bool,
     /// Newest of `last_seen_ms` and the last message timestamp, computed by the query.
     pub last_activity_ms: Option<i64>,
+    /// The newest message in this conversation, if there is one, computed by the query.
+    pub last_message: Option<MessagePreview>,
 }
 
 impl StoredPeer {

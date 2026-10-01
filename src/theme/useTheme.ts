@@ -53,13 +53,18 @@ function schemeFor(source: string, isDark: boolean): ColorScheme {
   return built;
 }
 
+/** The palette the current inputs resolve to: one value, cached, for anything outside the DOM. */
+const scheme: ComputedRef<ColorScheme> = computed(() =>
+  schemeFor(accent.value, effectiveTheme.value === 'dark'),
+);
+
 function paint(): void {
   const root = document.documentElement;
   const apply = (): void => {
     // Order matters: the `data-theme` attribute selects the fallbacks, then the generated
     // custom properties are written as inline styles, which win over them.
     root.dataset['theme'] = effectiveTheme.value;
-    applyColorScheme(root, schemeFor(accent.value, effectiveTheme.value === 'dark'));
+    applyColorScheme(root, scheme.value);
   };
 
   // Changing the theme or the accent repaints every surface in the window at once. The View
@@ -108,6 +113,8 @@ export interface UseTheme {
   readonly effective: ComputedRef<EffectiveTheme>;
   /** The accent colour the palette is generated from. */
   readonly accent: Readonly<Ref<string>>;
+  /** The palette currently painted, for the places that need a resolved colour. */
+  readonly scheme: ComputedRef<ColorScheme>;
   /** Curated accents offered in settings. */
   readonly presets: readonly { readonly id: string; readonly hex: string }[];
   /** Whether the operating system asks for reduced motion. */
@@ -124,6 +131,7 @@ export function useTheme(): UseTheme {
     mode: readonly(mode),
     effective: effectiveTheme,
     accent: readonly(accent),
+    scheme,
     presets: ACCENT_PRESETS,
     reducedMotion: readonly(reducedMotion),
     setMode: setThemeMode,

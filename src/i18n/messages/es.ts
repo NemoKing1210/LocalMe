@@ -59,6 +59,7 @@ export const es: MessageCatalog = {
   'users.mute': 'Silenciar notificaciones',
   'users.unmute': 'Activar notificaciones',
   'users.you': 'Tú ({name})',
+  'users.youPreview': 'Tú: {body}',
   'users.count': 'Personas: {count}',
 
   'forget.title': '¿Olvidar a {name}?',

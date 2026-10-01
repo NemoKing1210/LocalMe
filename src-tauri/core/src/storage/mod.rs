@@ -21,7 +21,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::domain::clock::UnixMillis;
 use crate::domain::ids::{AvatarSeed, DeviceId, MessageId};
-use crate::domain::message::{ChatMessage, Direction, MessageBody, MessageStatus};
+use crate::domain::message::{ChatMessage, Direction, MessageBody, MessagePreview, MessageStatus};
 use crate::domain::nickname::Nickname;
 use crate::domain::peer::PeerProfile;
 use crate::error::StorageError;
@@ -415,7 +415,8 @@ fn to_u32(value: i64) -> Result<u32, StorageError> {
         .map_err(|_| invalid_row(format!("expected a non-negative count, found {value}")))
 }
 
-/// The columns of `peers` plus the computed `last_activity_ms`, in row order.
+/// The columns of `peers` plus the computed `last_activity_ms` and last-message preview, in
+/// row order.
 const PEER_COLUMNS: &str = "\
   p.device_id, p.nickname, p.avatar_seed, p.last_address, p.last_seen_ms, \
   p.first_seen_ms, p.unread, p.notify_muted, p.forgotten, \
@@ -427,7 +428,11 @@ const PEER_COLUMNS: &str = "\
       COALESCE(p.last_seen_ms, 0), \
       COALESCE((SELECT MAX(m.sent_at_ms) FROM messages m WHERE m.peer_id = p.device_id), 0) \
     ) \
-  END";
+  END, \
+  (SELECT m.body FROM messages m WHERE m.peer_id = p.device_id \
+    ORDER BY m.sent_at_ms DESC, m.id DESC LIMIT 1), \
+  (SELECT m.outgoing FROM messages m WHERE m.peer_id = p.device_id \
+    ORDER BY m.sent_at_ms DESC, m.id DESC LIMIT 1)";
 
 /// One `peers` row as read from SQLite, before validation.
 struct PeerRow {
@@ -441,6 +446,8 @@ struct PeerRow {
     notify_muted: i64,
     forgotten: i64,
     last_activity_ms: Option<i64>,
+    last_body: Option<String>,
+    last_outgoing: Option<i64>,
 }
 
 impl PeerRow {
@@ -457,11 +464,25 @@ impl PeerRow {
             notify_muted: row.get(7)?,
             forgotten: row.get(8)?,
             last_activity_ms: row.get(9)?,
+            last_body: row.get(10)?,
+            last_outgoing: row.get(11)?,
         })
     }
 
     /// Validates the raw strings into a [`StoredPeer`].
     fn into_stored(self) -> Result<StoredPeer, StorageError> {
+        let last_message = match (self.last_body, self.last_outgoing) {
+            (Some(body), Some(outgoing)) => Some(MessagePreview::new(
+                &MessageBody::from_stored(body)
+                    .map_err(|error| invalid_row(format!("preview body: {error}")))?,
+                if outgoing != 0 {
+                    Direction::Outgoing
+                } else {
+                    Direction::Incoming
+                },
+            )),
+            _ => None,
+        };
         Ok(StoredPeer {
             profile: PeerProfile {
                 device_id: parse_device(&self.device_id)?,
@@ -475,6 +496,7 @@ impl PeerRow {
             notify_muted: self.notify_muted != 0,
             forgotten: self.forgotten != 0,
             last_activity_ms: self.last_activity_ms,
+            last_message,
         })
     }
 }
@@ -1411,6 +1433,15 @@ mod tests {
             Some(5_001),
             "the newest message beats last_seen"
         );
+        let preview = store
+            .peer(alice.device_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .last_message
+            .expect("the conversation has messages");
+        assert_eq!(preview.direction, Direction::Outgoing);
+        assert_eq!(preview.body, "outgoing", "the newest row wins");
 
         let bob = profile(10, "Bob");
         let stored = store
@@ -1418,6 +1449,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(stored.last_activity_ms, Some(3_000));
+        assert!(stored.last_message.is_none(), "no conversation yet");
 
         let devices = store.known_devices().await.unwrap();
         assert_eq!(devices.len(), 2);
@@ -1440,6 +1472,7 @@ mod tests {
         let stored = store.peer(ghost.device_id).await.unwrap().expect("ghost");
         assert_eq!(stored.last_seen_ms, None);
         assert_eq!(stored.last_activity_ms, None);
+        assert!(stored.last_message.is_none());
         let devices = store.known_devices().await.unwrap();
         let ghost_device = devices
             .iter()

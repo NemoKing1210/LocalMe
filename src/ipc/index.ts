@@ -193,6 +193,11 @@ export function setUiLabels(labels: UiLabels): Promise<void> {
   return call('set_ui_labels', { labels });
 }
 
+/** Paints the native window frame; `onAccent` is the label colour and must contrast with it. */
+export function setWindowAccent(accent: string, onAccent: string): Promise<void> {
+  return call('set_window_accent', { accent, onAccent });
+}
+
 /** Tells the host which conversation is on screen. */
 export function setActiveChat(peerId: DeviceId | null): Promise<void> {
   return call('set_active_chat', { peerId });

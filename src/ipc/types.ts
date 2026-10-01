@@ -31,6 +31,12 @@ export interface Profile {
   readonly avatarSeed: string;
 }
 
+/** The newest message in a conversation, reduced to what the user list draws. */
+export interface MessagePreview {
+  readonly direction: MessageDirection;
+  readonly body: string;
+}
+
 /** One row of the user list, already ordered as the interface should show it. */
 export interface Peer {
   readonly deviceId: DeviceId;
@@ -41,6 +47,7 @@ export interface Peer {
   readonly unread: number;
   readonly notifyMuted: boolean;
   readonly lastActivityMs: UnixMillis | null;
+  readonly lastMessage: MessagePreview | null;
 }
 
 /** A stored chat message. */

@@ -5,6 +5,7 @@
 //! TypeScript.
 
 use crate::domain::ids::{AvatarSeed, DeviceId};
+use crate::domain::message::MessagePreview;
 use crate::domain::nickname::Nickname;
 
 /// The identity exchange at the start of every connection.
@@ -114,6 +115,8 @@ pub struct PeerView {
     /// Carried explicitly rather than recomputed in the front end so that "last activity"
     /// cannot mean two different things in two places.
     pub last_activity_ms: Option<i64>,
+    /// The newest message in this conversation, if there is one, for the list's second line.
+    pub last_message: Option<MessagePreview>,
 }
 
 impl PeerView {
@@ -181,6 +184,7 @@ mod tests {
             unread,
             notify_muted: false,
             last_activity_ms: activity,
+            last_message: None,
         }
     }
 

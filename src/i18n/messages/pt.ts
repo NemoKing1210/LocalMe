@@ -59,6 +59,7 @@ export const pt: MessageCatalog = {
   'users.mute': 'Silenciar notificações',
   'users.unmute': 'Reativar notificações',
   'users.you': 'Tu ({name})',
+  'users.youPreview': 'Tu: {body}',
   'users.count': 'Pessoas: {count}',
 
   'forget.title': 'Esquecer {name}?',

@@ -8,10 +8,13 @@
  * "fall back to the nickname" here, because that fallback would be wrong on one of the two
  * machines and silently so.
  *
- * `blobatar/uri` is used rather than the package's Vue adapter. The adapter renders inline SVG
- * carrying an idle animation, and one always-running animation per row is exactly the
- * per-frame work a virtualised list exists to avoid; a `data:` URI in an `<img>` is decoded
- * once and then composited by the browser with no per-frame cost.
+ * Static by default: `blobatar/uri` renders a `data:` URI into an `<img>`, decoded once and
+ * then composited by the browser with no per-frame cost — which is exactly what a virtualised
+ * list of avatars needs. The `animate` prop opts a single avatar into the package's Vue
+ * adapter instead: the same drawing, but as inline SVG carrying an idle animation, which
+ * costs about a dozen DOM nodes. That trade is only worth it where one avatar is on screen —
+ * a profile header, the open conversation — and never in a list. Motion honours
+ * `prefers-reduced-motion` by going fully static, which `blobatar/motion.css` does on its own.
  *
  * Generated URIs are memoised in a module-level cache rather than a per-instance one: the same
  * peer is drawn in the user list, the chat header and a dialog, and a virtualised row that
@@ -26,6 +29,10 @@
 import { computed } from 'vue';
 
 import { blobatarUri } from 'blobatar/uri';
+// The scoped `@blobatar/vue` of the next major is not installed here; on 2.x this subpath is
+// the same component and is frozen, and every adapter needs this stylesheet to move at all.
+import { Blobatar } from 'blobatar/vue';
+import 'blobatar/motion.css';
 
 const props = withDefaults(
   defineProps<{
@@ -39,8 +46,14 @@ const props = withDefaults(
     dimmed?: boolean;
     /** Which presence dot to draw, or `null` for none. */
     presence?: 'online' | 'offline' | null;
+    /**
+     * Idle animation. `'never'` (the default) is the static `<img>` a list needs.
+     * `'always'` is for the one avatar on screen — a profile header, the open conversation —
+     * and `'hover'` animates a single short-list row at a time.
+     */
+    animate?: 'never' | 'hover' | 'always';
   }>(),
-  { size: 40, dimmed: false, presence: null },
+  { size: 40, dimmed: false, presence: null, animate: 'never' },
 );
 
 /** Entries kept in the module cache before it is emptied. */
@@ -59,6 +72,10 @@ function avatarUri(seed: string, size: number): string {
 }
 
 const uri = computed(() => avatarUri(props.seed, props.size));
+/** The adapter has no "off": off is the `<img>` branch, so only the two on-modes reach it. */
+const animation = computed<'hover' | 'always'>(() =>
+  props.animate === 'always' ? 'always' : 'hover',
+);
 const box = computed(() => `${props.size}px`);
 /** The dot tracks the avatar so a 24px avatar in a message row is not dwarfed by its marker. */
 const dot = computed(() => `${Math.max(8, Math.round(props.size / 3.2))}px`);
@@ -72,7 +89,15 @@ const dot = computed(() => `${Math.max(8, Math.round(props.size / 3.2))}px`);
     :title="name"
     aria-hidden="true"
   >
-    <img class="md-avatar__image" :src="uri" alt="" />
+    <Blobatar
+      v-if="animate !== 'never'"
+      class="md-avatar__image"
+      :name="seed"
+      :size="size"
+      background="squircle"
+      :animate="animation"
+    />
+    <img v-else class="md-avatar__image" :src="uri" alt="" />
     <span
       v-if="presence !== null"
       class="md-avatar__presence"
@@ -83,18 +108,18 @@ const dot = computed(() => `${Math.max(8, Math.round(props.size / 3.2))}px`);
 </template>
 
 <style scoped>
+/* The frame is the `squircle` backdrop blobatar draws, not a CSS clip: rounding the box would
+   throw that shape away and turn every avatar back into a circle. Nothing here may clip. */
 .md-avatar {
   position: relative;
   display: block;
   flex: none;
-  border-radius: var(--md-sys-shape-corner-full);
 }
 
 .md-avatar__image {
   width: 100%;
   height: 100%;
   object-fit: cover;
-  border-radius: var(--md-sys-shape-corner-full);
 }
 
 /* Desaturation carries "not here" even to someone who cannot read the dimming. */

@@ -50,9 +50,16 @@ const presence = computed<string>(() => {
   });
 });
 
-const supporting = computed<string>(() =>
-  props.peer.notifyMuted ? `${presence.value} · ${i18n.t('users.muted')}` : presence.value,
-);
+const supporting = computed<string>(() => {
+  const preview = props.peer.lastMessage;
+  const base =
+    preview === null
+      ? presence.value
+      : preview.direction === 'outgoing'
+        ? i18n.t('users.youPreview', { body: preview.body })
+        : preview.body;
+  return props.peer.notifyMuted ? `${base} · ${i18n.t('users.muted')}` : base;
+});
 
 /** Offline text is deliberately quieter than the name above it. */
 const supportingTone = computed<'default' | 'muted'>(() =>

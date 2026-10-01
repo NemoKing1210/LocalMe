@@ -21,6 +21,7 @@ import * as ipc from '@/ipc';
 import { useChatStore } from '@/stores/chat';
 import { usePeerStore } from '@/stores/peers';
 import { useUiStore } from '@/stores/ui';
+import MdAvatar from '@/ui/MdAvatar.vue';
 import MdEmptyState from '@/ui/MdEmptyState.vue';
 import MdIconButton from '@/ui/MdIconButton.vue';
 import MdTopAppBar from '@/ui/MdTopAppBar.vue';
@@ -117,8 +118,16 @@ function back(): void {
 
     <template v-else>
       <MdTopAppBar :title="peer.nickname" :subtitle="subtitle">
-        <template v-if="showBack" #leading>
-          <MdIconButton icon="back" :label="i18n.t('common.back')" @click="back" />
+        <template #leading>
+          <MdIconButton v-if="showBack" icon="back" :label="i18n.t('common.back')" @click="back" />
+          <MdAvatar
+            :seed="peer.avatarSeed"
+            :name="peer.nickname"
+            :size="40"
+            :dimmed="!peer.online"
+            :presence="peer.online ? 'online' : 'offline'"
+            animate="always"
+          />
         </template>
       </MdTopAppBar>
 

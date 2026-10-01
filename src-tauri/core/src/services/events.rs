@@ -120,6 +120,7 @@ mod tests {
             unread: 0,
             notify_muted: false,
             last_activity_ms: None,
+            last_message: None,
         }
     }
 

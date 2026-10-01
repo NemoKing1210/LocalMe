@@ -64,6 +64,7 @@ macro_rules! ipc_handler {
             $crate::commands::update_settings,
             $crate::commands::is_autostart_enabled,
             $crate::commands::set_ui_labels,
+            $crate::commands::set_window_accent,
             $crate::commands::set_active_chat,
             $crate::commands::show_window,
             $crate::commands::hide_window,

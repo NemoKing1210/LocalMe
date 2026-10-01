@@ -13,7 +13,7 @@ pub mod presence;
 
 pub use clock::{Clock, ManualClock, SystemClock, UnixMillis};
 pub use ids::{AvatarSeed, DeviceId, MessageId};
-pub use message::{ChatMessage, Direction, MessageBody, MessageStatus};
+pub use message::{ChatMessage, Direction, MessageBody, MessagePreview, MessageStatus};
 pub use nickname::Nickname;
 pub use peer::{Handshake, PeerProfile, PeerView};
 pub use presence::{PresenceMachine, PresencePhase, PresenceStatus};

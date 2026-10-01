@@ -64,6 +64,7 @@ export const en = {
   'users.mute': 'Mute notifications',
   'users.unmute': 'Unmute notifications',
   'users.you': 'You ({name})',
+  'users.youPreview': 'You: {body}',
   'users.count': 'People: {count}',
 
   'forget.title': 'Forget {name}?',

@@ -5,6 +5,60 @@ All notable changes to LocalMe are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-10-01
+
+### Added
+
+- Avatars animate where a single one is on screen: the profile picture in Settings and the
+  avatar of the open conversation breathe, bob and blink on their own, and the known-devices
+  list animates on hover. The people list keeps its static avatars, and all motion is dropped
+  when the system asks for reduced motion.
+
+## [0.4.0] - 2026-10-01
+
+### Added
+
+- The native title bar is painted in the accent colour, with the label on it in the matching
+  contrast colour, and follows the accent and the light/dark mode as they change. The operating
+  system still draws the frame, so the title, the window buttons and snap behaviour are unchanged.
+  On Windows 11 this is the system title bar; on an older Windows and on macOS and Linux the
+  window manager owns the frame and keeps its own colour.
+
+## [0.3.1] - 2026-10-01
+
+### Changed
+
+- The Russian interface calls the people list «Пользователи» instead of «Люди», including the
+  search placeholder and the per-person notification hint
+
+## [0.3.0] - 2026-10-01
+
+### Added
+
+- The people list shows the newest message of each conversation under the name, prefixed with
+  "You:" when it was the reader who sent it
+
+## [0.2.4] - 2026-10-01
+
+### Changed
+
+- The floating label in a text field now rises out of the way as soon as the field is focused,
+  not only once it contains text, so an empty search or nickname box shows where to type
+
+## [0.2.3] - 2026-10-01
+
+### Changed
+
+- Avatar frames are now rounded squares rather than circles: the squircle backdrop blobatar
+  draws is no longer clipped away by a full corner radius
+
+## [0.2.2] - 2026-10-01
+
+### Fixed
+
+- A long people list no longer pushes the layout past the bottom of the window; the list column
+  stays one window tall and scrolls instead of overflowing
+
 ## [0.2.1] - 2026-10-01
 
 ### Added

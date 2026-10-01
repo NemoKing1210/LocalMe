@@ -310,6 +310,26 @@ pub fn set_ui_labels<R: Runtime>(
     Ok(())
 }
 
+/// Paints the native title bar in the accent colour.
+///
+/// The palette is the front end's, so it sends the two resolved colours: `accent` for the bar
+/// and `onAccent` for the label on it.
+///
+/// # Errors
+///
+/// [`ApiError::InvalidInput`] if either colour is not `#RRGGBB`.
+#[tauri::command]
+pub fn set_window_accent<R: Runtime>(
+    app: AppHandle<R>,
+    accent: String,
+    on_accent: String,
+) -> Result<(), ApiError> {
+    let caption = args::hex_color("accent", &accent)?;
+    let text = args::hex_color("onAccent", &on_accent)?;
+    window::set_accent(&app, caption, text);
+    Ok(())
+}
+
 /// Tells the host which conversation is on screen, so a notification is not raised for a
 /// message the user is already reading.
 #[tauri::command]

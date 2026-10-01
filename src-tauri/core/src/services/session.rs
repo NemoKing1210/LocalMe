@@ -22,7 +22,7 @@ use tokio::task::JoinHandle;
 
 use crate::domain::clock::Clock;
 use crate::domain::ids::{DeviceId, MessageId};
-use crate::domain::message::{ChatMessage, Direction, MessageBody, MessageStatus};
+use crate::domain::message::{ChatMessage, Direction, MessageBody, MessagePreview, MessageStatus};
 use crate::domain::nickname::Nickname;
 use crate::domain::peer::{Handshake, PeerProfile, PeerView};
 use crate::domain::presence::{PresenceChange, PresenceMachine};
@@ -405,6 +405,7 @@ impl PeerEntry {
             unread: self.stored.unread,
             notify_muted: self.stored.notify_muted,
             last_activity_ms: self.last_activity_ms,
+            last_message: self.stored.last_message.clone(),
         }
     }
 
@@ -687,6 +688,7 @@ impl<C: Clock, S: Store> Session<C, S> {
                 };
                 for entry in self.peers.values_mut() {
                     entry.stored.unread = 0;
+                    entry.stored.last_message = None;
                 }
                 self.emit_peers();
                 let _ = reply.send(deleted);
@@ -764,6 +766,11 @@ impl<C: Clock, S: Store> Session<C, S> {
             message.status = MessageStatus::Failed;
             self.emit_message(peer, &message);
             return Ok(message);
+        }
+
+        // This send is now the newest row in the conversation, so it is what the list shows.
+        if let Some(entry) = self.peers.get_mut(&peer) {
+            entry.stored.last_message = Some(MessagePreview::new(&message.body, message.direction));
         }
 
         // A full queue means the peer has stopped reading. Failing the send is better than
@@ -1002,6 +1009,8 @@ impl<C: Clock, S: Store> Session<C, S> {
             Ok(false) => tracing::debug!(%peer, %id, "ignoring a duplicate message"),
             Ok(true) => {
                 entry.stored.unread = entry.stored.unread.saturating_add(1);
+                entry.stored.last_message =
+                    Some(MessagePreview::new(&message.body, message.direction));
                 entry.note_activity(now.as_i64());
                 let peer_view = entry.view();
                 let _ = self.events.send(CoreEvent::Message {

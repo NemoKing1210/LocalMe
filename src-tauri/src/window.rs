@@ -1,4 +1,5 @@
-//! Window policy: the window label, the readiness gate, the close-to-tray rule and the title.
+//! Window policy: the window label, the readiness gate, the close-to-tray rule, the title and
+//! the colour of the native frame.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -56,6 +57,70 @@ pub fn reveal<R: Runtime>(app: &AppHandle<R>) {
         events::emit_open_chat(app, peer);
     }
 }
+
+/// Paints the native title bar in the accent colour.
+///
+/// The palette lives in the front end — Material's tonal algorithm runs there — so the host is
+/// handed the resolved pair rather than an accent to reason about: `caption` is the bar and the
+/// frame around the window, `text` the glyphs drawn on it, and the two must contrast.
+///
+/// Windows 11 draws the frame itself and colours it from `DWMWA_CAPTION_COLOR`, with
+/// `DWMWA_BORDER_COLOR` for the outline and `DWMWA_TEXT_COLOR` for the label. A build older than
+/// 22000 rejects those attributes and keeps its own frame, which is also what happens on any
+/// other platform: the window manager owns the frame there and offers no such hook, so this is
+/// a documented no-op rather than a second, non-native title bar.
+#[cfg(windows)]
+pub fn set_accent<R: Runtime>(app: &AppHandle<R>, caption: [u8; 3], text: [u8; 3]) {
+    use windows::Win32::Graphics::Dwm::{
+        DWMWA_BORDER_COLOR, DWMWA_CAPTION_COLOR, DWMWA_TEXT_COLOR, DwmSetWindowAttribute,
+    };
+
+    let Some(window) = app.get_webview_window(MAIN_WINDOW) else {
+        tracing::warn!("main window is missing; the title bar keeps the system colour");
+        return;
+    };
+    let hwnd = match window.hwnd() {
+        Ok(hwnd) => hwnd,
+        Err(error) => {
+            tracing::warn!(%error, "the window has no native handle to paint");
+            return;
+        }
+    };
+
+    for (attribute, channel_order) in [
+        (DWMWA_CAPTION_COLOR, caption),
+        (DWMWA_BORDER_COLOR, caption),
+        (DWMWA_TEXT_COLOR, text),
+    ] {
+        let color = colorref(channel_order);
+        // SAFETY: `hwnd` is this process's live window handle, reached from the event loop;
+        // `color` is a `u32` that outlives the call, and each attribute above takes exactly one
+        // `COLORREF`, so the pointer and the size the call is told to read match.
+        let result = unsafe {
+            DwmSetWindowAttribute(
+                hwnd,
+                attribute,
+                std::ptr::from_ref(&color).cast(),
+                size_of::<u32>() as u32,
+            )
+        };
+        if let Err(error) = result {
+            // Expected on a Windows build that predates the attribute; the system frame stays.
+            tracing::debug!(%error, attribute = attribute.0, "the frame colour was refused");
+        }
+    }
+}
+
+/// A `COLORREF` — `0x00BBGGRR` — from the `#RRGGBB` order the interface speaks.
+#[cfg(windows)]
+fn colorref([red, green, blue]: [u8; 3]) -> u32 {
+    u32::from(red) | (u32::from(green) << 8) | (u32::from(blue) << 16)
+}
+
+/// Away from Windows the window manager draws the frame and decides its colour; there is no
+/// application-facing hook, so the palette stops at the edge of the web view.
+#[cfg(not(windows))]
+pub fn set_accent<R: Runtime>(_app: &AppHandle<R>, _caption: [u8; 3], _text: [u8; 3]) {}
 
 /// Hides the main window, leaving the process and its connections alive.
 pub fn hide<R: Runtime>(app: &AppHandle<R>) {

@@ -56,6 +56,7 @@ export const zh: MessageCatalog = {
   'users.mute': '静音通知',
   'users.unmute': '取消静音',
   'users.you': '你（{name}）',
+  'users.youPreview': '你：{body}',
   'users.count': '联系人：{count}',
 
   'forget.title': '忘记 {name}？',
