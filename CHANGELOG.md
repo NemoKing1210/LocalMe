@@ -5,6 +5,41 @@ All notable changes to LocalMe are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-10-02
+
+### Added
+
+- Send files, on their own or with a message: pick them with the paperclip, or drop them
+  anywhere on the window. Pictures are shown in the conversation, everything else as a card
+  with its name and size
+- Every attached file is shown with an icon for its type — a PDF, a spreadsheet, an archive, a
+  video — so a conversation full of files can be read at a glance rather than line by line
+- Transfers show their progress, can be cancelled, and can be started again after a failure
+- A file that is interrupted — the other computer goes away, or the application is closed —
+  continues where it stopped when the conversation resumes, instead of starting over, and the
+  received file is checked against the sender's digest before it is kept
+- Received files can be opened, saved wherever you like, or shown in the file manager
+
+### Changed
+
+- Messages may now be files with no text at all; the message list and the notifications name
+  the file in that case
+- The database schema is version 3: a message body is optional, and attachments have their own
+  table. An existing database is migrated on first start
+- The wire protocol is version 2. Two installations must both be updated: a version 1 peer is
+  politely refused rather than being sent frames it cannot read
+
+### Fixed
+
+- A peer no longer drops offline fifteen seconds after the last message: the liveness beats the
+  two ends exchange were not reaching the part of the application that decides whether a peer is
+  still there, so every idle conversation was declared stalled and reconnected, over and over
+- Two instances on the same network could fall into a loop of connecting and dropping each
+  other when both started dialling at the same moment: the connection that lost the tie-break
+  took the surviving one down with it
+- A picture you had sent showed as a broken placeholder after restarting the application: the
+  permission to display a file was granted when it was chosen and forgotten on the next start
+
 ## [0.8.0] - 2026-10-02
 
 ### Added

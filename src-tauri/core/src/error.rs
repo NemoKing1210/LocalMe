@@ -25,6 +25,18 @@ pub enum DomainError {
     BadAvatarSeed { actual: usize, max: usize },
     #[error("{kind} is not a valid UUID: {value}")]
     InvalidId { kind: &'static str, value: String },
+    /// A digest that is not 64 hexadecimal characters.
+    #[error("`{value}` is not a SHA-256 digest")]
+    InvalidDigest { value: String },
+    /// A file above [`crate::protocol::limits::MAX_ATTACHMENT_BYTES`].
+    #[error("attachment of {size} bytes is above the limit of {max}")]
+    AttachmentTooLarge { size: u64, max: u64 },
+    /// A message that carries neither text nor a file.
+    #[error("a message needs text or at least one attachment")]
+    EmptyMessage,
+    /// A file that cannot be offered: missing, not a regular file, or unreadable.
+    #[error("the file could not be attached: {reason}")]
+    BadAttachment { reason: String },
 }
 
 #[derive(Debug, thiserror::Error)]

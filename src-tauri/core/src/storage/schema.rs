@@ -7,7 +7,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use super::sqlite_error;
 use crate::error::StorageError;
 
-pub(super) const SCHEMA_VERSION: u32 = 2;
+pub(super) const SCHEMA_VERSION: u32 = 3;
 
 pub(super) const MIGRATION_1: &str = "
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -46,6 +46,54 @@ UPDATE messages SET status = 'queued'
   WHERE outgoing = 1 AND status IN ('sending', 'sent', 'failed');
 CREATE INDEX messages_outbox ON messages(peer_id, sent_at_ms, id)
   WHERE outgoing = 1 AND status = 'queued';
+";
+
+/// Attachments: the columns a file transfer needs, and the one column that had to change.
+///
+/// `messages.body` becomes nullable, because a message may be nothing but files — and SQLite
+/// cannot drop a `NOT NULL`, so the table is rebuilt. The rebuild is the documented
+/// copy-drop-rename: the old indexes travel with the renamed table and are recreated for the new
+/// one. It is safe here because nothing references `messages` yet at this point in the schema's
+/// life; `attachments` is created below, after the rename.
+pub(super) const MIGRATION_3: &str = "
+ALTER TABLE messages RENAME TO messages_v2;
+CREATE TABLE messages (
+  id           TEXT PRIMARY KEY,
+  peer_id      TEXT NOT NULL REFERENCES peers(device_id) ON DELETE CASCADE,
+  outgoing     INTEGER NOT NULL,
+  body         TEXT,
+  sent_at_ms   INTEGER NOT NULL,
+  received_at_ms INTEGER NOT NULL,
+  delivered_at_ms INTEGER,
+  status       TEXT NOT NULL,
+  read         INTEGER NOT NULL DEFAULT 0
+);
+INSERT INTO messages (id, peer_id, outgoing, body, sent_at_ms, received_at_ms, delivered_at_ms, status, read)
+  SELECT id, peer_id, outgoing, body, sent_at_ms, received_at_ms, delivered_at_ms, status, read
+  FROM messages_v2;
+DROP TABLE messages_v2;
+CREATE INDEX messages_peer_time ON messages(peer_id, sent_at_ms DESC, id DESC);
+CREATE INDEX messages_unread    ON messages(peer_id) WHERE read = 0;
+CREATE INDEX messages_outbox    ON messages(peer_id, sent_at_ms, id)
+  WHERE outgoing = 1 AND status = 'queued';
+
+CREATE TABLE attachments (
+  id            TEXT PRIMARY KEY,
+  message_id    TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  peer_id       TEXT NOT NULL,
+  outgoing      INTEGER NOT NULL,
+  name          TEXT NOT NULL,
+  size          INTEGER NOT NULL,
+  kind          TEXT NOT NULL,
+  state         TEXT NOT NULL,
+  transferred   INTEGER NOT NULL DEFAULT 0,
+  sha256        TEXT,
+  path          TEXT,
+  created_at_ms INTEGER NOT NULL
+);
+CREATE INDEX attachments_message ON attachments(message_id);
+CREATE INDEX attachments_outbox  ON attachments(peer_id, message_id)
+  WHERE outgoing = 1 AND state IN ('queued', 'sending');
 ";
 
 pub(super) fn migrate(conn: &mut Connection) -> Result<(), StorageError> {
@@ -96,6 +144,7 @@ fn apply_migration(conn: &mut Connection, version: u32) -> Result<(), StorageErr
     let sql = match version {
         1 => MIGRATION_1,
         2 => MIGRATION_2,
+        3 => MIGRATION_3,
         other => {
             return Err(StorageError::Migration {
                 version: other,

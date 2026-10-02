@@ -15,8 +15,9 @@ use crate::domain::ids::DeviceId;
 use crate::domain::peer::Handshake;
 use crate::error::{ProtocolError, TransportError};
 use crate::protocol::limits::{
-    CONNECT_TIMEOUT, HANDSHAKE_TIMEOUT, HEARTBEAT_INTERVAL, HEARTBEAT_TIMEOUT, RATE_LIMIT_BURST,
-    RATE_LIMIT_PER_SECOND,
+    CONNECT_TIMEOUT, DATA_BURST_BYTES, DATA_RATE_PER_SECOND, FILE_CHUNK_BURST,
+    FILE_CHUNK_RATE_PER_SECOND, HANDSHAKE_TIMEOUT, HEARTBEAT_INTERVAL, HEARTBEAT_TIMEOUT,
+    RATE_LIMIT_BURST, RATE_LIMIT_PER_SECOND,
 };
 use crate::protocol::{ErrorCode, Frame, GoodbyeReason, TokenBucket};
 
@@ -226,6 +227,7 @@ pub async fn serve(handshaken: Handshaken, context: Arc<ConnectionContext>) {
     let peer_id = peer.device_id;
 
     let (link, mut commands) = PeerLink::channel();
+    let link_id = link.id();
     if context
         .events
         .send(TransportEvent::Connected {
@@ -248,6 +250,7 @@ pub async fn serve(handshaken: Handshaken, context: Arc<ConnectionContext>) {
         .events
         .send(TransportEvent::Disconnected {
             peer: peer_id,
+            link: link_id,
             reason: reason.clone(),
         })
         .await
@@ -266,7 +269,13 @@ async fn pump(
     context: &ConnectionContext,
     peer: DeviceId,
 ) -> DisconnectReason {
+    // Three budgets, because they bound three different resources: frames of content (a chat
+    // message), bytes of file payload (a transfer), and the number of chunk frames those bytes
+    // are cut into.
     let mut rate = TokenBucket::new(RATE_LIMIT_BURST, RATE_LIMIT_PER_SECOND, Instant::now());
+    let mut chunk_rate =
+        TokenBucket::new(FILE_CHUNK_BURST, FILE_CHUNK_RATE_PER_SECOND, Instant::now());
+    let mut bulk = TokenBucket::new(DATA_BURST_BYTES, DATA_RATE_PER_SECOND, Instant::now());
     let mut heartbeat = tokio::time::interval(HEARTBEAT_INTERVAL);
     // A delayed runtime must not make the connection send a burst of catch-up heartbeats.
     heartbeat.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -281,7 +290,7 @@ async fn pump(
                 match frame {
                     Ok(Some(frame)) => {
                         last_frame = Instant::now();
-                        match handle_frame(frame, writer, peer, &mut rate).await {
+                        match handle_frame(frame, writer, peer, &mut rate, &mut chunk_rate, &mut bulk).await {
                             FrameOutcome::Forward(frame) => {
                                 if context
                                     .events
@@ -292,7 +301,6 @@ async fn pump(
                                     return DisconnectReason::Closed;
                                 }
                             }
-                            FrameOutcome::Continue => {}
                             FrameOutcome::Close(reason) => return reason,
                         }
                     }
@@ -346,9 +354,13 @@ async fn pump(
     }
 }
 
+/// What the connection should do with an inbound frame.
+///
+/// There is no "handled and forgotten" arm on purpose: every frame is either content the session
+/// must see — including a liveness beat, which the presence machine measures — or a reason to
+/// close.
 enum FrameOutcome {
     Forward(Frame),
-    Continue,
     Close(DisconnectReason),
 }
 
@@ -357,11 +369,36 @@ async fn handle_frame(
     writer: &mut FrameWriter,
     peer: DeviceId,
     rate: &mut TokenBucket,
+    chunk_rate: &mut TokenBucket,
+    bulk: &mut TokenBucket,
 ) -> FrameOutcome {
+    // File payload is charged in bytes rather than in frames: a 40 MiB file is a thousand
+    // frames and would trip the per-frame budget on its first second. The chunk count is
+    // bounded alongside it so that budget cannot be spent on millions of one-byte frames.
+    if let Frame::FileChunk { data, .. } = &frame {
+        let now = Instant::now();
+        let bytes = u64::try_from(data.len()).unwrap_or(u64::MAX) as f64;
+        if !bulk.try_acquire_n(bytes, now) || !chunk_rate.try_acquire(now) {
+            tracing::warn!(%peer, "peer exceeded the inbound file budget");
+            let _ = writer
+                .send(&Frame::error(
+                    ErrorCode::RateLimited,
+                    "too much file data per second",
+                ))
+                .await;
+            return FrameOutcome::Close(DisconnectReason::Failed(
+                "peer exceeded the file budget".to_owned(),
+            ));
+        }
+        return FrameOutcome::Forward(frame);
+    }
+
     match frame {
-        // Liveness frames are the connection's own business. They are exempt from the rate
-        // limit: a peer's five-second cadence must never be the thing that trips it.
-        Frame::Heartbeat { .. } => FrameOutcome::Continue,
+        // Liveness is the session's business as much as the connection's: the presence machine
+        // measures silence, and it can only do that if the beats reach it. They are exempt from
+        // the rate limit, because a peer's five-second cadence must never be the thing that
+        // trips it.
+        Frame::Heartbeat { .. } => FrameOutcome::Forward(frame),
 
         Frame::Goodbye { reason } => {
             tracing::debug!(%peer, ?reason, "peer said goodbye");

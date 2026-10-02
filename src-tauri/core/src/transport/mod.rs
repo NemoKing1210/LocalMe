@@ -12,7 +12,7 @@ pub use listener::Listener;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use tokio::sync::mpsc;
 
@@ -20,6 +20,14 @@ use crate::domain::ids::DeviceId;
 use crate::domain::peer::Handshake;
 use crate::error::TransportError;
 use crate::protocol::{Frame, GoodbyeReason, limits::OUTBOUND_QUEUE_CAPACITY};
+
+/// Source of [`PeerLink::id`]s. A counter, not a random value: the identifiers only have to be
+/// distinct within one process, and a counter cannot collide.
+static NEXT_LINK_ID: AtomicU64 = AtomicU64::new(1);
+
+fn next_link_id() -> u64 {
+    NEXT_LINK_ID.fetch_add(1, Ordering::Relaxed)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
@@ -69,6 +77,7 @@ pub enum LinkCommand {
 /// self-cleaning rather than a leaked socket.
 #[derive(Debug, Clone)]
 pub struct PeerLink {
+    id: u64,
     commands: mpsc::Sender<LinkCommand>,
 }
 
@@ -77,7 +86,22 @@ impl PeerLink {
     #[must_use]
     pub fn channel() -> (Self, mpsc::Receiver<LinkCommand>) {
         let (commands, receiver) = mpsc::channel(OUTBOUND_QUEUE_CAPACITY);
-        (Self { commands }, receiver)
+        let link = Self {
+            id: next_link_id(),
+            commands,
+        };
+        (link, receiver)
+    }
+
+    /// Identifies this connection for as long as it lives.
+    ///
+    /// Two connections to the same peer coexist whenever both sides dial at once, and only one
+    /// of them survives the tie-break. The identifier is what lets the session tell the end of
+    /// the connection it abandoned apart from the end of the one it kept — without it, the
+    /// loser's goodbye would clear the winner's link and the two peers would reconnect for ever.
+    #[must_use]
+    pub fn id(&self) -> u64 {
+        self.id
     }
 
     /// Queues a frame, waiting for room.
@@ -166,8 +190,8 @@ pub enum TransportEvent {
     },
     /// The peer sent a frame the session must act on.
     ///
-    /// Liveness frames (`heartbeat`) and fatal ones (`error`) are handled inside the
-    /// connection task and never forwarded, so everything here is content.
+    /// Fatal frames (`error`) are handled inside the connection task and never forwarded, so
+    /// everything here is content or a liveness beat.
     Frame {
         /// The peer that sent it.
         peer: DeviceId,
@@ -178,6 +202,8 @@ pub enum TransportEvent {
     Disconnected {
         /// The peer that went away.
         peer: DeviceId,
+        /// The connection that ended; see [`PeerLink::id`].
+        link: u64,
         /// Why.
         reason: DisconnectReason,
     },

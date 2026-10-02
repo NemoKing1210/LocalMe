@@ -7,16 +7,18 @@
 
 mod schema;
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
 use tokio::sync::{mpsc, oneshot};
 
+use crate::domain::attachment::{Attachment, AttachmentKind, AttachmentState, FileName, Sha256};
 use crate::domain::clock::UnixMillis;
-use crate::domain::ids::{AvatarSeed, DeviceId, MessageId};
+use crate::domain::ids::{AttachmentId, AvatarSeed, DeviceId, MessageId};
 use crate::domain::message::{ChatMessage, Direction, MessageBody, MessagePreview, MessageStatus};
 use crate::domain::nickname::Nickname;
 use crate::domain::peer::PeerProfile;
@@ -29,6 +31,13 @@ const REQUEST_QUEUE_CAPACITY: usize = 64;
 
 const SHUTDOWN_JOIN_TIMEOUT: Duration = Duration::from_secs(1);
 
+/// Directory under the data directory that holds every attachment file.
+///
+/// The layout is `<files>/<attachment id>/<sanitised name>`, and a file being received is
+/// `<name>.part` beside where it will land. The identifier — not the name — chooses the
+/// directory, so nothing a peer sends can address a path we did not intend.
+pub const FILES_DIRECTORY: &str = "files";
+
 type Reply<T> = oneshot::Sender<Result<T, StorageError>>;
 
 /// Not `Clone`: the single writer thread is shared behind an `Arc` if needed.
@@ -37,6 +46,7 @@ pub struct SqliteStore {
     sender: Option<mpsc::Sender<Request>>,
     /// `None` in the closed-channel construction used by tests.
     writer: Option<thread::JoinHandle<()>>,
+    files_root: PathBuf,
 }
 
 enum Request {
@@ -110,6 +120,29 @@ enum Request {
         reply: Reply<Vec<ChatMessage>>,
     },
     ClearHistory(Reply<u64>),
+    Attachment {
+        id: AttachmentId,
+        reply: Reply<Option<Attachment>>,
+    },
+    UnfinishedAttachments {
+        device_id: DeviceId,
+        reply: Reply<Vec<ChatMessage>>,
+    },
+    SetAttachmentProgress {
+        id: AttachmentId,
+        transferred: u64,
+        reply: Reply<()>,
+    },
+    SetAttachmentState {
+        id: AttachmentId,
+        state: AttachmentState,
+        reply: Reply<()>,
+    },
+    SetAttachmentDigest {
+        id: AttachmentId,
+        sha256: Sha256,
+        reply: Reply<()>,
+    },
 }
 
 impl SqliteStore {
@@ -142,19 +175,33 @@ impl SqliteStore {
 
         migrate(&mut conn)?;
 
+        let files_root = path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(FILES_DIRECTORY);
+        fs::create_dir_all(&files_root).map_err(sqlite_error)?;
+
         let (sender, receiver) = mpsc::channel(REQUEST_QUEUE_CAPACITY);
+        let writer_files = files_root.clone();
         let writer = thread::Builder::new()
             .name("localme-storage".to_owned())
-            .spawn(move || run(conn, receiver))
+            .spawn(move || run(conn, writer_files, receiver))
             .map_err(sqlite_error)?;
 
         Ok((
             Self {
                 sender: Some(sender),
                 writer: Some(writer),
+                files_root,
             },
             preserved,
         ))
+    }
+
+    /// Where attachment files live; see [`FILES_DIRECTORY`].
+    #[must_use]
+    pub fn files_root(&self) -> &Path {
+        &self.files_root
     }
 
     async fn call<R>(&self, build: impl FnOnce(Reply<R>) -> Request) -> Result<R, StorageError>
@@ -232,14 +279,14 @@ fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
     PathBuf::from(os)
 }
 
-fn run(mut conn: Connection, mut receiver: mpsc::Receiver<Request>) {
+fn run(mut conn: Connection, files: PathBuf, mut receiver: mpsc::Receiver<Request>) {
     while let Some(request) = receiver.blocking_recv() {
-        dispatch(&mut conn, request);
+        dispatch(&mut conn, &files, request);
     }
     // `conn` drops here, closing the file after the WAL is checkpointed.
 }
 
-fn dispatch(conn: &mut Connection, request: Request) {
+fn dispatch(conn: &mut Connection, files: &Path, request: Request) {
     match request {
         Request::MetaGet { key, reply } => {
             let _ = reply.send(meta_get(conn, &key));
@@ -288,7 +335,7 @@ fn dispatch(conn: &mut Connection, request: Request) {
             delete_history,
             reply,
         } => {
-            let _ = reply.send(forget_peer(conn, device_id, delete_history));
+            let _ = reply.send(forget_peer(conn, files, device_id, delete_history));
         }
         Request::KnownDevices(reply) => {
             let _ = reply.send(read_known_devices(conn));
@@ -307,7 +354,7 @@ fn dispatch(conn: &mut Connection, request: Request) {
             let _ = reply.send(mark_message_delivered(conn, id, delivered_at_ms));
         }
         Request::NextOutboxMessage { device_id, reply } => {
-            let _ = reply.send(next_outbox_message(conn, device_id));
+            let _ = reply.send(next_outbox_message(conn, files, device_id));
         }
         Request::RequeuePendingMessages { device_id, reply } => {
             let _ = reply.send(requeue_pending_messages(conn, device_id));
@@ -321,10 +368,29 @@ fn dispatch(conn: &mut Connection, request: Request) {
             limit,
             reply,
         } => {
-            let _ = reply.send(history_page(conn, device_id, before, limit));
+            let _ = reply.send(history_page(conn, files, device_id, before, limit));
         }
         Request::ClearHistory(reply) => {
-            let _ = reply.send(clear_history(conn));
+            let _ = reply.send(clear_history(conn, files));
+        }
+        Request::Attachment { id, reply } => {
+            let _ = reply.send(read_attachment(conn, files, id));
+        }
+        Request::UnfinishedAttachments { device_id, reply } => {
+            let _ = reply.send(messages_with_unfinished_attachments(conn, files, device_id));
+        }
+        Request::SetAttachmentProgress {
+            id,
+            transferred,
+            reply,
+        } => {
+            let _ = reply.send(set_attachment_progress(conn, id, transferred));
+        }
+        Request::SetAttachmentState { id, state, reply } => {
+            let _ = reply.send(set_attachment_state(conn, id, state));
+        }
+        Request::SetAttachmentDigest { id, sha256, reply } => {
+            let _ = reply.send(set_attachment_digest(conn, id, sha256));
         }
     }
 }
@@ -452,7 +518,7 @@ struct MessageRow {
     id: String,
     peer_id: String,
     outgoing: i64,
-    body: String,
+    body: Option<String>,
     sent_at_ms: i64,
     received_at_ms: i64,
     delivered_at_ms: Option<i64>,
@@ -484,8 +550,16 @@ impl MessageRow {
             } else {
                 Direction::Incoming
             },
-            body: MessageBody::from_stored(self.body)
-                .map_err(|error| invalid_row(format!("message body: {error}")))?,
+            body: match self.body {
+                // An empty string is what a file-only message would have stored before the
+                // column became nullable; reading it as "no text" keeps such a row valid.
+                Some(text) if !text.trim().is_empty() => Some(
+                    MessageBody::from_stored(text)
+                        .map_err(|error| invalid_row(format!("message body: {error}")))?,
+                ),
+                _ => None,
+            },
+            attachments: Vec::new(),
             sent_at: UnixMillis(self.sent_at_ms),
             received_at: UnixMillis(self.received_at_ms),
             delivered_at: self.delivered_at_ms.map(UnixMillis),
@@ -494,6 +568,143 @@ impl MessageRow {
             read: self.read != 0,
         })
     }
+}
+
+/// `attachments` columns in the order [`AttachmentRow::read`] expects.
+const ATTACHMENT_COLUMNS: &str = "\
+  id, message_id, peer_id, outgoing, name, size, kind, state, transferred, sha256, path, \
+  created_at_ms";
+
+struct AttachmentRow {
+    id: String,
+    message_id: String,
+    peer_id: String,
+    outgoing: i64,
+    name: String,
+    size: i64,
+    kind: String,
+    state: String,
+    transferred: i64,
+    sha256: Option<String>,
+    path: Option<String>,
+    created_at_ms: i64,
+}
+
+impl AttachmentRow {
+    fn read(row: &rusqlite::Row<'_>) -> rusqlite::Result<Self> {
+        Ok(Self {
+            id: row.get(0)?,
+            message_id: row.get(1)?,
+            peer_id: row.get(2)?,
+            outgoing: row.get(3)?,
+            name: row.get(4)?,
+            size: row.get(5)?,
+            kind: row.get(6)?,
+            state: row.get(7)?,
+            transferred: row.get(8)?,
+            sha256: row.get(9)?,
+            path: row.get(10)?,
+            created_at_ms: row.get(11)?,
+        })
+    }
+
+    /// `files` is the root of the attachment tree, needed to name the path of a *received* file:
+    /// the sender's path is stored, but the recipient's is derived from the attachment's own
+    /// identifier, because that is where this machine put it.
+    fn into_attachment(self, files: &Path) -> Result<Attachment, StorageError> {
+        let id = parse_attachment_id(&self.id)?;
+        let name = FileName::sanitise(&self.name);
+        let direction = if self.outgoing != 0 {
+            Direction::Outgoing
+        } else {
+            Direction::Incoming
+        };
+        let state = AttachmentState::from_db(&self.state)
+            .map_err(|error| invalid_row(format!("attachment state: {error}")))?;
+        // A digest is stored for both directions; only the sender needs it before the first
+        // chunk, but keeping it for the recipient's copy costs 64 bytes and makes the row
+        // self-describing.
+        let path = match direction {
+            Direction::Outgoing => self.path,
+            Direction::Incoming if state == AttachmentState::Complete => Some(
+                stored_file_path(files, id, &name)
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+            Direction::Incoming => None,
+        };
+        Ok(Attachment {
+            id,
+            message_id: parse_message_id(&self.message_id)?,
+            peer: parse_device(&self.peer_id)?,
+            direction,
+            name,
+            size: u64::try_from(self.size)
+                .map_err(|_| invalid_row(format!("attachment size {}", self.size)))?,
+            kind: AttachmentKind::from_db(&self.kind)
+                .map_err(|error| invalid_row(format!("attachment kind: {error}")))?,
+            state,
+            transferred: u64::try_from(self.transferred).unwrap_or(0),
+            sha256: parse_sha256(self.sha256)?,
+            created_at: UnixMillis(self.created_at_ms),
+            path,
+        })
+    }
+}
+
+/// Where a completed incoming file lives: `<files>/<id>/<name>`.
+fn stored_file_path(files: &Path, id: AttachmentId, name: &FileName) -> PathBuf {
+    files.join(id.to_string()).join(name.as_str())
+}
+
+fn parse_attachment_id(raw: &str) -> Result<AttachmentId, StorageError> {
+    raw.parse::<AttachmentId>()
+        .map_err(|error| invalid_row(format!("attachment id `{raw}`: {error}")))
+}
+
+fn parse_sha256(raw: Option<String>) -> Result<Option<Sha256>, StorageError> {
+    raw.map(|text| {
+        Sha256::from_hex(&text).map_err(|error| invalid_row(format!("attachment digest: {error}")))
+    })
+    .transpose()
+}
+
+/// Fills in the attachments of a page of messages with one query instead of one per message.
+fn load_attachments(
+    conn: &Connection,
+    files: &Path,
+    messages: &mut [ChatMessage],
+) -> Result<(), StorageError> {
+    if messages.is_empty() {
+        return Ok(());
+    }
+    let ids: Vec<String> = messages
+        .iter()
+        .map(|message| message.id.to_string())
+        .collect();
+    let placeholders = vec!["?"; ids.len()].join(", ");
+    let sql = format!(
+        "SELECT {ATTACHMENT_COLUMNS} FROM attachments \
+         WHERE message_id IN ({placeholders}) ORDER BY created_at_ms, id"
+    );
+    let mut stmt = conn.prepare(&sql).map_err(sqlite_error)?;
+    let rows = stmt
+        .query_map(params_from_iter(ids.iter()), AttachmentRow::read)
+        .map_err(sqlite_error)?;
+    let mut by_message: HashMap<MessageId, Vec<Attachment>> = HashMap::new();
+    for row in rows {
+        let attachment = row.map_err(sqlite_error)?.into_attachment(files)?;
+        by_message
+            .entry(attachment.message_id)
+            .or_default()
+            .push(attachment);
+    }
+    for message in messages {
+        if let Some(list) = by_message.remove(&message.id) {
+            message.attachments = list;
+        }
+    }
+    Ok(())
 }
 
 struct KnownDeviceRow {
@@ -666,11 +877,14 @@ fn mark_peer_read(conn: &mut Connection, device_id: DeviceId) -> Result<u32, Sto
 
 fn forget_peer(
     conn: &mut Connection,
+    files: &Path,
     device_id: DeviceId,
     delete_history: bool,
 ) -> Result<(), StorageError> {
     let tx = conn.transaction().map_err(sqlite_error)?;
+    let mut removed: Vec<String> = Vec::new();
     if delete_history {
+        removed = attachment_ids_for_peer(&tx, Some(device_id))?;
         tx.execute(
             "DELETE FROM messages WHERE peer_id = ?1",
             params![device_id.to_string()],
@@ -684,7 +898,9 @@ fn forget_peer(
         params![device_id.to_string()],
     )
     .map_err(sqlite_error)?;
-    tx.commit().map_err(sqlite_error)
+    tx.commit().map_err(sqlite_error)?;
+    remove_attachment_files(files, &removed);
+    Ok(())
 }
 
 fn read_known_devices(conn: &Connection) -> Result<Vec<KnownDevice>, StorageError> {
@@ -725,7 +941,7 @@ fn insert_message(conn: &mut Connection, message: &ChatMessage) -> Result<bool, 
             message.id.to_string(),
             message.peer.to_string(),
             i64::from(message.direction.is_outgoing()),
-            message.body.as_str(),
+            message.body.as_ref().map(MessageBody::as_str),
             message.sent_at.as_i64(),
             message.received_at.as_i64(),
             message.delivered_at.map(UnixMillis::as_i64),
@@ -735,6 +951,32 @@ fn insert_message(conn: &mut Connection, message: &ChatMessage) -> Result<bool, 
     )
     .map_err(sqlite_error)?;
     let inserted = tx.changes() == 1;
+
+    // `OR IGNORE` again: a retransmitted frame must not reset a transfer that is already
+    // half-done, and the row that exists is the one that knows how far it got.
+    for attachment in &message.attachments {
+        tx.execute(
+            "INSERT OR IGNORE INTO attachments \
+               (id, message_id, peer_id, outgoing, name, size, kind, state, transferred, sha256, \
+                path, created_at_ms) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            params![
+                attachment.id.to_string(),
+                attachment.message_id.to_string(),
+                attachment.peer.to_string(),
+                i64::from(attachment.direction.is_outgoing()),
+                attachment.name.as_str(),
+                i64::try_from(attachment.size).unwrap_or(i64::MAX),
+                attachment.kind.as_str(),
+                attachment.state.as_str(),
+                i64::try_from(attachment.transferred).unwrap_or(i64::MAX),
+                attachment.sha256.map(Sha256::to_hex),
+                attachment.path.as_deref(),
+                attachment.created_at.as_i64(),
+            ],
+        )
+        .map_err(sqlite_error)?;
+    }
 
     if inserted && message.is_unread_incoming() {
         tx.execute(
@@ -777,6 +1019,7 @@ fn mark_message_delivered(
 /// order the interface draws, so the outbox is drained in exactly the order the messages appear.
 fn next_outbox_message(
     conn: &Connection,
+    files: &Path,
     device_id: DeviceId,
 ) -> Result<Option<ChatMessage>, StorageError> {
     let row = conn
@@ -791,7 +1034,142 @@ fn next_outbox_message(
         )
         .optional()
         .map_err(sqlite_error)?;
-    row.map(MessageRow::into_message).transpose()
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let mut message = row.into_message()?;
+    load_attachments(conn, files, std::slice::from_mut(&mut message))?;
+    Ok(Some(message))
+}
+
+/// Outgoing messages with an attachment that is not finished, oldest first.
+///
+/// The recipient's copy of this metadata is what a resumed transfer is checked against, and the
+/// message is carried whole — every attachment, finished or not — because that is how it was
+/// announced and a partial list would describe a different message.
+fn messages_with_unfinished_attachments(
+    conn: &Connection,
+    files: &Path,
+    device_id: DeviceId,
+) -> Result<Vec<ChatMessage>, StorageError> {
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT {MESSAGE_COLUMNS} FROM messages m \
+             WHERE m.peer_id = ?1 AND m.outgoing = 1 \
+               AND EXISTS (SELECT 1 FROM attachments a \
+                            WHERE a.message_id = m.id AND a.outgoing = 1 \
+                              AND a.state IN ('queued', 'sending')) \
+             ORDER BY m.sent_at_ms, m.id"
+        ))
+        .map_err(sqlite_error)?;
+    let rows = stmt
+        .query_map(params![device_id.to_string()], MessageRow::read)
+        .map_err(sqlite_error)?;
+    let mut messages = rows
+        .collect::<rusqlite::Result<Vec<MessageRow>>>()
+        .map_err(sqlite_error)?
+        .into_iter()
+        .map(MessageRow::into_message)
+        .collect::<Result<Vec<ChatMessage>, StorageError>>()?;
+    load_attachments(conn, files, &mut messages)?;
+    Ok(messages)
+}
+
+fn read_attachment(
+    conn: &Connection,
+    files: &Path,
+    id: AttachmentId,
+) -> Result<Option<Attachment>, StorageError> {
+    let row = conn
+        .query_row(
+            &format!("SELECT {ATTACHMENT_COLUMNS} FROM attachments WHERE id = ?1"),
+            params![id.to_string()],
+            AttachmentRow::read,
+        )
+        .optional()
+        .map_err(sqlite_error)?;
+    row.map(|row| row.into_attachment(files)).transpose()
+}
+
+fn set_attachment_progress(
+    conn: &Connection,
+    id: AttachmentId,
+    transferred: u64,
+) -> Result<(), StorageError> {
+    conn.execute(
+        "UPDATE attachments SET transferred = ?2 WHERE id = ?1",
+        params![
+            id.to_string(),
+            i64::try_from(transferred).unwrap_or(i64::MAX)
+        ],
+    )
+    .map_err(sqlite_error)?;
+    Ok(())
+}
+
+fn set_attachment_state(
+    conn: &Connection,
+    id: AttachmentId,
+    state: AttachmentState,
+) -> Result<(), StorageError> {
+    conn.execute(
+        "UPDATE attachments SET state = ?2 WHERE id = ?1",
+        params![id.to_string(), state.as_str()],
+    )
+    .map_err(sqlite_error)?;
+    Ok(())
+}
+
+fn set_attachment_digest(
+    conn: &Connection,
+    id: AttachmentId,
+    sha256: Sha256,
+) -> Result<(), StorageError> {
+    conn.execute(
+        "UPDATE attachments SET sha256 = ?2 WHERE id = ?1",
+        params![id.to_string(), sha256.to_hex()],
+    )
+    .map_err(sqlite_error)?;
+    Ok(())
+}
+
+/// Removes the stored files of attachments whose rows are about to disappear.
+///
+/// Best effort by design: a file that cannot be deleted is a few kilobytes left on disk, while
+/// failing the deletion of the history rows that referenced it would be a broken promise.
+fn remove_attachment_files(files: &Path, ids: &[String]) {
+    for raw in ids {
+        let Ok(id) = raw.parse::<AttachmentId>() else {
+            continue;
+        };
+        let directory = files.join(id.to_string());
+        if !directory.exists() {
+            continue;
+        }
+        if let Err(error) = fs::remove_dir_all(&directory) {
+            tracing::debug!(%error, path = %directory.display(), "could not delete a stored attachment");
+        }
+    }
+}
+
+/// The identifiers of every attachment of a peer, read before their rows are deleted.
+fn attachment_ids_for_peer(
+    conn: &Connection,
+    device_id: Option<DeviceId>,
+) -> Result<Vec<String>, StorageError> {
+    let (sql, args): (&str, Vec<String>) = match device_id {
+        Some(id) => (
+            "SELECT id FROM attachments WHERE peer_id = ?1",
+            vec![id.to_string()],
+        ),
+        None => ("SELECT id FROM attachments", Vec::new()),
+    };
+    let mut stmt = conn.prepare(sql).map_err(sqlite_error)?;
+    let rows = stmt
+        .query_map(params_from_iter(args.iter()), |row| row.get::<_, String>(0))
+        .map_err(sqlite_error)?;
+    rows.collect::<rusqlite::Result<Vec<String>>>()
+        .map_err(sqlite_error)
 }
 
 /// The inverse of "written to a socket": everything in flight for a peer goes back to the
@@ -842,6 +1220,7 @@ fn requeue_all_pending(conn: &Connection) -> Result<u32, StorageError> {
 
 fn history_page(
     conn: &Connection,
+    files: &Path,
     device_id: DeviceId,
     before: Option<HistoryCursor>,
     limit: u32,
@@ -868,17 +1247,26 @@ fn history_page(
     let raw = rows
         .collect::<rusqlite::Result<Vec<MessageRow>>>()
         .map_err(sqlite_error)?;
-    raw.into_iter().map(MessageRow::into_message).collect()
+    let mut messages = raw
+        .into_iter()
+        .map(MessageRow::into_message)
+        .collect::<Result<Vec<ChatMessage>, StorageError>>()?;
+    load_attachments(conn, files, &mut messages)?;
+    Ok(messages)
 }
 
-fn clear_history(conn: &mut Connection) -> Result<u64, StorageError> {
+fn clear_history(conn: &mut Connection, files: &Path) -> Result<u64, StorageError> {
     let tx = conn.transaction().map_err(sqlite_error)?;
+    // Read the attachment identifiers first: the rows cascade away with the messages, and the
+    // files they name would otherwise stay on disk for ever.
+    let ids = attachment_ids_for_peer(&tx, None)?;
     let deleted = tx
         .execute("DELETE FROM messages", [])
         .map_err(sqlite_error)?;
     tx.execute("UPDATE peers SET unread = 0", [])
         .map_err(sqlite_error)?;
     tx.commit().map_err(sqlite_error)?;
+    remove_attachment_files(files, &ids);
     Ok(u64::try_from(deleted).unwrap_or(u64::MAX))
 }
 
@@ -1035,6 +1423,53 @@ impl Store for SqliteStore {
     async fn clear_history(&self) -> Result<u64, StorageError> {
         self.call(Request::ClearHistory).await
     }
+
+    fn files_root(&self) -> &Path {
+        &self.files_root
+    }
+
+    async fn attachment(&self, id: AttachmentId) -> Result<Option<Attachment>, StorageError> {
+        self.call(|reply| Request::Attachment { id, reply }).await
+    }
+
+    async fn messages_with_unfinished_attachments(
+        &self,
+        device_id: DeviceId,
+    ) -> Result<Vec<ChatMessage>, StorageError> {
+        self.call(|reply| Request::UnfinishedAttachments { device_id, reply })
+            .await
+    }
+
+    async fn set_attachment_progress(
+        &self,
+        id: AttachmentId,
+        transferred: u64,
+    ) -> Result<(), StorageError> {
+        self.call(|reply| Request::SetAttachmentProgress {
+            id,
+            transferred,
+            reply,
+        })
+        .await
+    }
+
+    async fn set_attachment_state(
+        &self,
+        id: AttachmentId,
+        state: AttachmentState,
+    ) -> Result<(), StorageError> {
+        self.call(|reply| Request::SetAttachmentState { id, state, reply })
+            .await
+    }
+
+    async fn set_attachment_digest(
+        &self,
+        id: AttachmentId,
+        sha256: Sha256,
+    ) -> Result<(), StorageError> {
+        self.call(|reply| Request::SetAttachmentDigest { id, sha256, reply })
+            .await
+    }
 }
 
 impl Drop for SqliteStore {
@@ -1092,7 +1527,8 @@ mod tests {
             id: MessageId::generate(),
             peer,
             direction: Direction::Incoming,
-            body: MessageBody::parse("incoming").expect("body"),
+            body: Some(MessageBody::parse("incoming").expect("body")),
+            attachments: Vec::new(),
             sent_at: UnixMillis(sent_at_ms),
             received_at: UnixMillis(sent_at_ms),
             delivered_at: None,
@@ -1106,7 +1542,8 @@ mod tests {
             id: MessageId::generate(),
             peer,
             direction: Direction::Outgoing,
-            body: MessageBody::parse("outgoing").expect("body"),
+            body: Some(MessageBody::parse("outgoing").expect("body")),
+            attachments: Vec::new(),
             sent_at: UnixMillis(sent_at_ms),
             received_at: UnixMillis(sent_at_ms),
             delivered_at: None,
@@ -1744,6 +2181,7 @@ mod tests {
         let store = SqliteStore {
             sender: Some(sender),
             writer: None,
+            files_root: std::path::PathBuf::from("."),
         };
 
         assert!(matches!(

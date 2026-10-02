@@ -60,9 +60,9 @@ watch(peer, (current) => {
   if (peerId.value !== null && current === null) void router.replace({ name: ROUTE.chat });
 });
 
-async function onSend(body: string): Promise<void> {
+async function onSend(body: string, files: readonly string[]): Promise<void> {
   try {
-    await chat.send(body);
+    await chat.send(body, files);
   } catch (error) {
     console.error('[localme] the message could not be sent', error);
     ui.fail('error.network');

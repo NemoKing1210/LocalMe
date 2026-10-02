@@ -32,7 +32,9 @@
 
 Launch LocalMe on two computers that share a network and they find each other. Messages are stored
 locally on both ends, in SQLite, and one written while the other person is away waits in an outbox
-and is sent, in order, as soon as they are back. The interface exists in English, Russian, Spanish,
+and is sent, in order, as soon as they are back. Files can be sent with a message or on their own —
+picked or dropped onto the window — and a transfer that is interrupted by a disconnect, a sleep or
+a restart continues where it stopped. The interface exists in English, Russian, Spanish,
 German, French, Portuguese and Chinese. Built with
 [Tauri 2](https://tauri.app) (Rust) and Vue 3. Architecture for contributors and coding agents:
 [AGENTS.md](AGENTS.md) and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
@@ -117,21 +119,26 @@ many bytes of UTF-8. A frame is at most 64 KiB, and a declared length outside th
 the connection before anything is allocated for it.
 
 ```jsonc
-{ "v": 1, "t": "heartbeat", "seq": 7 }
+{ "v": 2, "t": "heartbeat", "seq": 7 }
 ```
 
 `v` is the protocol version, `t` the frame type.
 
-| `t`         | Direction         | Fields                                                            | Meaning                                              |
-| ----------- | ----------------- | ----------------------------------------------------------------- | ---------------------------------------------------- |
-| `hello`     | dialer → acceptor | `device_id, nickname, avatar_seed, listen_port, protocol_version` | open a session                                       |
-| `welcome`   | acceptor → dialer | the same shape                                                    | accept, and exchange identity symmetrically          |
-| `heartbeat` | both              | `seq`                                                             | liveness, one frame every 5 s                        |
-| `chat`      | both              | `id, body`                                                        | a message; the sender is the connection, not a field |
-| `chat_ack`  | both              | `id`                                                              | "stored here" — sent only after the row is committed |
-| `profile`   | both              | `nickname, avatar_seed`                                           | a rename, broadcast to every live connection         |
-| `goodbye`   | both              | `reason`                                                          | `shutdown`, `superseded` or `error`                  |
-| `error`     | both              | `code, message`                                                   | a protocol error, then the connection closes         |
+| `t`            | Direction          | Fields                                                            | Meaning                                                                         |
+| -------------- | ------------------ | ----------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `hello`        | dialer → acceptor  | `device_id, nickname, avatar_seed, listen_port, protocol_version` | open a session                                                                  |
+| `welcome`      | acceptor → dialer  | the same shape                                                    | accept, and exchange identity symmetrically                                     |
+| `heartbeat`    | both               | `seq`                                                             | liveness, one frame every 5 s                                                   |
+| `chat`         | both               | `id, text?, attachments`                                          | a message, with any files it carries; the sender is the connection, not a field |
+| `chat_ack`     | both               | `id`                                                              | "stored here" — sent only after the row is committed                            |
+| `file_chunk`   | sender → recipient | `attachment, offset, data` (base64)                               | one slice of a file, at an absolute offset                                      |
+| `file_done`    | sender → recipient | `attachment, sha256`                                              | the last chunk is out, with the digest of the whole file                        |
+| `file_ack`     | recipient → sender | `attachment, received, state`                                     | where the recipient really is, and whether the file is kept                     |
+| `file_cancel`  | both               | `attachment, reason`                                              | the transfer is over and will not resume by itself                              |
+| `file_request` | recipient → sender | `attachment`                                                      | "send me this file" — a retry after a failure                                   |
+| `profile`      | both               | `nickname, avatar_seed`                                           | a rename, broadcast to every live connection                                    |
+| `goodbye`      | both               | `reason`                                                          | `shutdown`, `superseded` or `error`                                             |
+| `error`        | both               | `code, message`                                                   | a protocol error, then the connection closes                                    |
 
 A peer is online when discovery has seen it, a connection to it is established and it is still
 sending heartbeats; silence for 15 s (three intervals) marks it offline. When two peers dial each
@@ -147,6 +154,16 @@ out, oldest first, once a connection exists. Draining is paced to stay under the
 rate limit, and a connection that ends before the acknowledgement returns its in-flight rows to the
 outbox, so nothing is lost and the backlog survives a restart. A message that had to wait shows two
 dates — when it was written and when it was delivered — because both come from the same local clock.
+
+A file is announced by the message that carries it and then streamed as 32 KiB chunks. **The
+recipient's own file is the authority on how much has arrived**: a chunk that does not continue it
+exactly is refused with the offset the file really ends at, and the sender rewinds — which is what
+makes a transfer that is interrupted by a disconnect, a sleep or a restart continue from where it
+stopped. `file_done` carries the SHA-256 of the whole file, and the recipient checks what it
+assembled against it before renaming `.part` into place; a file that does not match is deleted
+rather than kept. Transfers are paced below the recipient's inbound budget, because a frame the
+recipient refuses closes the connection and a transfer that can never finish is worse than a slow
+one.
 
 Discovery is DNS-SD over mDNS (`_localme._tcp.local.`), with a UDP beacon on port 47821 —
 broadcast and multicast — for networks that filter mDNS. Peers announced by both mechanisms are

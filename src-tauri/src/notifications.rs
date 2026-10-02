@@ -2,7 +2,7 @@
 //! is unmuted, the message is incoming, and the user is not already looking at that conversation.
 //! Desktop notifications do not report clicks back, so the last-notified peer is recorded instead.
 
-use localme_core::domain::message::{ChatMessage, Direction};
+use localme_core::domain::message::{ChatMessage, Direction, MessagePreview};
 use localme_core::domain::peer::PeerView;
 use tauri::Runtime;
 use tauri_plugin_notification::NotificationExt;
@@ -46,10 +46,15 @@ pub fn show_message<R: Runtime>(
 
     let settings = state.settings_snapshot();
     let labels = state.labels_snapshot();
-    let body = if settings.notifications.show_text {
-        message.body.as_str().to_owned()
-    } else {
+    let body = if !settings.notifications.show_text {
         labels.new_message
+    } else {
+        match message.body.as_ref() {
+            Some(text) => text.as_str().to_owned(),
+            // A message with no text has nothing to show: name the file, which is what the
+            // reader would otherwise be guessing at.
+            None => MessagePreview::for_message(message).body,
+        }
     };
 
     let mut builder = app

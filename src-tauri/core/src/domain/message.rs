@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::domain::attachment::{Attachment, AttachmentMeta};
 use crate::domain::clock::UnixMillis;
 use crate::domain::ids::{DeviceId, MessageId};
 use crate::error::DomainError;
@@ -167,6 +168,48 @@ impl MessagePreview {
             body: summarise(body.as_str()),
         }
     }
+
+    /// The one line the peer list shows for a message that may be text, files, or both.
+    ///
+    /// The paperclip and the file name are deliberately language-free: a preview is generated in
+    /// the core, which has no catalogue, and every translation of "file" would still have to fit
+    /// the same one line.
+    #[must_use]
+    pub fn of(
+        direction: Direction,
+        text: Option<&str>,
+        first_file: Option<&str>,
+        file_count: usize,
+    ) -> Self {
+        let text = text.unwrap_or("");
+        let body = match first_file {
+            None => summarise(text),
+            Some(name) => {
+                let more = if file_count > 1 {
+                    format!(" +{}", file_count - 1)
+                } else {
+                    String::new()
+                };
+                let files = format!("📎 {name}{more}");
+                if text.trim().is_empty() {
+                    summarise(&files)
+                } else {
+                    summarise(&format!("{text} · {files}"))
+                }
+            }
+        };
+        Self { direction, body }
+    }
+
+    #[must_use]
+    pub fn for_message(message: &ChatMessage) -> Self {
+        Self::of(
+            message.direction,
+            message.body.as_ref().map(MessageBody::as_str),
+            message.attachments.first().map(|file| file.name.as_str()),
+            message.attachments.len(),
+        )
+    }
 }
 
 /// Cuts `text` to [`MAX_PREVIEW_CHARS`], marking the cut so a clipped word is not read as the
@@ -192,7 +235,12 @@ pub struct ChatMessage {
     /// Always the *other* device.
     pub peer: DeviceId,
     pub direction: Direction,
-    pub body: MessageBody,
+    /// The text, when the message has any. A message that carries only files has none, so the
+    /// field is optional rather than an empty string: "no text" and "empty text" are the same
+    /// thing to a reader and only one of them can be a `MessageBody`.
+    pub body: Option<MessageBody>,
+    /// Files attached to this message, in the order the sender listed them.
+    pub attachments: Vec<Attachment>,
     /// Sender's wall clock, displayed as the message time.
     pub sent_at: UnixMillis,
     /// Receiver's wall clock, used to order messages whose `sent_at` is untrustworthy.
@@ -210,6 +258,12 @@ impl ChatMessage {
     #[must_use]
     pub const fn is_unread_incoming(&self) -> bool {
         matches!(self.direction, Direction::Incoming) && !self.read
+    }
+
+    /// The attachment metadata as it travels in a `chat` frame.
+    #[must_use]
+    pub fn metas(&self) -> Vec<AttachmentMeta> {
+        self.attachments.iter().map(Attachment::meta).collect()
     }
 }
 
@@ -290,6 +344,18 @@ mod tests {
         let body = MessageBody::parse(&"я".repeat(MAX_BODY_CHARS)).expect("valid");
         assert_eq!(body.char_count(), MAX_BODY_CHARS);
         assert_eq!(body.as_str().len(), MAX_BODY_CHARS * 2);
+    }
+
+    #[test]
+    fn a_preview_of_a_file_message_names_the_file_instead_of_the_body() {
+        let preview = MessagePreview::of(Direction::Incoming, None, Some("holiday.jpg"), 1);
+        assert_eq!(preview.body, "📎 holiday.jpg");
+
+        let many = MessagePreview::of(Direction::Outgoing, Some("look"), Some("a.zip"), 3);
+        assert_eq!(many.body, "look · 📎 a.zip +2");
+
+        let text = MessagePreview::of(Direction::Outgoing, Some("hello"), None, 0);
+        assert_eq!(text.body, "hello");
     }
 
     #[test]

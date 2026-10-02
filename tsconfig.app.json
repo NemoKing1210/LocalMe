@@ -9,7 +9,7 @@
     "paths": {
       "@/*": ["./src/*"]
     },
-    "types": ["vite/client"],
+    "types": ["vite/client", "unplugin-icons/types/vue"],
 
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,

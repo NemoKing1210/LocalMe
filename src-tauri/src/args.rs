@@ -1,7 +1,7 @@
 //! Argument handling for the IPC surface. Each error's `field` is part of the contract: it names
 //! the camelCase JavaScript argument the interface uses, so the interface can mark the right input.
 
-use localme_core::domain::ids::DeviceId;
+use localme_core::domain::ids::{AttachmentId, DeviceId};
 use localme_core::domain::message::MessageBody;
 use localme_core::domain::nickname::Nickname;
 use localme_core::ports::store::HistoryCursor;
@@ -57,6 +57,15 @@ pub fn message_body(value: &str) -> Result<MessageBody, ApiError> {
             ApiError::invalid_input("body", error)
         }
     })
+}
+
+/// # Errors
+///
+/// [`ApiError::InvalidInput`] naming the `attachmentId` argument.
+pub fn attachment_id(value: &str) -> Result<AttachmentId, ApiError> {
+    value
+        .parse()
+        .map_err(|error| ApiError::invalid_input("attachmentId", error))
 }
 
 #[derive(Debug, serde::Deserialize)]

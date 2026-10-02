@@ -6,15 +6,19 @@
 //! acknowledgement is sent only after the received row is committed.
 
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
+use std::io;
 use std::net::SocketAddr;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio::task::JoinHandle;
 
+use crate::domain::attachment::{Attachment, AttachmentMeta, AttachmentState, FileName, Sha256};
 use crate::domain::clock::{Clock, UnixMillis};
-use crate::domain::ids::{DeviceId, MessageId};
+use crate::domain::ids::{AttachmentId, DeviceId, MessageId};
 use crate::domain::message::{ChatMessage, Direction, MessageBody, MessagePreview, MessageStatus};
 use crate::domain::nickname::Nickname;
 use crate::domain::peer::{Handshake, PeerProfile, PeerView};
@@ -23,11 +27,14 @@ use crate::error::CoreError;
 use crate::ports::discovery::{DiscoveredPeer, DiscoveryEvent};
 use crate::ports::store::{HistoryCursor, KnownDevice, META_NICKNAME, Store, StoredPeer};
 use crate::protocol::limits::{
-    COMMAND_CHANNEL_CAPACITY, DIAL_RETRY_DELAY, EVENT_CHANNEL_CAPACITY, HEARTBEAT_TIMEOUT,
-    MAX_PEERS, OUTBOX_BURST, OUTBOX_RATE_PER_SECOND, PRESENCE_TICK_INTERVAL, PROTOCOL_VERSION,
-    SHUTDOWN_DRAIN_TIMEOUT,
+    COMMAND_CHANNEL_CAPACITY, DIAL_RETRY_DELAY, EVENT_CHANNEL_CAPACITY, FILE_ACK_EVERY_BYTES,
+    FILE_CHUNK_BYTES, FILE_SEND_BURST_BYTES, FILE_SEND_RATE_PER_SECOND, HEARTBEAT_TIMEOUT,
+    MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS_PER_MESSAGE, MAX_PEERS, OUTBOX_BURST,
+    OUTBOX_RATE_PER_SECOND, PRESENCE_TICK_INTERVAL, PROTOCOL_VERSION, SHUTDOWN_DRAIN_TIMEOUT,
+    TRANSFER_CHUNKS_PER_TURN, TRANSFER_POLL,
 };
-use crate::protocol::{Frame, GoodbyeReason, TokenBucket};
+use crate::protocol::{FileAckState, FileCancelReason, Frame, GoodbyeReason, TokenBucket};
+use crate::services::attachment::{self, IncomingTransfer, OutgoingTransfer};
 use crate::transport::connection::{self, ConnectionContext};
 use crate::transport::{DisconnectReason, PeerLink, Role, TransportEvent, is_preferred};
 
@@ -76,8 +83,22 @@ pub enum SessionCommand {
     },
     SendMessage {
         peer: DeviceId,
-        body: MessageBody,
+        text: Option<MessageBody>,
+        files: Vec<PathBuf>,
         reply: oneshot::Sender<Result<ChatMessage, CoreError>>,
+    },
+    /// One attachment row, for the host's open/reveal/save commands.
+    Attachment {
+        id: AttachmentId,
+        reply: oneshot::Sender<Option<Attachment>>,
+    },
+    CancelAttachment {
+        id: AttachmentId,
+        reply: oneshot::Sender<()>,
+    },
+    RetryAttachment {
+        id: AttachmentId,
+        reply: oneshot::Sender<()>,
     },
     History {
         peer: DeviceId,
@@ -166,21 +187,46 @@ impl SessionHandle {
     /// Stores the message and hands it to the peer if it is reachable. A peer that is offline
     /// is not an error: the row stays in the outbox and is sent, in order, once the peer is back.
     ///
+    /// `files` are paths on *this* machine; the core stats each one, so a caller cannot announce
+    /// a size it has not checked.
+    ///
     /// # Errors
     ///
     /// [`CoreError::UnknownPeer`] if the device is not in the list, [`CoreError::Storage`] if the
-    /// message could not be written down at all.
+    /// message could not be written down at all, and [`CoreError::Domain`] if the message carries
+    /// neither text nor a usable file.
     pub async fn send_message(
         &self,
         peer: DeviceId,
-        body: MessageBody,
+        text: Option<MessageBody>,
+        files: Vec<PathBuf>,
     ) -> Result<ChatMessage, CoreError> {
         let (reply, receiver) = oneshot::channel();
         self.commands
-            .send(SessionCommand::SendMessage { peer, body, reply })
+            .send(SessionCommand::SendMessage {
+                peer,
+                text,
+                files,
+                reply,
+            })
             .await
             .map_err(|_| CoreError::ShuttingDown)?;
         receiver.await.map_err(|_| CoreError::ShuttingDown)?
+    }
+
+    pub async fn attachment(&self, id: AttachmentId) -> Result<Option<Attachment>, CoreError> {
+        self.request(|reply| SessionCommand::Attachment { id, reply })
+            .await
+    }
+
+    pub async fn cancel_attachment(&self, id: AttachmentId) -> Result<(), CoreError> {
+        self.request(|reply| SessionCommand::CancelAttachment { id, reply })
+            .await
+    }
+
+    pub async fn retry_attachment(&self, id: AttachmentId) -> Result<(), CoreError> {
+        self.request(|reply| SessionCommand::RetryAttachment { id, reply })
+            .await
     }
 
     pub async fn history(
@@ -266,6 +312,15 @@ struct PeerEntry {
     /// Set while this conversation may still have messages waiting to be written out. It keeps
     /// the presence tick from querying the database for peers with nothing in their outbox.
     outbox_pending: bool,
+    /// The file being sent to this peer right now. One at a time per peer: the disk is the
+    /// bottleneck, and a second stream would only make both slower without changing anything a
+    /// user can see.
+    transfer: Option<OutgoingTransfer>,
+    /// Files arriving from this peer, by identifier. A transfer that is interrupted is dropped
+    /// here and picked up again from the part file on disk.
+    incoming: HashMap<AttachmentId, IncomingTransfer>,
+    /// The file budget: the pace is ours, the limit is the recipient's.
+    file_budget: TokenBucket,
 }
 
 impl PeerEntry {
@@ -281,6 +336,13 @@ impl PeerEntry {
             last_dial_attempt: None,
             send_budget: TokenBucket::new(OUTBOX_BURST, OUTBOX_RATE_PER_SECOND, Instant::now()),
             outbox_pending: false,
+            transfer: None,
+            incoming: HashMap::new(),
+            file_budget: TokenBucket::new(
+                FILE_SEND_BURST_BYTES,
+                FILE_SEND_RATE_PER_SECOND,
+                Instant::now(),
+            ),
         }
     }
 
@@ -305,6 +367,21 @@ impl PeerEntry {
         });
     }
 
+    /// Opens, or adopts, the part file for an incoming attachment.
+    ///
+    /// Adoption is the whole point: a part file left by a disconnect or a crash is the most
+    /// precise statement of how much arrived, and a second transfer for the same attachment must
+    /// continue it rather than replace it. `Ok` also covers a transfer that is already open.
+    fn ensure_incoming(&mut self, attachment: &Attachment, files_root: &Path) -> io::Result<()> {
+        match self.incoming.entry(attachment.id) {
+            Entry::Occupied(_) => Ok(()),
+            Entry::Vacant(slot) => {
+                slot.insert(IncomingTransfer::open(attachment, files_root)?);
+                Ok(())
+            }
+        }
+    }
+
     fn dial_order(&self) -> Vec<SocketAddr> {
         let Some(remembered) = self.stored.last_address.as_deref() else {
             return self.addresses.clone();
@@ -325,6 +402,27 @@ impl PeerEntry {
     }
 }
 
+/// Results of the two things a transfer cannot do on the actor: read a whole file to digest it,
+/// and read a whole file to check it.
+///
+/// They arrive on their own channel so the actor keeps serving messages, heartbeats and the
+/// store while a half-gigabyte is being read on a blocking task.
+#[derive(Debug)]
+enum Prep {
+    /// The sender's digest is ready, so the transfer can start (or fail, if the source is gone).
+    SenderDigest {
+        peer: DeviceId,
+        attachment: AttachmentId,
+        digest: Result<Sha256, String>,
+    },
+    /// The recipient has assembled the whole file; the digest decides whether it is kept.
+    ReceiverDigest {
+        peer: DeviceId,
+        attachment: AttachmentId,
+        digest: Result<Sha256, String>,
+    },
+}
+
 pub async fn spawn<C: Clock, S: Store>(
     config: SessionConfig,
     clock: C,
@@ -334,6 +432,7 @@ pub async fn spawn<C: Clock, S: Store>(
     let (transport_tx, transport_rx) = mpsc::channel(COMMAND_CHANNEL_CAPACITY);
     let (discovery_tx, discovery_rx) = mpsc::channel(COMMAND_CHANNEL_CAPACITY);
     let (events_tx, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
+    let (prep_tx, prep_rx) = mpsc::channel(4);
 
     let connection = Arc::new(ConnectionContext::new(
         transport_tx.clone(),
@@ -348,6 +447,7 @@ pub async fn spawn<C: Clock, S: Store>(
         events: events_tx.clone(),
         transport: transport_tx.clone(),
         connection: connection.clone(),
+        prep: prep_tx,
         peers: HashMap::new(),
         dial_queue: Vec::new(),
         active_dials: 0,
@@ -360,7 +460,9 @@ pub async fn spawn<C: Clock, S: Store>(
         events: events_tx,
     };
     let task = tokio::spawn(async move {
-        session.run(commands_rx, transport_rx, discovery_rx).await;
+        session
+            .run(commands_rx, transport_rx, discovery_rx, prep_rx)
+            .await;
     });
 
     Ok(SessionRuntime {
@@ -380,6 +482,8 @@ struct Session<C: Clock, S: Store> {
     events: broadcast::Sender<CoreEvent>,
     transport: mpsc::Sender<TransportEvent>,
     connection: Arc<ConnectionContext>,
+    /// See [`Prep`].
+    prep: mpsc::Sender<Prep>,
     peers: HashMap<DeviceId, PeerEntry>,
     dial_queue: Vec<DeviceId>,
     active_dials: usize,
@@ -402,12 +506,18 @@ impl<C: Clock, S: Store> Session<C, S> {
         mut commands: mpsc::Receiver<SessionCommand>,
         mut transport: mpsc::Receiver<TransportEvent>,
         mut discovery: mpsc::Receiver<DiscoveryEvent>,
+        mut prep: mpsc::Receiver<Prep>,
     ) {
         let mut ticker = tokio::time::interval(PRESENCE_TICK_INTERVAL);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         ticker.tick().await;
 
         loop {
+            // Recomputed every turn: a transfer schedules its own next chunk, so the loop sleeps
+            // exactly as long as the pacing asks and no longer. With nothing in flight the branch
+            // below is disabled and the deadline is never used.
+            let deadline = self.transfer_deadline();
+
             tokio::select! {
                 command = commands.recv() => {
                     match command {
@@ -438,6 +548,17 @@ impl<C: Clock, S: Store> Session<C, S> {
                     }
                 }
 
+                prepared = prep.recv() => {
+                    match prepared {
+                        Some(prepared) => self.on_prepared(prepared).await,
+                        None => break,
+                    }
+                }
+
+                _ = tokio::time::sleep_until(deadline.unwrap_or_else(far_future)), if deadline.is_some() => {
+                    self.pump_transfers().await;
+                }
+
                 _ = ticker.tick() => self.tick().await,
             }
         }
@@ -460,8 +581,34 @@ impl<C: Clock, S: Store> Session<C, S> {
                 let _ = reply.send(self.config.own.clone());
             }
 
-            SessionCommand::SendMessage { peer, body, reply } => {
-                let _ = reply.send(self.send_message(peer, body).await);
+            SessionCommand::SendMessage {
+                peer,
+                text,
+                files,
+                reply,
+            } => {
+                let _ = reply.send(self.send_message(peer, text, files).await);
+            }
+
+            SessionCommand::Attachment { id, reply } => {
+                let attachment = match self.store.attachment(id).await {
+                    Ok(attachment) => attachment,
+                    Err(error) => {
+                        tracing::warn!(%error, "failed to read an attachment");
+                        None
+                    }
+                };
+                let _ = reply.send(attachment);
+            }
+
+            SessionCommand::CancelAttachment { id, reply } => {
+                self.cancel_attachment(id).await;
+                let _ = reply.send(());
+            }
+
+            SessionCommand::RetryAttachment { id, reply } => {
+                self.retry_attachment(id).await;
+                let _ = reply.send(());
             }
 
             SessionCommand::History {
@@ -512,6 +659,11 @@ impl<C: Clock, S: Store> Session<C, S> {
                     if let Some(dial) = entry.dial.take() {
                         dial.abort();
                     }
+                    // A transfer belongs to the conversation that is going away: the handles are
+                    // dropped (which flushes what has been written) and the files stay where they
+                    // are, because the rows that name them are only deleted when the history is.
+                    entry.transfer = None;
+                    entry.incoming.clear();
                     // The stored row stays, so the settings screen can still list and restore
                     // the device: that is what makes "forgotten" different from "never seen".
                     if let Err(error) = self.store.forget_peer(peer, delete_history).await {
@@ -563,6 +715,8 @@ impl<C: Clock, S: Store> Session<C, S> {
                 for entry in self.peers.values_mut() {
                     entry.stored.unread = 0;
                     entry.stored.last_message = None;
+                    entry.transfer = None;
+                    entry.incoming.clear();
                 }
                 self.emit_peers();
                 let _ = reply.send(deleted);
@@ -605,10 +759,15 @@ impl<C: Clock, S: Store> Session<C, S> {
     /// Writes the message down first, then tries to hand it to the peer. The order matters: a
     /// message is never lost because the socket failed, and a peer that is offline is not an
     /// error at all — the row waits in the outbox and is retried in order when it comes back.
+    ///
+    /// Every attached path is stat'ed here. The interface cannot announce a size it has not
+    /// checked, and a file that is a directory, missing or above the cap is refused before a row
+    /// exists rather than failing halfway through a transfer.
     async fn send_message(
         &mut self,
         peer: DeviceId,
-        body: MessageBody,
+        text: Option<MessageBody>,
+        files: Vec<PathBuf>,
     ) -> Result<ChatMessage, CoreError> {
         let Some(entry) = self.peers.get(&peer) else {
             return Err(CoreError::UnknownPeer(peer.to_string()));
@@ -618,11 +777,18 @@ impl<C: Clock, S: Store> Session<C, S> {
         }
 
         let now = self.clock.wall();
+        let id = MessageId::generate();
+        let attachments = resolve_files(&peer, id, &files, now)?;
+        if text.is_none() && attachments.is_empty() {
+            return Err(CoreError::Domain(crate::error::DomainError::EmptyMessage));
+        }
+
         let message = ChatMessage {
-            id: MessageId::generate(),
+            id,
             peer,
             direction: Direction::Outgoing,
-            body,
+            body: text,
+            attachments,
             sent_at: now,
             received_at: now,
             delivered_at: None,
@@ -637,7 +803,7 @@ impl<C: Clock, S: Store> Session<C, S> {
 
         // This send is now the newest row in the conversation, so it is what the list shows.
         if let Some(entry) = self.peers.get_mut(&peer) {
-            entry.stored.last_message = Some(MessagePreview::new(&message.body, message.direction));
+            entry.stored.last_message = Some(MessagePreview::for_message(&message));
             entry.outbox_pending = true;
             entry.note_activity(message.sent_at.as_i64());
         }
@@ -657,6 +823,8 @@ impl<C: Clock, S: Store> Session<C, S> {
 
         self.emit_message(peer, &message);
         self.emit_peers();
+        // The metadata is on the socket (or waiting with it); the bytes can follow.
+        self.maybe_start_transfer(peer).await;
         Ok(message)
     }
 
@@ -708,7 +876,8 @@ impl<C: Clock, S: Store> Session<C, S> {
             // row.
             if let Err(error) = link.try_send(Frame::Chat {
                 id: message.id,
-                body: message.body.clone(),
+                text: message.body.clone(),
+                attachments: message.metas(),
             }) {
                 tracing::debug!(%peer, %error, "an outbox message could not be queued");
                 return handed_off;
@@ -782,8 +951,8 @@ impl<C: Clock, S: Store> Session<C, S> {
                 remote,
             } => self.on_connected(role, handshake, link, remote).await,
             TransportEvent::Frame { peer, frame } => self.on_frame(peer, frame).await,
-            TransportEvent::Disconnected { peer, reason } => {
-                self.on_disconnected(peer, reason).await;
+            TransportEvent::Disconnected { peer, link, reason } => {
+                self.on_disconnected(peer, link, reason).await;
             }
             TransportEvent::DialFailed { peer, reason } => {
                 self.active_dials = self.active_dials.saturating_sub(1);
@@ -868,11 +1037,17 @@ impl<C: Clock, S: Store> Session<C, S> {
             entry.outbox_pending = true;
         }
         let _ = self.pump_outbox(peer).await;
+        // Files that were interrupted pick up where the recipient's own file ends.
+        self.resume_attachments(peer).await;
     }
 
     async fn on_frame(&mut self, peer: DeviceId, frame: Frame) {
         match frame {
-            Frame::Chat { id, body } => self.on_chat(peer, id, body).await,
+            Frame::Chat {
+                id,
+                text,
+                attachments,
+            } => self.on_chat(peer, id, text, attachments).await,
 
             Frame::ChatAck { id } => {
                 // The sender's own clock, read now, is the second date it prints: the moment it
@@ -887,7 +1062,31 @@ impl<C: Clock, S: Store> Session<C, S> {
                     return;
                 }
                 self.emit_status(peer, id, MessageStatus::Delivered, Some(delivered_at));
+                // The recipient has the metadata now, so the bytes may follow.
+                self.maybe_start_transfer(peer).await;
             }
+
+            Frame::FileChunk {
+                attachment,
+                offset,
+                data,
+            } => self.on_file_chunk(peer, attachment, offset, data).await,
+
+            Frame::FileDone { attachment, sha256 } => {
+                self.on_file_done(peer, attachment, sha256).await;
+            }
+
+            Frame::FileAck {
+                attachment,
+                received,
+                state,
+            } => self.on_file_ack(peer, attachment, received, state).await,
+
+            Frame::FileCancel { attachment, reason } => {
+                self.on_file_cancel(peer, attachment, reason).await;
+            }
+
+            Frame::FileRequest { attachment } => self.on_file_request(peer, attachment).await,
 
             Frame::Profile {
                 nickname,
@@ -906,17 +1105,39 @@ impl<C: Clock, S: Store> Session<C, S> {
                 self.emit_peers();
             }
 
-            // Liveness, shutdown and protocol errors are the connection task's business: it
-            // never forwards them.
-            Frame::Heartbeat { .. } | Frame::Goodbye { .. } | Frame::Error { .. } => {}
+            // Liveness. The presence machine measures silence, so a beat has to reach it; the
+            // connection task keeps its own timer for the socket, but only the session can say
+            // whether the *peer* is still there.
+            Frame::Heartbeat { .. } => {
+                if let Some(entry) = self.peers.get_mut(&peer)
+                    && entry.presence.heartbeat(Instant::now()).is_visible()
+                {
+                    self.emit_peers();
+                }
+            }
 
             Frame::Hello(_) | Frame::Welcome(_) => {
                 tracing::warn!(%peer, "ignoring a handshake frame on an established connection");
             }
+
+            // Shutdown and protocol errors are the connection task's business: it closes on
+            // them and never forwards them.
+            Frame::Goodbye { .. } | Frame::Error { .. } => {}
         }
     }
 
-    async fn on_chat(&mut self, peer: DeviceId, id: MessageId, body: MessageBody) {
+    /// A `chat` frame: a message and the files it announces.
+    ///
+    /// The metadata is stored, never trusted: the size is the sender's claim until the file is
+    /// on disk and its digest agrees. An offer above the cap is refused by name, which keeps the
+    /// message visible (the user can see what someone tried to send) and the connection up.
+    async fn on_chat(
+        &mut self,
+        peer: DeviceId,
+        id: MessageId,
+        text: Option<MessageBody>,
+        metas: Vec<AttachmentMeta>,
+    ) {
         let Some(entry) = self.peers.get_mut(&peer) else {
             // A connection always creates the entry first, so this means the peer was
             // forgotten while the conversation was open.
@@ -928,11 +1149,37 @@ impl<C: Clock, S: Store> Session<C, S> {
         }
 
         let now = self.clock.wall();
+        let mut refused: Vec<AttachmentId> = Vec::new();
+        let mut attachments = Vec::with_capacity(metas.len());
+        for meta in metas {
+            let state = if meta.size > MAX_ATTACHMENT_BYTES {
+                refused.push(meta.id);
+                AttachmentState::Cancelled
+            } else {
+                AttachmentState::Receiving
+            };
+            attachments.push(Attachment {
+                id: meta.id,
+                message_id: id,
+                peer,
+                direction: Direction::Incoming,
+                name: meta.name,
+                size: meta.size,
+                kind: meta.kind,
+                state,
+                transferred: 0,
+                sha256: None,
+                created_at: now,
+                path: None,
+            });
+        }
+
         let message = ChatMessage {
             id,
             peer,
             direction: Direction::Incoming,
-            body,
+            body: text,
+            attachments,
             // The local clock is the only time this application trusts: using it for both
             // directions keeps a conversation ordered even when a peer's clock is wrong.
             sent_at: now,
@@ -944,12 +1191,12 @@ impl<C: Clock, S: Store> Session<C, S> {
 
         match self.store.insert_message(&message).await {
             // A retransmission: acknowledge it again so the sender stops caring, but do not
-            // store or count it twice.
+            // store or count it twice. The attachment rows keep the state they already had,
+            // which is what lets a half-received file continue after a reconnect.
             Ok(false) => tracing::debug!(%peer, %id, "ignoring a duplicate message"),
             Ok(true) => {
                 entry.stored.unread = entry.stored.unread.saturating_add(1);
-                entry.stored.last_message =
-                    Some(MessagePreview::new(&message.body, message.direction));
+                entry.stored.last_message = Some(MessagePreview::for_message(&message));
                 entry.note_activity(now.as_i64());
                 let peer_view = entry.view();
                 let _ = self.events.send(CoreEvent::Message {
@@ -965,23 +1212,892 @@ impl<C: Clock, S: Store> Session<C, S> {
 
         // The acknowledgement goes out only after the row is committed, which is what makes
         // "delivered" on the sender mean "durably stored here".
-        if let Some(link) = &entry.link
-            && let Err(error) = link.try_send(Frame::ChatAck { id })
-        {
-            tracing::debug!(%peer, %error, "failed to acknowledge a message");
+        if let Some(link) = self.peers.get(&peer).and_then(|entry| entry.link.clone()) {
+            if let Err(error) = link.try_send(Frame::ChatAck { id }) {
+                tracing::debug!(%peer, %error, "failed to acknowledge a message");
+            }
+            for attachment in refused {
+                tracing::info!(%peer, %attachment, "refusing an attachment above the size limit");
+                if let Err(error) = link.try_send(Frame::FileCancel {
+                    attachment,
+                    reason: FileCancelReason::TooLarge,
+                }) {
+                    tracing::debug!(%peer, %error, "failed to refuse an oversized attachment");
+                }
+            }
         }
 
         self.emit_peers();
     }
 
-    async fn on_disconnected(&mut self, peer: DeviceId, reason: DisconnectReason) {
+    /// One chunk of a file from `peer`.
+    async fn on_file_chunk(
+        &mut self,
+        peer: DeviceId,
+        id: AttachmentId,
+        offset: u64,
+        data: Vec<u8>,
+    ) {
+        let Some(link) = self.peers.get(&peer).and_then(|entry| entry.link.clone()) else {
+            return;
+        };
+        let files_root = self.store.files_root().to_path_buf();
+
+        let row = match self.store.attachment(id).await {
+            Ok(Some(row)) => row,
+            Ok(None) => {
+                self.refuse(peer, id, FileCancelReason::Unknown);
+                return;
+            }
+            Err(error) => {
+                tracing::warn!(%error, "failed to read an attachment");
+                return;
+            }
+        };
+        if row.peer != peer || row.direction != Direction::Incoming {
+            self.refuse(peer, id, FileCancelReason::Unknown);
+            return;
+        }
+        if row.state == AttachmentState::Complete {
+            // A retransmission after the recipient already had the file: say so and stop.
+            let _ = link.try_send(Frame::FileAck {
+                attachment: id,
+                received: row.size,
+                state: FileAckState::Complete,
+            });
+            return;
+        }
+        if row.size > MAX_ATTACHMENT_BYTES {
+            self.set_attachment_state(peer, id, AttachmentState::Cancelled)
+                .await;
+            self.refuse(peer, id, FileCancelReason::TooLarge);
+            return;
+        }
+
+        // A row whose transfer had ended is revived: the sender is trying again, and the fastest
+        // way to agree on where to continue is to let it send and correct it.
+        let mut attachment = row;
+        if attachment.state.is_finished() {
+            if let Some(entry) = self.peers.get_mut(&peer) {
+                entry.incoming.remove(&id);
+            }
+            attachment.state = AttachmentState::Receiving;
+            attachment.transferred = 0;
+            if self
+                .store
+                .set_attachment_state(id, AttachmentState::Receiving)
+                .await
+                .is_err()
+            {
+                return;
+            }
+            let _ = self.store.set_attachment_progress(id, 0).await;
+            self.emit_attachment(peer, attachment.clone());
+        }
+
+        let opened = self
+            .peers
+            .get_mut(&peer)
+            .map(|entry| entry.ensure_incoming(&attachment, &files_root));
+        match opened {
+            Some(Ok(())) => {}
+            Some(Err(error)) => {
+                tracing::warn!(%error, %id, "could not open the destination file");
+                self.fail_incoming(peer, id, FileCancelReason::Failed).await;
+                return;
+            }
+            None => return,
+        }
+
+        let entry = match self.peers.get_mut(&peer) {
+            Some(entry) => entry,
+            None => return,
+        };
+        let Some(transfer) = entry.incoming.get_mut(&id) else {
+            return;
+        };
+        let too_much = offset.saturating_add(u64::try_from(data.len()).unwrap_or(u64::MAX))
+            > transfer.attachment.size;
+        if too_much {
+            let received = transfer.received;
+            let _ = link.try_send(Frame::FileAck {
+                attachment: id,
+                received,
+                state: FileAckState::Receiving,
+            });
+            return;
+        }
+
+        match transfer.append(offset, &data) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::InvalidInput => {
+                // Not the next chunk: report where the file really ends and let the sender
+                // rewind. This is the mechanism that makes a resumed transfer converge.
+                let received = transfer.received;
+                tracing::debug!(%peer, %id, received, offset, "the sender is out of step");
+                let _ = link.try_send(Frame::FileAck {
+                    attachment: id,
+                    received,
+                    state: FileAckState::Receiving,
+                });
+                return;
+            }
+            Err(error) => {
+                tracing::warn!(%error, %id, "writing a received chunk failed");
+                self.fail_incoming(peer, id, FileCancelReason::Failed).await;
+                return;
+            }
+        }
+
+        let received = transfer.received;
+        let report = received.saturating_sub(transfer.acked) >= FILE_ACK_EVERY_BYTES;
+        if report {
+            transfer.acked = received;
+        }
+        let mut progress = transfer.attachment.clone();
+        progress.transferred = received;
+        progress.state = AttachmentState::Receiving;
+
+        if report {
+            let _ = self.store.set_attachment_progress(id, received).await;
+            self.emit_attachment(peer, progress);
+            let _ = link.try_send(Frame::FileAck {
+                attachment: id,
+                received,
+                state: FileAckState::Receiving,
+            });
+        }
+    }
+
+    /// The sender says its last chunk is out and gives the digest of the whole file.
+    async fn on_file_done(&mut self, peer: DeviceId, id: AttachmentId, digest: Sha256) {
+        let Some(link) = self.peers.get(&peer).and_then(|entry| entry.link.clone()) else {
+            return;
+        };
+        let files_root = self.store.files_root().to_path_buf();
+
+        let row = match self.store.attachment(id).await {
+            Ok(Some(row)) => row,
+            Ok(None) => {
+                self.refuse(peer, id, FileCancelReason::Unknown);
+                return;
+            }
+            Err(error) => {
+                tracing::warn!(%error, "failed to read an attachment");
+                return;
+            }
+        };
+        if row.peer != peer || row.direction != Direction::Incoming {
+            self.refuse(peer, id, FileCancelReason::Unknown);
+            return;
+        }
+        if row.state == AttachmentState::Complete {
+            let _ = link.try_send(Frame::FileAck {
+                attachment: id,
+                received: row.size,
+                state: FileAckState::Complete,
+            });
+            return;
+        }
+
+        let mut attachment = row;
+        if attachment.state.is_finished() {
+            if let Some(entry) = self.peers.get_mut(&peer) {
+                entry.incoming.remove(&id);
+            }
+            attachment.state = AttachmentState::Receiving;
+        }
+        let opened = self
+            .peers
+            .get_mut(&peer)
+            .map(|entry| entry.ensure_incoming(&attachment, &files_root));
+        match opened {
+            Some(Ok(())) => {}
+            Some(Err(error)) => {
+                tracing::warn!(%error, %id, "could not open the destination file");
+                self.fail_incoming(peer, id, FileCancelReason::Failed).await;
+                return;
+            }
+            None => return,
+        }
+
+        let entry = match self.peers.get_mut(&peer) {
+            Some(entry) => entry,
+            None => return,
+        };
+        let Some(transfer) = entry.incoming.get_mut(&id) else {
+            return;
+        };
+        if transfer.expected.is_some() {
+            // Already being checked; a second announcement is a retransmission of the first.
+            return;
+        }
+        if transfer.received != transfer.attachment.size {
+            // Not everything arrived. Saying so is cheaper than hashing a file we know is short.
+            let received = transfer.received;
+            let _ = link.try_send(Frame::FileAck {
+                attachment: id,
+                received,
+                state: FileAckState::Receiving,
+            });
+            return;
+        }
+
+        // The whole file is on disk: read it back and check it. That is a whole-file read on a
+        // blocking task, so the actor keeps answering while it happens.
+        transfer.expected = Some(digest);
+        transfer.release();
+        let part = transfer.part.clone();
+        let prep = self.prep.clone();
+        tokio::task::spawn_blocking(move || {
+            let digest = attachment::hash_file(&part).map_err(|error| error.to_string());
+            let _ = prep.blocking_send(Prep::ReceiverDigest {
+                peer,
+                attachment: id,
+                digest,
+            });
+        });
+    }
+
+    /// What the recipient is doing, in bytes.
+    async fn on_file_ack(
+        &mut self,
+        peer: DeviceId,
+        id: AttachmentId,
+        received: u64,
+        state: FileAckState,
+    ) {
+        let outgoing = self
+            .peers
+            .get(&peer)
+            .and_then(|entry| entry.transfer.as_ref())
+            .is_some_and(|transfer| transfer.id() == id);
+
+        if state == FileAckState::Complete {
+            if outgoing && let Some(entry) = self.peers.get_mut(&peer) {
+                entry.transfer = None;
+            }
+            let size = self
+                .store
+                .attachment(id)
+                .await
+                .ok()
+                .flatten()
+                .map(|row| row.size);
+            if let Some(size) = size {
+                let _ = self.store.set_attachment_progress(id, size).await;
+                let _ = self
+                    .store
+                    .set_attachment_state(id, AttachmentState::Complete)
+                    .await;
+                self.emit_attachment_row(peer, id).await;
+            }
+            self.maybe_start_transfer(peer).await;
+            return;
+        }
+
+        let Some(entry) = self.peers.get_mut(&peer) else {
+            return;
+        };
+        let Some(transfer) = entry.transfer.as_mut() else {
+            return;
+        };
+        if transfer.id() != id {
+            return;
+        }
+        if received != transfer.sent {
+            tracing::debug!(%peer, %id, received, sent = transfer.sent, "the recipient corrected the offset");
+            transfer.rewind(received);
+        } else {
+            transfer.acked = transfer.acked.max(received);
+        }
+        let mut progress = transfer.attachment.clone();
+        progress.transferred = transfer.sent;
+        progress.state = AttachmentState::Sending;
+        let sent = transfer.sent;
+        let _ = self.store.set_attachment_progress(id, sent).await;
+        self.emit_attachment(peer, progress);
+    }
+
+    /// The other end has given up on this transfer, or refuses to start it.
+    async fn on_file_cancel(&mut self, peer: DeviceId, id: AttachmentId, reason: FileCancelReason) {
+        let state = match reason {
+            FileCancelReason::Cancelled => AttachmentState::Cancelled,
+            _ => AttachmentState::Failed,
+        };
+        tracing::info!(%peer, %id, ?reason, "a transfer was cancelled");
+        if let Some(entry) = self.peers.get_mut(&peer) {
+            if entry
+                .transfer
+                .as_ref()
+                .is_some_and(|transfer| transfer.id() == id)
+            {
+                entry.transfer = None;
+            }
+            if let Some(mut incoming) = entry.incoming.remove(&id) {
+                incoming.discard();
+            }
+        }
+        let _ = self.store.set_attachment_state(id, state).await;
+        let _ = self.store.set_attachment_progress(id, 0).await;
+        self.emit_attachment_row(peer, id).await;
+        self.maybe_start_transfer(peer).await;
+    }
+
+    /// "Send me this file": a recipient that has the metadata but not the bytes.
+    async fn on_file_request(&mut self, peer: DeviceId, id: AttachmentId) {
+        let Ok(Some(row)) = self.store.attachment(id).await else {
+            return;
+        };
+        if row.peer != peer || row.direction != Direction::Outgoing {
+            return;
+        }
+        if row.state.is_finished() {
+            return;
+        }
+        if let Some(entry) = self.peers.get_mut(&peer)
+            && entry
+                .transfer
+                .as_ref()
+                .is_some_and(|transfer| transfer.id() == id)
+        {
+            entry.transfer = None;
+        }
+        let _ = self
+            .store
+            .set_attachment_state(id, AttachmentState::Queued)
+            .await;
+        self.emit_attachment_row(peer, id).await;
+        self.maybe_start_transfer(peer).await;
+    }
+
+    /// Stops a transfer, from whichever side the user is looking at it.
+    async fn cancel_attachment(&mut self, id: AttachmentId) {
+        let Ok(Some(row)) = self.store.attachment(id).await else {
+            return;
+        };
+        if row.state.is_finished() {
+            return;
+        }
+        let peer = row.peer;
+        if let Some(entry) = self.peers.get_mut(&peer) {
+            if entry
+                .transfer
+                .as_ref()
+                .is_some_and(|transfer| transfer.id() == id)
+            {
+                entry.transfer = None;
+            }
+            if let Some(mut incoming) = entry.incoming.remove(&id) {
+                incoming.discard();
+            }
+        }
+        let _ = self
+            .store
+            .set_attachment_state(id, AttachmentState::Cancelled)
+            .await;
+        let _ = self.store.set_attachment_progress(id, 0).await;
+        self.emit_attachment_row(peer, id).await;
+        self.refuse(peer, id, FileCancelReason::Cancelled);
+        self.maybe_start_transfer(peer).await;
+    }
+
+    /// Starts a transfer again, from the side the user is on.
+    async fn retry_attachment(&mut self, id: AttachmentId) {
+        let Ok(Some(row)) = self.store.attachment(id).await else {
+            return;
+        };
+        if row.state == AttachmentState::Complete {
+            return;
+        }
+        let peer = row.peer;
+
+        if row.direction == Direction::Incoming {
+            // Ask the sender to start again. Whatever was on disk is dropped first, because the
+            // offset the sender resumes from is measured against a file that is now empty.
+            if let Some(entry) = self.peers.get_mut(&peer)
+                && let Some(mut incoming) = entry.incoming.remove(&id)
+            {
+                incoming.discard();
+            }
+            let _ = self
+                .store
+                .set_attachment_state(id, AttachmentState::Receiving)
+                .await;
+            let _ = self.store.set_attachment_progress(id, 0).await;
+            self.emit_attachment_row(peer, id).await;
+            if let Some(link) = self.peers.get(&peer).and_then(|entry| entry.link.clone())
+                && let Err(error) = link.try_send(Frame::FileRequest { attachment: id })
+            {
+                tracing::debug!(%peer, %id, %error, "failed to ask for the file again");
+            }
+            return;
+        }
+
+        if let Some(entry) = self.peers.get_mut(&peer)
+            && entry
+                .transfer
+                .as_ref()
+                .is_some_and(|transfer| transfer.id() == id)
+        {
+            entry.transfer = None;
+        }
+        let _ = self
+            .store
+            .set_attachment_state(id, AttachmentState::Queued)
+            .await;
+        self.emit_attachment_row(peer, id).await;
+
+        // Announce it again: the recipient's row may be a terminal one, and only a fresh
+        // `chat` frame tells it that this transfer is starting over.
+        let messages = self
+            .store
+            .messages_with_unfinished_attachments(peer)
+            .await
+            .unwrap_or_default();
+        if let Some(link) = self.peers.get(&peer).and_then(|entry| entry.link.clone()) {
+            for message in messages
+                .iter()
+                .filter(|message| message.attachments.iter().any(|file| file.id == id))
+            {
+                if let Err(error) = link.try_send(Frame::Chat {
+                    id: message.id,
+                    text: message.body.clone(),
+                    attachments: message.metas(),
+                }) {
+                    tracing::debug!(%peer, %error, "failed to re-announce a message with files");
+                }
+            }
+        }
+        self.maybe_start_transfer(peer).await;
+    }
+
+    /// The result of a whole-file read that could not be done on the actor.
+    async fn on_prepared(&mut self, prepared: Prep) {
+        match prepared {
+            Prep::SenderDigest {
+                peer,
+                attachment,
+                digest,
+            } => {
+                let digest = match digest {
+                    Ok(digest) => digest,
+                    Err(reason) => {
+                        self.fail_outgoing(peer, attachment, &reason).await;
+                        self.maybe_start_transfer(peer).await;
+                        return;
+                    }
+                };
+                if self
+                    .store
+                    .set_attachment_digest(attachment, digest)
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+                let Some(entry) = self.peers.get_mut(&peer) else {
+                    return;
+                };
+                let Some(transfer) = entry.transfer.as_mut() else {
+                    return;
+                };
+                if transfer.id() != attachment {
+                    return;
+                }
+                transfer.attachment.sha256 = Some(digest);
+                transfer.attachment.state = AttachmentState::Sending;
+                let progress = transfer.attachment.clone();
+                let _ = self
+                    .store
+                    .set_attachment_state(attachment, AttachmentState::Sending)
+                    .await;
+                self.emit_attachment(peer, progress);
+            }
+            Prep::ReceiverDigest {
+                peer,
+                attachment,
+                digest,
+            } => self.finish_incoming(peer, attachment, digest).await,
+        }
+    }
+
+    /// The digest of what was received: keep the file or throw it away.
+    async fn finish_incoming(
+        &mut self,
+        peer: DeviceId,
+        id: AttachmentId,
+        digest: Result<Sha256, String>,
+    ) {
+        let expected = self
+            .peers
+            .get_mut(&peer)
+            .and_then(|entry| entry.incoming.get_mut(&id))
+            .and_then(|transfer| transfer.expected.take());
+        let Some(expected) = expected else {
+            return;
+        };
+
+        let agreed = matches!(&digest, Ok(actual) if *actual == expected);
+        if !agreed {
+            let why = match digest {
+                Ok(_) => "the digest does not match".to_owned(),
+                Err(reason) => reason,
+            };
+            tracing::warn!(%peer, %id, why, "the received file did not verify");
+            self.fail_incoming(peer, id, FileCancelReason::Checksum)
+                .await;
+            return;
+        }
+
+        let Some(entry) = self.peers.get_mut(&peer) else {
+            return;
+        };
+        let Some(mut transfer) = entry.incoming.remove(&id) else {
+            return;
+        };
+        let size = transfer.attachment.size;
+        if let Err(error) = transfer.finish() {
+            tracing::warn!(%error, %id, "could not move the received file into place");
+            self.store_fail_incoming(peer, id).await;
+            return;
+        }
+        let mut done = transfer.attachment.clone();
+        done.state = AttachmentState::Complete;
+        done.transferred = size;
+        done.path = Some(transfer.final_path.to_string_lossy().into_owned());
+        let _ = self.store.set_attachment_progress(id, size).await;
+        let _ = self
+            .store
+            .set_attachment_state(id, AttachmentState::Complete)
+            .await;
+        self.emit_attachment(peer, done);
+        if let Some(link) = self.peers.get(&peer).and_then(|entry| entry.link.clone()) {
+            let _ = link.try_send(Frame::FileAck {
+                attachment: id,
+                received: size,
+                state: FileAckState::Complete,
+            });
+        }
+    }
+
+    /// Marks an incoming attachment finished-but-failed and tells the sender.
+    async fn fail_incoming(&mut self, peer: DeviceId, id: AttachmentId, reason: FileCancelReason) {
+        if let Some(mut incoming) = self
+            .peers
+            .get_mut(&peer)
+            .and_then(|entry| entry.incoming.remove(&id))
+        {
+            incoming.discard();
+        }
+        self.store_fail_incoming(peer, id).await;
+        self.refuse(peer, id, reason);
+    }
+
+    async fn store_fail_incoming(&mut self, peer: DeviceId, id: AttachmentId) {
+        let _ = self
+            .store
+            .set_attachment_state(id, AttachmentState::Failed)
+            .await;
+        let _ = self.store.set_attachment_progress(id, 0).await;
+        self.emit_attachment_row(peer, id).await;
+    }
+
+    /// Gives up on an outgoing transfer: a missing source, an unreadable one, a failed write.
+    ///
+    /// Deliberately does not look for the next file — the caller decides whether to carry on, so
+    /// the call graph stays finite.
+    async fn fail_outgoing(&mut self, peer: DeviceId, id: AttachmentId, reason: &str) {
+        tracing::warn!(%peer, %id, reason, "the outgoing transfer failed");
+        if let Some(entry) = self.peers.get_mut(&peer)
+            && entry
+                .transfer
+                .as_ref()
+                .is_some_and(|transfer| transfer.id() == id)
+        {
+            entry.transfer = None;
+        }
+        let _ = self
+            .store
+            .set_attachment_state(id, AttachmentState::Failed)
+            .await;
+        self.emit_attachment_row(peer, id).await;
+        self.refuse(peer, id, FileCancelReason::Failed);
+    }
+
+    async fn set_attachment_state(
+        &mut self,
+        peer: DeviceId,
+        id: AttachmentId,
+        state: AttachmentState,
+    ) {
+        let _ = self.store.set_attachment_state(id, state).await;
+        self.emit_attachment_row(peer, id).await;
+    }
+
+    /// Tells the peer a transfer is over. Best effort: the socket may already be gone.
+    fn refuse(&self, peer: DeviceId, id: AttachmentId, reason: FileCancelReason) {
+        let Some(link) = self.peers.get(&peer).and_then(|entry| entry.link.clone()) else {
+            return;
+        };
+        if let Err(error) = link.try_send(Frame::FileCancel {
+            attachment: id,
+            reason,
+        }) {
+            tracing::debug!(%peer, %id, %error, "failed to refuse an attachment");
+        }
+    }
+
+    /// Starts sending this peer's oldest unfinished attachment, if it is not already busy.
+    ///
+    /// Only a message that has been announced can be streamed: a `chat` frame still waiting in
+    /// the outbox means the recipient has no idea what these chunks belong to.
+    async fn maybe_start_transfer(&mut self, peer: DeviceId) {
+        // A loop rather than a call to itself: a file that cannot be opened is marked failed and
+        // the next one is tried, and the transfer of each candidate is one iteration.
+        loop {
+            let Some(entry) = self.peers.get(&peer) else {
+                return;
+            };
+            if entry.transfer.is_some() || entry.link.is_none() {
+                return;
+            }
+
+            let messages = match self.store.messages_with_unfinished_attachments(peer).await {
+                Ok(messages) => messages,
+                Err(error) => {
+                    tracing::warn!(%error, "failed to read the unfinished attachments");
+                    return;
+                }
+            };
+            let Some(attachment) = messages
+                .iter()
+                .flat_map(|message| message.attachments.iter())
+                .find(|attachment| {
+                    attachment.direction == Direction::Outgoing && attachment.state.is_in_flight()
+                })
+                .cloned()
+            else {
+                return;
+            };
+
+            let Some(path) = attachment.path.clone().map(PathBuf::from) else {
+                self.fail_outgoing(peer, attachment.id, "the source of the file is not known")
+                    .await;
+                continue;
+            };
+
+            let needs_digest = attachment.sha256.is_none();
+            let mut transfer = OutgoingTransfer::new(attachment.clone(), path.clone());
+            if !needs_digest {
+                transfer.attachment.state = AttachmentState::Sending;
+            }
+            let Some(entry) = self.peers.get_mut(&peer) else {
+                return;
+            };
+            if entry.transfer.is_some() {
+                return;
+            }
+            entry.transfer = Some(transfer);
+
+            if !needs_digest {
+                let _ = self
+                    .store
+                    .set_attachment_state(attachment.id, AttachmentState::Sending)
+                    .await;
+                self.emit_attachment(peer, attachment);
+                return;
+            }
+
+            // The digest has to exist before the first chunk, because the recipient checks the
+            // file it assembled against it; reading a large file is a blocking task of its own.
+            let prep = self.prep.clone();
+            let id = attachment.id;
+            tokio::task::spawn_blocking(move || {
+                let digest = attachment::hash_file(&path).map_err(|error| error.to_string());
+                let _ = prep.blocking_send(Prep::SenderDigest {
+                    peer,
+                    attachment: id,
+                    digest,
+                });
+            });
+            return;
+        }
+    }
+
+    /// Re-offers every unfinished attachment of a peer that has just come back.
+    ///
+    /// The metadata is repeated because the recipient's copy of it may be gone (a cleared
+    /// history, a reinstalled application) while ours says the message was delivered; the
+    /// chunks then resume from wherever the recipient's file ends, which the first
+    /// acknowledgement corrects.
+    async fn resume_attachments(&mut self, peer: DeviceId) {
+        let messages = match self.store.messages_with_unfinished_attachments(peer).await {
+            Ok(messages) => messages,
+            Err(error) => {
+                tracing::warn!(%error, "failed to read the unfinished attachments");
+                return;
+            }
+        };
+        let Some(link) = self.peers.get(&peer).and_then(|entry| entry.link.clone()) else {
+            return;
+        };
+        for message in &messages {
+            // A message still in the outbox is announced by the drain itself, in order.
+            if message.status == MessageStatus::Queued {
+                continue;
+            }
+            if let Err(error) = link.try_send(Frame::Chat {
+                id: message.id,
+                text: message.body.clone(),
+                attachments: message.metas(),
+            }) {
+                tracing::debug!(%peer, %error, "failed to re-announce a message with files");
+                break;
+            }
+        }
+        self.maybe_start_transfer(peer).await;
+    }
+
+    /// When the next chunk may be written, or `None` when nothing is waiting.
+    fn transfer_deadline(&self) -> Option<tokio::time::Instant> {
+        let waiting = self.peers.values().any(|entry| {
+            entry.link.is_some()
+                && entry
+                    .transfer
+                    .as_ref()
+                    .is_some_and(OutgoingTransfer::wants_chunk)
+        });
+        waiting.then(|| tokio::time::Instant::from_std(Instant::now() + TRANSFER_POLL))
+    }
+
+    /// Writes what the pacing and the send queue allow, for every peer at once.
+    ///
+    /// Bounded per turn: a transfer is a background job, and a message arriving on another
+    /// connection must not wait for a whole file to be written out.
+    async fn pump_transfers(&mut self) {
+        let busy: Vec<DeviceId> = self
+            .peers
+            .iter()
+            .filter(|(_, entry)| {
+                entry.link.is_some()
+                    && entry
+                        .transfer
+                        .as_ref()
+                        .is_some_and(OutgoingTransfer::wants_chunk)
+            })
+            .map(|(device_id, _)| *device_id)
+            .collect();
+
+        for peer in busy {
+            let mut failure: Option<String> = None;
+            for _ in 0..TRANSFER_CHUNKS_PER_TURN {
+                let now = Instant::now();
+                let Some(entry) = self.peers.get_mut(&peer) else {
+                    break;
+                };
+                let Some(link) = entry.link.clone() else {
+                    break;
+                };
+                let Some(transfer) = entry.transfer.as_mut() else {
+                    break;
+                };
+                if !transfer.wants_chunk() {
+                    break;
+                }
+                // Charged at the full chunk size: the read that follows is at most that big, and
+                // a budget that under-charges is a budget that gets refused by the recipient.
+                if !entry
+                    .file_budget
+                    .try_acquire_n(FILE_CHUNK_BYTES as f64, now)
+                {
+                    break;
+                }
+
+                if transfer.is_complete() {
+                    let Some(sha256) = transfer.attachment.sha256 else {
+                        break;
+                    };
+                    transfer.finished = true;
+                    if let Err(error) = link.try_send(Frame::FileDone {
+                        attachment: transfer.id(),
+                        sha256,
+                    }) {
+                        tracing::debug!(%peer, %error, "could not announce a finished file");
+                    }
+                    break;
+                }
+
+                match transfer.read_chunk() {
+                    Ok(Some(data)) => {
+                        let offset = transfer.sent - u64::try_from(data.len()).unwrap_or(0);
+                        if let Err(error) = link.try_send(Frame::FileChunk {
+                            attachment: transfer.id(),
+                            offset,
+                            data,
+                        }) {
+                            tracing::debug!(%peer, %error, "could not queue a file chunk");
+                            break;
+                        }
+                    }
+                    Ok(None) => continue,
+                    Err(error) => {
+                        failure = Some(error.to_string());
+                        break;
+                    }
+                }
+            }
+
+            if let Some(reason) = failure {
+                let id = self
+                    .peers
+                    .get(&peer)
+                    .and_then(|entry| entry.transfer.as_ref())
+                    .map(OutgoingTransfer::id);
+                if let Some(id) = id {
+                    self.fail_outgoing(peer, id, &reason).await;
+                    self.maybe_start_transfer(peer).await;
+                }
+            }
+        }
+    }
+
+    async fn on_disconnected(&mut self, peer: DeviceId, link: u64, reason: DisconnectReason) {
         let now = self.clock.wall().as_i64();
         let Some(entry) = self.peers.get_mut(&peer) else {
             return;
         };
 
+        // When both peers dial at once, one of the two connections is abandoned. Its task reports
+        // its end afterwards, and that report must not be mistaken for the surviving connection's:
+        // clearing the live link here would flap the peer offline and reconnect the two of them
+        // for ever.
+        if entry
+            .link
+            .as_ref()
+            .is_some_and(|current| current.id() != link)
+        {
+            tracing::debug!(%peer, ?reason, "the superseded connection ended");
+            return;
+        }
+
         entry.link = None;
         entry.dial = None;
+        // A transfer cannot outlive its socket. What has already been written stays on disk and
+        // is picked up again from the part file on the next connection; the handles are released
+        // so the last bytes reach the filesystem before the process can go away.
+        let outgoing = entry.transfer.take().map(|transfer| {
+            let id = transfer.id();
+            (id, transfer.acked)
+        });
+        let incoming: Vec<(AttachmentId, u64)> = entry
+            .incoming
+            .drain()
+            .map(|(id, mut transfer)| {
+                transfer.release();
+                (id, transfer.received)
+            })
+            .collect();
         if entry.presence.disconnected().is_visible() {
             tracing::info!(%peer, ?reason, "peer went offline");
         }
@@ -1012,6 +2128,21 @@ impl<C: Clock, S: Store> Session<C, S> {
         }
 
         self.emit_peers();
+
+        // Record how far each transfer had come, and put the outgoing one back in the queue: the
+        // interface should read "waiting" rather than "sending" while there is no socket.
+        if let Some((id, transferred)) = outgoing {
+            let _ = self.store.set_attachment_progress(id, transferred).await;
+            let _ = self
+                .store
+                .set_attachment_state(id, AttachmentState::Queued)
+                .await;
+            self.emit_attachment_row(peer, id).await;
+        }
+        for (id, received) in incoming {
+            let _ = self.store.set_attachment_progress(id, received).await;
+            self.emit_attachment_row(peer, id).await;
+        }
 
         if reason.allows_redial() {
             self.maybe_dial(peer);
@@ -1135,6 +2266,22 @@ impl<C: Clock, S: Store> Session<C, S> {
             }
         }
 
+        // …and so is a peer that was announced inside the retry window of a dial that has just
+        // failed. Without this the only trigger left is the next discovery event, which on a
+        // quiet network can be many seconds away — and a peer that has just restarted (a new
+        // port, the same identity) is exactly the case where the user is waiting.
+        let retry: Vec<DeviceId> = self
+            .peers
+            .iter()
+            .filter(|(_, entry)| {
+                entry.link.is_none() && entry.dial.is_none() && !entry.addresses.is_empty()
+            })
+            .map(|(device_id, _)| *device_id)
+            .collect();
+        for peer in retry {
+            self.maybe_dial(peer);
+        }
+
         // The outbox is drained a little per tick, so a peer that has just come back receives a
         // backlog in order and without tripping the recipient's rate limit.
         let waiting: Vec<DeviceId> = self
@@ -1252,6 +2399,19 @@ impl<C: Clock, S: Store> Session<C, S> {
         });
     }
 
+    fn emit_attachment(&self, peer: DeviceId, attachment: Attachment) {
+        let _ = self.events.send(CoreEvent::Attachment { peer, attachment });
+    }
+
+    /// Reads a row back and emits it, for the paths that only know the identifier.
+    async fn emit_attachment_row(&mut self, peer: DeviceId, id: AttachmentId) {
+        match self.store.attachment(id).await {
+            Ok(Some(attachment)) => self.emit_attachment(peer, attachment),
+            Ok(None) => tracing::debug!(%peer, %id, "the attachment row is gone"),
+            Err(error) => tracing::warn!(%error, "failed to read an attachment"),
+        }
+    }
+
     fn emit_peers(&self) {
         let _ = self.events.send(CoreEvent::Peers {
             peers: self.arranged_peers(),
@@ -1272,6 +2432,10 @@ impl<C: Clock, S: Store> Session<C, S> {
             if let Some(link) = entry.link.take() {
                 link.close(GoodbyeReason::Shutdown);
             }
+            // Drop the transfer handles so a half-received file is flushed to disk before the
+            // process goes away: the length of that file is what the next start resumes from.
+            entry.transfer = None;
+            entry.incoming.clear();
             entry.presence.disconnected();
         }
 
@@ -1288,4 +2452,69 @@ fn profile_of(peer: &DiscoveredPeer) -> PeerProfile {
         nickname: peer.nickname.clone(),
         avatar_seed: peer.avatar_seed.clone(),
     }
+}
+
+/// A deadline far enough away that a branch guarded by `is_some()` never fires on it.
+fn far_future() -> tokio::time::Instant {
+    tokio::time::Instant::from_std(Instant::now() + Duration::from_secs(3600))
+}
+
+/// Turns the paths the interface chose into attachments, by looking at the files themselves.
+///
+/// The size and the name come from the filesystem rather than from the caller, and a path that
+/// is missing, is a directory, or is above the cap is refused before a message row exists — so a
+/// transfer can fail, but never because it was lied to about what it was sending.
+fn resolve_files(
+    peer: &DeviceId,
+    message_id: MessageId,
+    files: &[PathBuf],
+    now: UnixMillis,
+) -> Result<Vec<Attachment>, CoreError> {
+    use crate::error::DomainError;
+
+    if files.len() > MAX_ATTACHMENTS_PER_MESSAGE {
+        return Err(CoreError::Domain(DomainError::BadAttachment {
+            reason: format!("{} files in one message", files.len()),
+        }));
+    }
+
+    let mut attachments = Vec::with_capacity(files.len());
+    for path in files {
+        let reply = |reason: String| {
+            CoreError::Domain(DomainError::BadAttachment {
+                reason: format!("{}: {reason}", path.display()),
+            })
+        };
+        let metadata = std::fs::metadata(path).map_err(|error| reply(error.to_string()))?;
+        if !metadata.is_file() {
+            return Err(reply("not a file".to_owned()));
+        }
+        let size = metadata.len();
+        if size > MAX_ATTACHMENT_BYTES {
+            return Err(CoreError::Domain(DomainError::AttachmentTooLarge {
+                size,
+                max: MAX_ATTACHMENT_BYTES,
+            }));
+        }
+        let raw = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let name = FileName::sanitise(&raw);
+        attachments.push(Attachment {
+            id: AttachmentId::generate(),
+            message_id,
+            peer: *peer,
+            direction: Direction::Outgoing,
+            kind: name.kind(),
+            name,
+            size,
+            state: AttachmentState::Queued,
+            transferred: 0,
+            sha256: None,
+            created_at: now,
+            path: Some(path.to_string_lossy().into_owned()),
+        });
+    }
+    Ok(attachments)
 }

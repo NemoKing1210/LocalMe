@@ -34,6 +34,12 @@ export async function connectCoreEvents(): Promise<() => void> {
       chat.update(payload.id, { status: payload.status, deliveredAt: payload.deliveredAt });
     }),
 
+    // A transfer moved: progress, completion, a failure. The whole row arrives, so applying it
+    // is one replacement rather than a reconciliation.
+    onCoreEvent('attachment', (payload) => {
+      chat.applyAttachment(payload.attachment);
+    }),
+
     onCoreEvent('settings_changed', (payload) => {
       settings.apply(payload);
     }),

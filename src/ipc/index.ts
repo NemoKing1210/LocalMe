@@ -1,13 +1,15 @@
-import { invoke } from '@tauri-apps/api/core';
+import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 
 import type {
   ApiError,
+  AttachmentId,
   Bootstrap,
   CoreEventMap,
   CoreEventName,
   DeviceId,
   Diagnostics,
+  FilePick,
   KnownDevice,
   LogLevel,
   LogsInfo,
@@ -99,8 +101,55 @@ export function history(
   return call('history', { peerId, before, limit });
 }
 
-export function sendMessage(peerId: DeviceId, body: string): Promise<Message> {
-  return call('send_message', { peerId, body });
+/**
+ * Stores a message, with any files the user attached.
+ *
+ * `attachments` are paths the host has already inspected; it looks at them again before storing
+ * anything, so a file that has gone away since it was chosen fails here rather than halfway
+ * through a transfer.
+ */
+export function sendMessage(
+  peerId: DeviceId,
+  body: string,
+  attachments: readonly string[] = [],
+): Promise<Message> {
+  return call('send_message', { peerId, body, attachments: [...attachments] });
+}
+
+/** The URL the web view can render a stored file from. */
+export function fileSrc(path: string): string {
+  return convertFileSrc(path);
+}
+
+/** Opens the platform's file picker and describes what was chosen. */
+export function pickFiles(): Promise<FilePick[]> {
+  return call('pick_files');
+}
+
+/** Describes paths the interface already has — the ones a drop produced. */
+export function inspectFiles(paths: readonly string[]): Promise<FilePick[]> {
+  return call('inspect_files', { paths: [...paths] });
+}
+
+export function openAttachment(id: AttachmentId): Promise<void> {
+  return call('open_attachment', { attachmentId: id });
+}
+
+export function revealAttachment(id: AttachmentId): Promise<void> {
+  return call('reveal_attachment', { attachmentId: id });
+}
+
+/** Returns where the file was saved, or `null` when the dialog was dismissed. */
+export function saveAttachment(id: AttachmentId): Promise<string | null> {
+  return call('save_attachment', { attachmentId: id });
+}
+
+export function cancelAttachment(id: AttachmentId): Promise<void> {
+  return call('cancel_attachment', { attachmentId: id });
+}
+
+export function retryAttachment(id: AttachmentId): Promise<void> {
+  return call('retry_attachment', { attachmentId: id });
 }
 
 export function markRead(peerId: DeviceId): Promise<number> {

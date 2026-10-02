@@ -7,13 +7,14 @@
 
 ## 1. Goals and non-goals
 
-**In scope.** Peer discovery on a LAN without configuration, 1:1 text chat, local history,
-presence, an outbox that delivers what was written while the peer was away, tray integration,
-native notifications, settings, three desktop platforms (Windows, macOS, Linux).
+**In scope.** Peer discovery on a LAN without configuration, 1:1 text chat, files sent with or
+without text, local history, presence, an outbox that delivers what was written while the peer
+was away, resumable and verified file transfers, tray integration, native notifications,
+settings, three desktop platforms (Windows, macOS, Linux).
 
-**Out of scope.** File transfer, group chats, mobile.
+**Out of scope.** Group chats, mobile, end-to-end encryption (§5.6).
 The protocol and storage layers are designed so these can be added additively
-(see §7.5 and §8.4), but no code for them exists.
+(see §7.5 and §8.4); no code for them exists.
 
 **Priorities, in order.** Correctness and reliability → maintainability → resource usage →
 visual polish. When two of these conflict, the earlier one wins and the trade-off is
@@ -158,14 +159,24 @@ Transitions and their inputs:
 |---|---|
 | `discovered(addrs)` | records addresses; `Unknown`/`Offline` → `Connecting` (dial) |
 | `connected()` | `Connecting` → `Online`, `last_heartbeat = now` |
-| `heartbeat()` | any state → `Online`, refresh `last_heartbeat`; also writes `last_seen` in storage (receiver's own clock) |
+| `heartbeat()` | any state → `Online`, refresh `last_heartbeat` |
 | `disconnected()` / `goodbye()` | → `Offline`, record `last_seen = now` |
 | `tick(now)` | `Online` with `now - last_heartbeat > HEARTBEAT_TIMEOUT` → `Stalled` (socket closed, `Stalled` is reported to the UI as offline) |
 | `forget()` | → `Unknown`, drop addresses; a later `discovered` re-adds the peer as new |
 
-`last_seen` is always written from the **receiver's** local clock. Remote clocks are never
-trusted or compared; `sent_at` in a message is displayed as information, never used for
-ordering or expiry.
+`last_seen` is always written from the **receiver's** local clock, at the transitions that are
+evidence of liveness — a completed handshake, a disconnect, a stall. Remote clocks are never
+trusted or compared; `sent_at` in a message is displayed as information, never used for ordering
+or expiry. A heartbeat deliberately does not write `last_seen`: reading the clock and issuing a
+database write every five seconds, per peer, to record that nothing changed is how a
+tray-resident instance stops being idle.
+
+**The beats have to reach the session.** The connection task keeps its own timer to notice a
+half-open socket, and it forwards each `heartbeat` to the session so the presence machine can
+refresh `last_heartbeat`. It did not, once, and the consequence was that every connection was
+declared stalled fifteen seconds after it was established and immediately reconnected — forever,
+and on every idle conversation. `a_simultaneous_dial_settles_on_one_connection_instead_of_flapping`
+pins it.
 
 Presence is *reported* as online only in `Online`. `Connecting` and `Stalled` report offline
 with the peer still listed, which is what the offline UI (`не в сети`, `был(а) в сети N минут назад`)
@@ -214,27 +225,36 @@ TCP. Every frame is:
 ### 5.2 Envelope
 
 ```jsonc
-{ "v": 1, "t": "<type>", ...fields }
+{ "v": 2, "t": "<type>", ...fields }
 ```
 
-`v` is the protocol version (currently `1`), `t` the variant tag. Two peers with different
+`v` is the protocol version (currently `2`), `t` the variant tag. Two peers with different
 versions complete a handshake and then refuse to exchange anything but `Goodbye`/`Error`,
-so a mismatch surfaces as a clear message instead of undefined behaviour.
+so a mismatch surfaces as a clear message instead of undefined behaviour. Version 2 added the
+attachment frames below; a version 1 peer has no such thing as a file, so the two must not be
+allowed to pretend they can talk.
 
 | `t` | Direction | Fields | Purpose |
 |---|---|---|---|
 | `hello` | dialer → acceptor | `device_id, nickname, avatar_seed, listen_port, protocol_version` | open a session |
 | `welcome` | acceptor → dialer | same shape | accept, symmetric identity exchange |
-| `heartbeat` | both | `seq` | liveness, one frame per 5 s; the `seq` is only useful in a log |
-| `chat` | both | `id, body` | a chat message; sender/recipient are implied by the connection |
-| `chat_ack` | both | `id` | "delivered": persisted by the recipient |
+| `heartbeat` | both | `seq` | liveness, one frame per 5 s; the `seq` is only useful in a log. Exempt from the rate limiter, and forwarded to the session, which is what keeps the peer online |
+| `chat` | both | `id, text?, attachments` | a chat message and the files it announces; sender/recipient are implied by the connection |
+| `chat_ack` | both | `id` | "delivered": the message and its metadata are persisted by the recipient |
+| `file_chunk` | sender → recipient | `attachment, offset, data` (base64) | one slice of a file, at an absolute offset |
+| `file_done` | sender → recipient | `attachment, sha256` | the last chunk is out; the digest of the whole file |
+| `file_ack` | recipient → sender | `attachment, received, state` | the recipient's position, and whether the file is stored |
+| `file_cancel` | both | `attachment, reason` | the transfer is over and will not resume by itself |
+| `file_request` | recipient → sender | `attachment` | "send me this file": a retry after a failure |
 | `profile` | both | `nickname, avatar_seed` | nickname change, re-broadcast to all live sessions |
 | `goodbye` | both | `reason` | graceful shutdown; recipient goes offline immediately |
 | `error` | both | `code, message` | recoverable protocol error, then close |
 
 `chat` carries no `sender`/`recipient` field: the frame arrives on an authenticated
 (because handshaken) 1:1 connection, so a field naming the sender would be both redundant
-and forgeable. This is the smallest wire format that cannot lie about who sent what.
+and forgeable. This is the smallest wire format that cannot lie about who sent what. `text` is
+absent for a message that is nothing but files, and a frame with neither text nor files is
+refused: the protocol simply cannot express an empty message.
 
 ### 5.3 Handshake
 
@@ -262,6 +282,13 @@ other. The tie-break is deterministic and needs no extra frames:
 Both sides evaluate the same predicate on the same pair of ids, so exactly one connection
 survives and the loser is closed by both ends. Ordering is total and stable, so the rule
 never oscillates.
+
+> **A connection is identified for as long as it lives.** The `Disconnected` report names the
+> connection that ended, and the session ignores the end of one it has already replaced.
+> Without that, the abandoned connection's goodbye clears the link of the connection that was
+> kept: the peer flaps offline, reconnects, and the two never settle — the failure is not
+> subtle. `two_instances_connect_and_exchange_messages` and
+> `a_simultaneous_dial_settles_on_one_connection_instead_of_flapping` pin it.
 
 **Self-connection and duplicate instances.** A `hello` whose `device_id` equals our own is
 rejected. Two instances on one machine are prevented outright by the single-instance plugin
@@ -322,14 +349,22 @@ Every inbound frame passes through these checks before it reaches the domain:
 | frame length | `1..=64 KiB` | close connection |
 | JSON structure | must match `Envelope` | `error{code:"malformed"}`, close |
 | nickname | 1..=32 chars after trim, no control chars | `error{code:"bad_nickname"}`, close |
-| message body | non-empty after trim, ≤ 8 000 chars, no control chars except `\n`/`\t` | `error{code:"bad_body"}`, keep connection |
-| per-connection rate | token bucket, 20 msg/s, burst 40 | `error{code:"rate_limited"}`, close |
+| message body | ≤ 8 000 chars, no control chars except `\n`/`\t`; absent when the message is only files | `error{code:"bad_body"}`, keep connection |
+| attachment list | ≤ 10 files, unique ids, every name sanitised into a safe path component | `error{code:"bad_attachment"}`, close |
+| file chunk | non-empty, ≤ 32 KiB, and its end inside the largest file that may be offered | `error{code:"bad_attachment"}`, close |
+| announced file size | ≤ 512 MiB | the transfer is cancelled, the message is kept |
+| per-connection rate | token bucket, 20 frames/s, burst 40 — `file_chunk` is exempt and charged below | `error{code:"rate_limited"}`, close |
+| per-connection file payload | token bucket, 8 MiB/s and 8 MiB of burst, charged in bytes | `error{code:"rate_limited"}`, close |
+| per-connection chunk frames | token bucket, 512/s, burst 1024 | `error{code:"rate_limited"}`, close |
 | concurrent peers | 128 | refuse the `hello` |
 | concurrent dials | 8, 1 per peer | queue/drop the extra |
 | handshake deadline | 10 s from accept | close |
 
 The rate limiter is a pure struct over `(tokens, last_refill)` with a caller-supplied `now`,
-so its behaviour is unit-tested without sleeping.
+so its behaviour is unit-tested without sleeping. Files are charged in *bytes* rather than in
+frames, because a 40 MiB file is a thousand frames and would trip a per-frame budget on its
+first second; the frame count is bounded as well, so the byte budget cannot be spent on
+millions of one-byte frames.
 
 ### 5.6 Encryption
 
@@ -353,6 +388,60 @@ than half-built because the framing above a Noise transport (record chunking, no
 accounting, rekeying) is exactly the code where a subtle mistake silently degrades to
 "encrypted-looking", and an unverified implementation would be worse than an honest
 plaintext LAN protocol whose threat model is written down. The threat model is in §11.
+
+### 5.7 Files
+
+A file is announced by the `chat` frame that carries it (`id, name, size`) and then streamed as
+`file_chunk` frames. The rule that makes the whole thing work is:
+
+> **The file on the recipient's disk is the authority on how much of it has arrived.**
+
+Everything else — a `transferred` column, the sender's idea of its progress — is a cached
+opinion that the next acknowledgement corrects. The recipient appends strictly at the end of what
+it has; a chunk that does not continue the file *exactly* is refused, and the refusal carries the
+recipient's real position. The sender rewinds to it and carries on. Resuming after a disconnect,
+after a crash, or after the recipient's partial file has been deleted is therefore the same code
+path as the first attempt: start where you think you are and let the other end correct you.
+
+1. The sender stats each chosen file, takes its size from the filesystem, sanitises its name
+   into a safe path component and writes the message with `status = 'queued'` — metadata and
+   rows first, in one transaction.
+2. The message is announced by the ordinary outbox drain. A file is only streamed once its
+   `chat` frame has been handed to the socket, because chunks for a message the recipient has
+   never seen would be answered with `file_cancel{unknown}`.
+3. Before the first chunk, the sender reads the source once on a blocking task and stores its
+   SHA-256. The digest has to exist before the stream starts: it is what `file_done` carries,
+   and the recipient checks the file it assembled against it.
+4. Chunks are 32 KiB of payload, base64-encoded inside the frame (the frame is JSON; an array of
+   numbers would be larger than the file). The sender keeps at most 1 MiB unacknowledged, and
+   the recipient acknowledges every 512 KiB of progress, so at most one window has to be repeated
+   after an interruption.
+5. `file_done` carries the digest. The recipient reads its assembled file back, compares, and
+   only then renames `<name>.part` → `<name>` and answers `file_ack{state: complete}`. A digest
+   that disagrees deletes the part file and fails the transfer: a mismatch is not something to
+   paper over with a retry loop.
+6. The sender's pace is a token bucket at 4 MiB/s with a 2 MiB burst — deliberately below the
+   recipient's inbound budget, because a frame the recipient refuses closes the connection and a
+   transfer that can never finish is worse than a slow one. The transfer is drained from the
+   session loop between messages, eight chunks per turn, so a chat message never waits for a
+   file.
+
+**Files on disk.** One directory per attachment, named after its *identifier*, under
+`<data-dir>/files`: `<id>/<name>` once complete and `<id>/<name>.part` while arriving. The name
+is sanitised on both sides (`FileName::sanitise`: last path component only, control and
+platform-forbidden characters dropped, reserved Windows device names prefixed, truncated with
+its extension intact), so nothing a peer sends can address a path we did not intend — and the
+directory the file lands in is chosen by us, not by the name.
+
+**Refusals are by name, not by closing the connection.** An offer above 512 MiB is stored as a
+cancelled attachment and answered with `file_cancel{too_large}`, so the message stays visible —
+the user sees what someone tried to send — and the link stays up. A malformed attachment list,
+by contrast, is a broken peer and closes the connection (§5.5).
+
+**Transfers are visible while they happen.** The session emits an `attachment` event with the
+whole row on every acknowledgement, on completion and on failure, and the interface renders it
+on the file's own card in the bubble: a progress bar, the state, and the actions (open, save,
+show in folder, cancel, retry).
 
 ---
 
@@ -436,7 +525,7 @@ CREATE TABLE messages (
   id           TEXT PRIMARY KEY,          -- UUIDv7
   peer_id      TEXT NOT NULL REFERENCES peers(device_id) ON DELETE CASCADE,
   outgoing     INTEGER NOT NULL,          -- 1 = we sent it
-  body         TEXT NOT NULL,
+  body         TEXT,                      -- NULL for a message that is only files
   sent_at_ms   INTEGER NOT NULL,          -- our clock: when it was written
   received_at_ms INTEGER NOT NULL,        -- our clock (ordering fallback)
   delivered_at_ms INTEGER,                -- our clock: when an acknowledgement arrived
@@ -447,6 +536,24 @@ CREATE INDEX messages_peer_time ON messages(peer_id, sent_at_ms DESC, id DESC);
 CREATE INDEX messages_unread    ON messages(peer_id) WHERE read = 0;
 CREATE INDEX messages_outbox    ON messages(peer_id, sent_at_ms, id)
   WHERE outgoing = 1 AND status = 'queued';
+
+CREATE TABLE attachments (
+  id            TEXT PRIMARY KEY,         -- UUIDv7, the name on the wire
+  message_id    TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  peer_id       TEXT NOT NULL,
+  outgoing      INTEGER NOT NULL,
+  name          TEXT NOT NULL,            -- sanitised: a safe path component, never a path
+  size          INTEGER NOT NULL,         -- what the sender announced; checked again on write
+  kind          TEXT NOT NULL,            -- image|file, derived from the name
+  state         TEXT NOT NULL,            -- queued|sending|receiving|complete|cancelled|failed
+  transferred   INTEGER NOT NULL DEFAULT 0,
+  sha256        TEXT,                     -- the whole-file digest, once one is known
+  path          TEXT,                     -- outgoing: the source; incoming: derived from id
+  created_at_ms INTEGER NOT NULL
+);
+CREATE INDEX attachments_message ON attachments(message_id);
+CREATE INDEX attachments_outbox  ON attachments(peer_id, message_id)
+  WHERE outgoing = 1 AND state IN ('queued', 'sending');
 ```
 
 `messages.status` is the outbox state: every outgoing row is written as `queued` and only
@@ -468,7 +575,10 @@ transaction and bumps the version. Version 0 (no tables) → 1 (schema above) is
 migration, so a fresh database and an upgraded one take the same code path. Version 2 adds
 `messages.delivered_at_ms` and rewrites the retired terminal statuses (`sending`, `sent`,
 `failed`) to `queued`, which is what turns messages an older build gave up on into messages the
-outbox retries.
+outbox retries. Version 3 adds `attachments` and makes `messages.body` nullable. SQLite cannot
+drop a `NOT NULL`, so that migration rebuilds `messages` (rename, create, copy, drop, recreate
+the indexes) — safe here because nothing references `messages` yet at that point in the schema's
+life; `attachments` is created after the rename.
 
 ### 7.3 Corrupted database
 
@@ -487,10 +597,12 @@ while new messages arrive.
 
 ### 7.5 Forward compatibility
 
-`messages.status` is a text column and the envelope is versioned, so file transfer and group
-chats are added as new envelope variants plus new columns/tables in later migrations. Nothing
-in the current schema presumes 1:1 forever beyond `peers.device_id` being the conversation
-key, which the group feature would extend with a conversation table rather than replace.
+`messages.status` is a text column and the envelope is versioned, so group chats are added as
+new envelope variants plus new columns/tables in later migrations. File transfer has since been
+added exactly that way — protocol version 2, one new table, one nullable column, one rebuilt
+table — which is the evidence that the seam is real rather than aspirational. Nothing in the
+current schema presumes 1:1 forever beyond `peers.device_id` being the conversation key, which
+the group feature would extend with a conversation table rather than replace.
 
 ### 7.6 Search
 
@@ -511,15 +623,23 @@ The only mutable network state in the process. It is an actor: a single task own
   outbox_pending }` — the token bucket is the outbox drain's pace and `outbox_pending` marks a
   conversation that may still have rows waiting to be written out (§5.4),
 * the dial task registry (one in-flight dial per peer, `JoinHandle`),
-* the deduplication and rate-limiting state.
+* the deduplication and rate-limiting state,
+* the attachment transfers: at most one outgoing stream per peer (with its token bucket and its
+  file handle) and the part files currently being written for that peer.
 
-Inputs are `SessionCommand` (from the Tauri layer) and `NetworkEvent` (from connections and
-discovery), merged into one mailbox so every state change is sequential. Outputs are
-`CoreEvent`s on a bounded `broadcast` channel, consumed by the Tauri layer, which forwards
-them to the webview.
+Inputs are `SessionCommand` (from the Tauri layer), `NetworkEvent` (from connections and
+discovery) and `Prep` (the result of a whole-file read done on a blocking task), merged into
+one mailbox so every state change is sequential. Outputs are `CoreEvent`s on a bounded
+`broadcast` channel, consumed by the Tauri layer, which forwards them to the webview.
 
-Commands: `SendMessage`, `LoadHistory`, `MarkRead`, `ForgetPeer`, `ListPeers`, `GetProfile`,
-`SetNickname`, `SetNotifyMuted`, `Shutdown`.
+Commands: `SendMessage` (text and/or files), `LoadHistory`, `MarkRead`, `ForgetPeer`,
+`ListPeers`, `GetProfile`, `SetNickname`, `SetNotifyMuted`, `Attachment`, `CancelAttachment`,
+`RetryAttachment`, `Shutdown`.
+
+The transfer pump is not a task of its own. A file is written from the session loop, eight
+chunks per turn, on a deadline the token bucket sets — so the actor stays single-threaded and
+ordered, a chat message never waits behind a whole file, and a transfer that has nothing to do
+costs no wakeups at all.
 
 ### 8.2 Event flow for an inbound message
 
@@ -535,6 +655,24 @@ connection task: frame → validate → NetworkEvent::Frame{peer, chat}
 
 The acknowledgement is sent only after the row is committed, so "доставлено" on the sender
 means "durably stored on the recipient", not "written to a socket buffer".
+
+An attached file adds a second, independent flow, and it is deliberately not a special case of
+the first:
+
+```
+connection task: file_chunk → byte budget → Session
+   → Session: open or adopt <id>/<name>.part, append at the offset it really is at
+   → mismatch? → file_ack{received: the real length} (the sender rewinds)
+   → every 512 KiB → Store: SetAttachmentProgress → broadcast: Attachment{row}
+   → file_done → (blocking task) digest the part file
+   → digest agrees → rename into place → Store: complete → file_ack{complete} → broadcast
+   → digest differs → delete the part file → failed → file_cancel{checksum}
+```
+
+The message was delivered long before the file arrives, so the bubble shows a delivered
+message whose card is still filling. There is no timer, no polling and no worker pool: the
+recipient acknowledges progress, and every acknowledgement is both the sender's pacing
+feedback and the interface's next progress update.
 
 ### 8.3 Settings
 
@@ -689,8 +827,20 @@ variant the front end subscribes to.
 
 `capabilities/default.json` grants the minimum: `core:default` (minus unused event/window
 commands), `notification:default`, `autostart:allow-enable`/`allow-disable`/`allow-is-enabled`,
-`store:default`, `os:allow-hostname`, `process:allow-restart` for the restart path. No
-`shell`, no `fs`, no HTTP scope, no global Tauri API (`withGlobalTauri: false`).
+`store:default`, `os:allow-hostname`, `dialog:allow-open` and `dialog:allow-save` (the file
+picker, and only the picker: the dialog plugin returns a path, and the host does the rest),
+`process:allow-restart` for the restart path. No `shell`, no `fs`, no HTTP scope, no global
+Tauri API (`withGlobalTauri: false`).
+
+The asset protocol is enabled with an empty static scope and a runtime grant, which is what lets
+a bubble render a picture without giving the web view a filesystem: the host adds exactly two
+things, once — the attachments directory at startup, and each file the user picks, as it is
+picked. A path that was never chosen and never received is not readable from the web view.
+
+The scope is rebuilt on every start, so the grant has to be too: a picture *you sent* is rendered
+from its original file, and without re-granting it — which `history` does, for images on the page
+it is returning — every image you have ever sent becomes a broken placeholder the next time the
+application is opened. Only images are granted, and only ones that are still on disk.
 
 ### 9.6 Content Security Policy
 
@@ -698,11 +848,15 @@ commands), `notification:default`, `autostart:allow-enable`/`allow-disable`/`all
 default-src 'self';
 script-src 'self';
 style-src 'self' 'unsafe-inline';   /* MD3 tokens and dynamic accent colour are inline CSS vars */
-img-src 'self' data:;               /* blobatar data: URIs */
-connect-src ipc: http://ipc.localhost;
+img-src 'self' data: asset: http://asset.localhost;   /* blobatar data: URIs, plus previews */
+connect-src ipc: http://ipc.localhost asset: http://asset.localhost;
 font-src 'self';
 object-src 'none'; base-uri 'none'; frame-ancestors 'none';
 ```
+
+`asset:`/`http://asset.localhost` is the asset protocol, and it is the only origin added: an
+attachment preview is a URL the web view *renders*, not a byte string it holds. What it can
+render is bounded by the scope of §9.5, so the CSP change adds no reach of its own.
 
 `'unsafe-inline'` for styles is required by the design-token strategy (the accent colour is
 a computed CSS custom property) and is the minimum relaxation that works; scripts remain
@@ -765,7 +919,7 @@ src/
 ├─ features/
 │  ├─ onboarding/            # first-run nickname + avatar preview
 │  ├─ users/                 # user list, search, sorting, forget
-│  ├─ chat/                  # message list, composer, history paging
+│  ├─ chat/                  # message list, composer, attachments, history paging
 │  └─ settings/              # grouped settings screen, including the log directory
 ├─ stores/                   # Pinia: peers, chat, settings, ui
 └─ composables/              # useNow, useMediaQuery, useEntranceWindow
@@ -809,6 +963,22 @@ Theme modes: `system | light | dark`, resolved from `matchMedia('(prefers-color-
 (watched, not polled). Reduced motion is honoured globally by zeroing the motion durations
 under `@media (prefers-reduced-motion: reduce)`, which also disables the blobatar idle
 animation.
+
+**The one icon set that is not ours.** `src/ui/icons.ts` holds the application's own marks as
+primitive lists, rendered through `MdIcon` — that stays, and it is what every piece of chrome
+uses. File types are the exception: `src/ui/fileIcons.ts` maps a *file extension* to a badge from
+the `vscode-icons` collection, pulled in by `unplugin-icons` at build time. The reasoning is that a
+PDF badge is a picture of someone else's format rather than a piece of this application's
+language — there are a hundred of them, they are the ones every file manager on the machine already
+shows, and hand-drawing an approximation would be both more code and less recognisable. The plugin
+resolves `~icons/<set>/<name>` into an ordinary Vue component and emits only the imports a module
+actually uses, so the dependency is a build-time one with no runtime library and no `v-html`.
+
+The cost is bounded and measured: 45 badges add ~23 KB gzipped to the chat view's own chunk, which
+is lazy and not downloaded until a conversation is opened; the main bundle is unchanged. Two
+badges from the set were dropped for being 13–15 KB each (the key and the certificate
+illustrations), and the rare-language badges were folded into the generic source mark for the same
+reason — a mapping table is a budget, and it is spent on the extensions people actually exchange.
 
 ### 10.2 Avatars
 
@@ -949,6 +1119,16 @@ parameters, so message bodies cannot become SQL); nickname/seed/body length caps
 *both* the wire and in the domain newtypes, so a value that bypassed one check still cannot
 be stored; and a maximum peer count so a hostile LAN cannot make us open sockets without
 bound.
+
+Files add three of their own. A **name** from a peer is never a path: `FileName::sanitise` keeps
+only the last component, drops control and platform-forbidden characters, prefixes reserved
+Windows device names and truncates with the extension intact, and the file is then written into
+a directory named after the *attachment identifier*, which we chose. A **size** from a peer is a
+claim, not a fact: the recipient refuses to write past it, refuses to write independently of the
+offset it really is at, and cancels anything above the cap without writing a byte. And the
+**pace** is bounded in bytes and in frames per connection (§5.5), so a hostile peer cannot fill
+the disk faster than the budget or make us parse frames faster than it. A digest that disagrees
+deletes the file and fails the transfer rather than being retried.
 
 ---
 

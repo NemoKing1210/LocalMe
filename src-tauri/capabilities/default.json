@@ -31,6 +31,8 @@
     "os:allow-hostname",
     "os:allow-locale",
     "os:allow-platform",
+    "dialog:allow-open",
+    "dialog:allow-save",
     "process:allow-restart",
     "process:allow-exit"
   ]

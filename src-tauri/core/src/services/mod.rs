@@ -1,9 +1,11 @@
 //! Service actors.
 
+pub mod attachment;
 pub mod events;
 pub mod session;
 pub mod settings;
 
+pub use attachment::{IncomingTransfer, OutgoingTransfer, attachment_directory, hash_file};
 pub use events::{CoreEvent, NoticeLevel};
 pub use session::{
     SessionCommand, SessionConfig, SessionHandle, SessionRuntime, spawn as spawn_session,

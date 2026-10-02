@@ -2,11 +2,51 @@ export type DeviceId = string;
 
 export type MessageId = string;
 
+export type AttachmentId = string;
+
 export type UnixMillis = number;
 
 export type MessageDirection = 'incoming' | 'outgoing';
 
 export type MessageStatus = 'queued' | 'sending' | 'delivered' | 'received';
+
+/** An image the interface can show instead of a file chip. */
+export type AttachmentKind = 'image' | 'file';
+
+export type AttachmentState =
+  'queued' | 'sending' | 'receiving' | 'complete' | 'cancelled' | 'failed';
+
+export interface Attachment {
+  readonly id: AttachmentId;
+  readonly messageId: MessageId;
+  readonly peer: DeviceId;
+  readonly direction: MessageDirection;
+  readonly name: string;
+  readonly size: number;
+  readonly kind: AttachmentKind;
+  readonly state: AttachmentState;
+  /** Bytes that have arrived, on the side that owns this row. */
+  readonly transferred: number;
+  readonly createdAt: UnixMillis;
+  /**
+   * Where the file is on this machine. `null` while an incoming file is still being received
+   * and after a failure; the sender's source otherwise.
+   */
+  readonly path: string | null;
+  /** The whole-file digest, when one has been computed. */
+  readonly sha256?: string;
+}
+
+/** A file the host has looked at, on its way into the composer. */
+export interface FilePick {
+  readonly path: string;
+  /** The name the recipient will see: sanitised by the same code that will send it. */
+  readonly name: string;
+  readonly size: number;
+  readonly kind: AttachmentKind;
+  /** `null` when the file can be attached. */
+  readonly problem: 'missing' | 'directory' | 'tooLarge' | null;
+}
 
 export interface Profile {
   readonly deviceId: DeviceId;
@@ -35,7 +75,10 @@ export interface Message {
   readonly id: MessageId;
   readonly peer: DeviceId;
   readonly direction: MessageDirection;
-  readonly body: string;
+  /** `null` for a message that carries only files. */
+  readonly body: string | null;
+  /** Files attached to this message, in the order the sender listed them. */
+  readonly attachments: readonly Attachment[];
   readonly sentAt: UnixMillis;
   readonly receivedAt: UnixMillis;
   /**
@@ -175,6 +218,7 @@ export interface CoreEventMap {
     readonly status: MessageStatus;
     readonly deliveredAt: UnixMillis | null;
   };
+  attachment: { readonly peer: DeviceId; readonly attachment: Attachment };
   own_profile: { readonly nickname: string; readonly avatarSeed: string };
   notice: { readonly level: NoticeLevel; readonly message: string };
   stopped: null;

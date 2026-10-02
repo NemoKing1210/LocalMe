@@ -134,6 +134,60 @@ impl<'de> Deserialize<'de> for MessageId {
     }
 }
 
+/// An attachment identifier: UUID v7, like [`MessageId`], so a transfer list keeps its creation
+/// order under `ORDER BY id` and every attachment in a message has a stable name on the wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct AttachmentId(Uuid);
+
+impl AttachmentId {
+    #[must_use]
+    pub fn generate() -> Self {
+        Self(Uuid::now_v7())
+    }
+
+    #[must_use]
+    pub const fn from_uuid(uuid: Uuid) -> Self {
+        Self(uuid)
+    }
+
+    #[must_use]
+    pub const fn as_uuid(self) -> Uuid {
+        self.0
+    }
+}
+
+impl fmt::Display for AttachmentId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.0, f)
+    }
+}
+
+impl FromStr for AttachmentId {
+    type Err = DomainError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Uuid::parse_str(s)
+            .map(Self)
+            .map_err(|_| DomainError::InvalidId {
+                kind: "attachment id",
+                value: s.chars().take(64).collect(),
+            })
+    }
+}
+
+impl Serialize for AttachmentId {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for AttachmentId {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = String::deserialize(deserializer)?;
+        raw.parse().map_err(D::Error::custom)
+    }
+}
+
 /// The seed a peer's avatar is rendered from.
 ///
 /// Owned by the announcing device and transmitted verbatim, because two devices must render

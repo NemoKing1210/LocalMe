@@ -313,7 +313,8 @@ mod tests {
         let body = "я".repeat(crate::protocol::MAX_BODY_CHARS);
         let frame = Frame::Chat {
             id: MessageId::generate(),
-            body: MessageBody::parse(&body).expect("valid"),
+            text: Some(MessageBody::parse(&body).expect("valid")),
+            attachments: Vec::new(),
         };
         let expected = frame.clone();
 

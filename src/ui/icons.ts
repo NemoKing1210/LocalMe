@@ -198,6 +198,34 @@ export const ICONS: Record<string, readonly Shape[]> = {
     },
     { kind: 'line', x1: 3.3, y1: 9.5, x2: 20.7, y2: 9.5 },
   ],
+  paperclip: [
+    {
+      kind: 'path',
+      d: 'M19.4 11.3 12.2 18.5a4.6 4.6 0 0 1-6.5-6.5l7.6-7.6a3 3 0 0 1 4.3 4.3l-7.6 7.6a1.5 1.5 0 0 1-2.1-2.1l7-7',
+    },
+  ],
+  file: [
+    { kind: 'path', d: 'M6.2 3.4h7.2l4.4 4.4v12.8H6.2z' },
+    { kind: 'polyline', points: '13.4,3.4 13.4,7.8 17.8,7.8' },
+  ],
+  image: [
+    { kind: 'rect', x: 3.2, y: 4.8, width: 17.6, height: 14.4, rx: 2.4 },
+    { kind: 'dot', cx: 8.8, cy: 9.8, r: 1.6 },
+    { kind: 'polyline', points: '4.6,17.6 10.2,12.4 13.8,15.4 17.4,11.4 20.4,14.4' },
+  ],
+  download: [
+    { kind: 'line', x1: 12, y1: 3.6, x2: 12, y2: 15.2 },
+    { kind: 'polyline', points: '7.4,10.8 12,15.4 16.6,10.8' },
+    { kind: 'path', d: 'M4.6 18.4v1.4a1.6 1.6 0 0 0 1.6 1.6h11.6a1.6 1.6 0 0 0 1.6-1.6v-1.4' },
+  ],
+  launch: [
+    { kind: 'path', d: 'M14.4 4.2h5.4v5.4' },
+    { kind: 'line', x1: 19.6, y1: 4.4, x2: 11.4, y2: 12.6 },
+    {
+      kind: 'path',
+      d: 'M18.2 13.8v5a1.6 1.6 0 0 1-1.6 1.6H5.4a1.6 1.6 0 0 1-1.6-1.6V7.6A1.6 1.6 0 0 1 5.4 6h5',
+    },
+  ],
 };
 
 export type IconName = keyof typeof ICONS;

@@ -21,7 +21,7 @@ Typical user loop:
 4. History, presence, unread counts and settings persist across restarts.
 
 UI languages: English, Russian, Spanish, German, French, Portuguese and Chinese. Identifier:
-`dev.localme.desktop`. Version: `0.8.0`. Changelog: [CHANGELOG.md](CHANGELOG.md). Design notes:
+`dev.localme.desktop`. Version: `0.9.0`. Changelog: [CHANGELOG.md](CHANGELOG.md). Design notes:
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Stack (accurate)
@@ -59,10 +59,11 @@ src/
   theme/                   MD3 tokens, palettes, accent generation
   i18n/                    typed t(), seven catalogues, Intl formatting
   ui/                      design-system components (MdButton, MdTextField, MdDialog, …)
+                           icons.ts (own marks), fileIcons.ts (file-type badges)
   features/
     onboarding/            first-run nickname + avatar
     users/                 user list, search, sorting, forget
-    chat/                  message list, composer, history paging
+    chat/                  message list, composer, attachments, history paging
     settings/              profile, appearance, language, notifications, system, data, logs
   stores/                  Pinia: peers, chat, settings, ui
   composables/             useNow, useMediaQuery, useEntrance
@@ -78,17 +79,18 @@ src-tauri/
     args.rs                argument parsing/validation (unit-tested)
     state.rs               the shared host state handed to commands
     events.rs              CoreEvent → window.emit (suppressed while hidden in the tray)
+    files.rs               what may be attached, and opening/revealing what arrived
     tray.rs  window.rs  notifications.rs  autostart.rs  error.rs
     logging.rs              the subscriber: daily files, retention pruning, the level reload
   core/                    crate `localme-core` — no Tauri, no UI
     src/
-      domain/              pure: DeviceId, Nickname, MessageId, Peer, PresenceMachine
+      domain/              pure: DeviceId, MessageId, AttachmentId, FileName, Peer, PresenceMachine
       protocol/            pure: framing codec, Envelope, validation, rate limiter
       ports/               traits: Discovery, Store
       discovery/           mDNS, UDP beacon, composite adapter
       transport/           TCP listener, connection, codec
       storage/             SQLite store + schema/migrations
-      services/            Session actor, Settings actor, events
+      services/            Session actor, file-transfer engine, Settings actor, events
       runtime.rs           wires concrete adapters into the actor
     tests/loopback.rs      two full instances discovering and messaging each other
 .github/
@@ -135,18 +137,19 @@ mirroring the Rust DTOs in `src/ipc/types.ts`. It is the only file that names a 
 string. Register a new command in `src-tauri/src/lib.rs`, implement it in `commands.rs`, then wrap
 it in `src/ipc/`.
 
-| Command group        | Commands                                                                                      |
-| -------------------- | --------------------------------------------------------------------------------------------- |
-| Bootstrap & peers    | `bootstrap`, `list_peers`, `known_devices`, `forget_peer`, `restore_peer`, `set_peer_muted`   |
-| Chat                 | `history`, `send_message`, `mark_read`, `clear_history`                                       |
-| Profile              | `own_profile`, `set_nickname`, `complete_onboarding`                                          |
-| Settings & UI labels | `get_settings`, `update_settings`, `is_autostart_enabled`, `set_ui_labels`, `set_active_chat` |
-| Window & lifecycle   | `show_window`, `hide_window`, `quit`, `diagnostics`                                           |
-| Logs                 | `logs_info`, `open_logs_folder`, `clear_logs`, `log_frontend`                                 |
+| Command group        | Commands                                                                                                                          |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| Bootstrap & peers    | `bootstrap`, `list_peers`, `known_devices`, `forget_peer`, `restore_peer`, `set_peer_muted`                                       |
+| Chat                 | `history`, `send_message`, `mark_read`, `clear_history`                                                                           |
+| Files                | `pick_files`, `inspect_files`, `open_attachment`, `reveal_attachment`, `save_attachment`, `cancel_attachment`, `retry_attachment` |
+| Profile              | `own_profile`, `set_nickname`, `complete_onboarding`                                                                              |
+| Settings & UI labels | `get_settings`, `update_settings`, `is_autostart_enabled`, `set_ui_labels`, `set_active_chat`                                     |
+| Window & lifecycle   | `show_window`, `hide_window`, `quit`, `diagnostics`                                                                               |
+| Logs                 | `logs_info`, `open_logs_folder`, `clear_logs`, `log_frontend`                                                                     |
 
-Host events: `peers`, `message`, `message_status`, `settings_changed`, `state_snapshot`,
-`open_chat`, `notice`, `stopped`. They are fanned into the stores by `src/app/connect.ts` — the
-only place that subscribes to the host.
+Host events: `peers`, `message`, `message_status`, `attachment`, `settings_changed`,
+`state_snapshot`, `open_chat`, `notice`, `stopped`. They are fanned into the stores by
+`src/app/connect.ts` — the only place that subscribes to the host.
 
 Commands return a typed `ApiError` on failure (never a raw panic); `CommandError` in `src/ipc/`
 normalises it, and `isOffline` distinguishes "the peer is not reachable" from real errors.
@@ -167,6 +170,14 @@ it is back. The drain is paced (see `OUTBOX_BURST` / `OUTBOX_RATE_PER_SECOND`) s
 recipient's inbound rate limit, and a disconnect returns every in-flight row to `queued`
 (`requeue_pending_messages`); startup does the same for the whole database. The interface shows a
 second date — when the message was delivered — for a message that had to wait.
+
+Files ride on the same message and then go their own way: the metadata is announced by the `chat`
+frame (so the bubble appears immediately, with the file cards in it), and the bytes follow as
+`file_chunk` frames paced by `FILE_SEND_RATE_PER_SECOND`. The recipient's part file is the
+authority on how much arrived — a chunk that does not continue it is refused with the real offset —
+so an interrupted transfer resumes from wherever it stopped instead of starting over, and the
+digest in `file_done` is what says the file is the file. `attachment` events carry the whole row to
+the interface. The design is §5.7 of `docs/ARCHITECTURE.md`.
 
 ### The hidden-window rule
 
@@ -207,6 +218,10 @@ a tray-resident instance at ~0 % CPU.
    forms of each language.
 10. Do not commit secrets, build output (`dist/`, `src-tauri/target/`, `src-tauri/gen/`), or
     OS-specific temp files.
+11. **A file name from the network is never a path.** `FileName::sanitise` is the only way a name
+    becomes a path component, and the file lands in a directory named after the attachment's
+    identifier — `<data-dir>/files/<id>/<name>` — so a peer can choose what a file is called and
+    never where it goes.
 
 ## Naming
 
@@ -244,6 +259,10 @@ obvious change. Keep existing comments true or delete them; never comment out co
   plus an entry in `src/i18n/locales.ts`, `src/ipc/types.ts` and `Locale` in `localme-core`.
 - **UI control:** add an `Md*` component in `src/ui/` using the tokens from `src/theme/tokens.css`;
   do not import a component library.
+- **File-type icon:** add the extension to `BY_EXTENSION` in `src/ui/fileIcons.ts` and import the
+  badge from `~icons/vscode-icons/<name>`; check the icon exists in the installed set before you
+  name it. Keep it cheap — an extension whose badge costs 15 KB is not worth an icon — and map to
+  the nearest family rather than leaving it unhandled when the set has no badge of its own.
 - **Setting:** extend the typed `Settings` document (and its schema version), its default, the
   settings screen, and every catalogue. A logging level or retention change is applied by the host
   without a restart: `events::apply_settings` calls `logging::apply`.
@@ -290,6 +309,7 @@ check:versions` must pass.
 - Discovery, dial and reconnect paths
 - Message send, the outbox (queued → sending → delivered), delivery acknowledgement, deduplication
   and the requeue on disconnect
+- File offer, transfer, pause/resume, cancellation, retry and digest verification
 - Presence transitions, including the simultaneous-connect tie-break
 - Persistence across restart (peers, history, settings, window bounds)
 - Tray close, native notification, single-instance focus
@@ -303,6 +323,11 @@ check:versions` must pass.
 ## Out of scope / traps
 
 - Do not add a second component library, a second state library or a second i18n system.
+- Do not add a second _icon library_. `unplugin-icons` with the `vscode-icons` collection is the
+  one exception the project allows, and only for file-type badges keyed by extension
+  (`src/ui/fileIcons.ts`); interface chrome uses `src/ui/icons.ts` and `MdIcon`. The exception
+  exists because a PDF badge is someone else's format, not part of this application's visual
+  language — it is not a precedent for pulling a general-purpose icon set into the chrome.
 - Do not add a second animation library, and do not hand-write the same `motion` animation again in a
   component that a shared pattern already covers: the user list, the message log and the unread badge
   are the three that exist.

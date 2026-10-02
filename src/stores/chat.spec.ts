@@ -1,7 +1,7 @@
 import { createPinia, setActivePinia } from 'pinia';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { Message } from '@/ipc';
+import type { Attachment, Message } from '@/ipc';
 
 vi.mock('@/ipc', () => ({
   history: vi.fn().mockResolvedValue([]),
@@ -13,12 +13,29 @@ import { useChatStore } from './chat';
 const PEER = '018f2b9c-0000-7000-8000-0000000000aa';
 const OTHER = '018f2b9c-0000-7000-8000-0000000000bb';
 
+function attachment(id: string, state: Attachment['state'], transferred: number): Attachment {
+  return {
+    id,
+    messageId: 'm',
+    peer: PEER,
+    direction: 'incoming',
+    name: `${id}.bin`,
+    size: 1_024,
+    kind: 'file',
+    state,
+    transferred,
+    createdAt: 1,
+    path: null,
+  };
+}
+
 function message(id: string, sentAt: number, peer = PEER): Message {
   return {
     id,
     peer,
     direction: 'incoming',
     body: `message ${id}`,
+    attachments: [],
     sentAt,
     receivedAt: sentAt,
     deliveredAt: null,
@@ -152,6 +169,29 @@ describe('the chat store', () => {
 
     chat.clear(PEER);
     expect(chat.messages).toHaveLength(0);
+  });
+
+  it('replaces one attachment inside its message and leaves the rest alone', async () => {
+    const chat = useChatStore();
+    await chat.open(PEER);
+
+    const file = attachment('f1', 'receiving', 0);
+    const other = attachment('f2', 'receiving', 0);
+    const withFiles = { ...message('a', 1_000), attachments: [file, other] };
+    chat.add(withFiles);
+    chat.add(message('b', 2_000));
+
+    // What the host sends on every acknowledgement: the whole row, further along.
+    chat.applyAttachment({ ...file, transferred: 512, state: 'complete', path: '/tmp/a.bin' });
+
+    expect(chat.messages[0]?.attachments[0]?.state).toBe('complete');
+    expect(chat.messages[0]?.attachments[0]?.transferred).toBe(512);
+    expect(chat.messages[0]?.attachments[1]?.state).toBe('receiving');
+
+    // A row for a message that is not loaded — a page away — must change nothing.
+    chat.applyAttachment(attachment('f9', 'complete', 4));
+    expect(chat.messages[0]?.attachments).toHaveLength(2);
+    expect(chat.messages[1]?.attachments).toHaveLength(0);
   });
 
   it('drops the loaded page when the conversation changes', async () => {

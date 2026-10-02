@@ -10,6 +10,8 @@ import MdIcon from '@/ui/MdIcon.vue';
 import MdMenu from '@/ui/MdMenu.vue';
 import type { IconName } from '@/ui/icons';
 
+import AttachmentCard from './AttachmentCard.vue';
+
 const props = defineProps<{
   message: Message;
   showStatus: boolean;
@@ -74,14 +76,15 @@ const menu = ref<InstanceType<typeof MdMenu> | null>(null);
 const menuSelection = ref('');
 
 const menuItems = computed<readonly BubbleMenuAction[]>(() => {
-  const copy: BubbleMenuAction = {
-    id: 'message',
-    label: i18n.t('chat.copyMessage'),
-    icon: 'copy',
-  };
-  return menuSelection.value.length === 0
-    ? [copy]
-    : [{ id: 'selection', label: i18n.t('chat.copySelection'), icon: 'copy' }, copy];
+  const items: BubbleMenuAction[] = [];
+  if (menuSelection.value.length > 0) {
+    items.push({ id: 'selection', label: i18n.t('chat.copySelection'), icon: 'copy' });
+  }
+  // A message that is only files has no text to copy, so it is not offered one.
+  if (props.message.body !== null) {
+    items.push({ id: 'message', label: i18n.t('chat.copyMessage'), icon: 'copy' });
+  }
+  return items;
 });
 
 /** The current selection, but only when it both starts and ends inside this bubble. */
@@ -102,6 +105,8 @@ function selectionWithin(host: EventTarget | null): string {
  */
 function onContextMenu(event: MouseEvent): void {
   menuSelection.value = selectionWithin(event.currentTarget);
+  // A message of files only, with nothing selected, has nothing to offer.
+  if (menuItems.value.length === 0) return;
   menu.value?.show({ x: event.clientX, y: event.clientY });
 }
 
@@ -118,7 +123,7 @@ async function copy(text: string): Promise<void> {
 }
 
 function onMenuSelect(id: string): void {
-  void copy(id === 'selection' ? menuSelection.value : props.message.body);
+  void copy(id === 'selection' ? menuSelection.value : (props.message.body ?? ''));
 }
 </script>
 
@@ -132,7 +137,12 @@ function onMenuSelect(id: string): void {
     @mousedown.right.prevent
     @contextmenu.prevent="onContextMenu"
   >
-    <p class="md-typescale-body-medium bubble__body" data-selectable>{{ message.body }}</p>
+    <div v-if="message.attachments.length > 0" class="bubble__files">
+      <AttachmentCard v-for="file in message.attachments" :key="file.id" :attachment="file" />
+    </div>
+    <p v-if="message.body !== null" class="md-typescale-body-medium bubble__body" data-selectable>
+      {{ message.body }}
+    </p>
     <footer class="md-typescale-label-small bubble__meta">
       <span class="bubble__time">{{ i18n.clock(message.sentAt) }}</span>
       <template v-if="deliveredAt !== null">
@@ -206,6 +216,14 @@ function onMenuSelect(id: string): void {
   overflow-wrap: anywhere;
   /* The I-beam is the only thing that tells the reader the text can be selected. */
   cursor: text;
+}
+
+/* A stack of files above the text: the picture first, the sentence it came with under it. */
+.bubble__files {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-block-end: 4px;
 }
 
 /* The time and the delivery glyph are metadata: a drag over them must not copy them out. */

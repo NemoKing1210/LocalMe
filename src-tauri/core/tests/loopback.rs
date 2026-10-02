@@ -8,11 +8,13 @@ use std::net::SocketAddr;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+use localme_core::domain::attachment::AttachmentState;
 use localme_core::domain::ids::DeviceId;
 use localme_core::domain::message::{Direction, MessageBody, MessageStatus};
 use localme_core::domain::nickname::Nickname;
 use localme_core::domain::peer::PeerView;
 use localme_core::ports::discovery::{DiscoveredPeer, DiscoveryEvent};
+use localme_core::protocol::limits::FILE_CHUNK_BYTES;
 use localme_core::runtime::{Core, CoreConfig};
 use tempfile::TempDir;
 
@@ -170,7 +172,7 @@ async fn two_instances_connect_and_exchange_messages() {
     let sent = anna
         .core
         .session
-        .send_message(boris.device_id(), body("привет, Борис"))
+        .send_message(boris.device_id(), Some(body("привет, Борис")), Vec::new())
         .await
         .expect("message is accepted");
     // A connected peer is served immediately, so the row the caller receives is already in
@@ -208,7 +210,10 @@ async fn two_instances_connect_and_exchange_messages() {
         .expect("history");
     assert_eq!(received.len(), 1);
     assert_eq!(
-        received.first().map(|m| m.body.as_str()),
+        received
+            .first()
+            .and_then(|m| m.body.as_ref())
+            .map(MessageBody::as_str),
         Some("привет, Борис")
     );
     assert_eq!(
@@ -237,7 +242,7 @@ async fn two_instances_connect_and_exchange_messages() {
     boris
         .core
         .session
-        .send_message(anna.device_id(), body("привет, Аня"))
+        .send_message(anna.device_id(), Some(body("привет, Аня")), Vec::new())
         .await
         .expect("message is accepted");
 
@@ -317,7 +322,7 @@ async fn a_peer_that_quits_goes_offline_with_a_last_seen_time() {
     let waiting = anna
         .core
         .session
-        .send_message(boris_id, body("are you there?"))
+        .send_message(boris_id, Some(body("are you there?")), Vec::new())
         .await
         .expect("a message to an offline peer is queued");
     assert_eq!(waiting.status, MessageStatus::Queued);
@@ -367,7 +372,7 @@ async fn messages_written_while_the_peer_is_away_are_delivered_in_order_when_it_
         let queued = anna
             .core
             .session
-            .send_message(boris_id, body(text))
+            .send_message(boris_id, Some(body(text)), Vec::new())
             .await
             .expect("a message to an offline peer is queued");
         assert_eq!(queued.status, MessageStatus::Queued);
@@ -435,7 +440,14 @@ async fn messages_written_while_the_peer_is_away_are_delivered_in_order_when_it_
         .await
         .expect("history")
         .iter()
-        .map(|message| message.body.as_str().to_owned())
+        .map(|message| {
+            message
+                .body
+                .as_ref()
+                .map(MessageBody::as_str)
+                .unwrap_or_default()
+                .to_owned()
+        })
         .collect();
     arriving.reverse(); // the page is newest first
     assert_eq!(arriving, bodies);
@@ -479,7 +491,7 @@ async fn two_backlogs_drain_together_without_tripping_the_rate_limit() {
     for text in &from_anna {
         anna.core
             .session
-            .send_message(boris_id, body(text))
+            .send_message(boris_id, Some(body(text)), Vec::new())
             .await
             .expect("queued");
     }
@@ -497,7 +509,7 @@ async fn two_backlogs_drain_together_without_tripping_the_rate_limit() {
     for text in &from_boris {
         let queued = returning
             .session
-            .send_message(anna_id, body(text))
+            .send_message(anna_id, Some(body(text)), Vec::new())
             .await
             .expect("queued");
         assert_eq!(
@@ -564,7 +576,14 @@ async fn two_backlogs_drain_together_without_tripping_the_rate_limit() {
         .expect("history")
         .iter()
         .filter(|message| message.direction == Direction::Incoming)
-        .map(|message| message.body.as_str().to_owned())
+        .map(|message| {
+            message
+                .body
+                .as_ref()
+                .map(MessageBody::as_str)
+                .unwrap_or_default()
+                .to_owned()
+        })
         .collect();
     received_by_boris.reverse();
     assert_eq!(received_by_boris, from_anna);
@@ -577,7 +596,14 @@ async fn two_backlogs_drain_together_without_tripping_the_rate_limit() {
         .expect("history")
         .iter()
         .filter(|message| message.direction == Direction::Incoming)
-        .map(|message| message.body.as_str().to_owned())
+        .map(|message| {
+            message
+                .body
+                .as_ref()
+                .map(MessageBody::as_str)
+                .unwrap_or_default()
+                .to_owned()
+        })
         .collect();
     received_by_anna.reverse();
     assert_eq!(received_by_anna, from_boris);
@@ -605,7 +631,7 @@ async fn forgetting_a_peer_hides_it_and_can_delete_its_history() {
 
     anna.core
         .session
-        .send_message(boris.device_id(), body("goodbye"))
+        .send_message(boris.device_id(), Some(body("goodbye")), Vec::new())
         .await
         .expect("message is accepted");
 
@@ -688,7 +714,7 @@ async fn a_forgotten_device_can_be_restored_without_reappearing() {
     // when the device comes back into the list.
     anna.core
         .session
-        .send_message(boris.device_id(), body("remember me"))
+        .send_message(boris.device_id(), Some(body("remember me")), Vec::new())
         .await
         .expect("message is accepted");
     anna.core
@@ -744,7 +770,7 @@ async fn forgetting_without_deleting_keeps_the_history() {
 
     anna.core
         .session
-        .send_message(boris.device_id(), body("keep me"))
+        .send_message(boris.device_id(), Some(body("keep me")), Vec::new())
         .await
         .expect("message is accepted");
 
@@ -839,7 +865,11 @@ async fn messages_survive_a_restart() {
 
     anna.core
         .session
-        .send_message(boris.device_id(), body("see you tomorrow"))
+        .send_message(
+            boris.device_id(),
+            Some(body("see you tomorrow")),
+            Vec::new(),
+        )
         .await
         .expect("message is accepted");
 
@@ -884,7 +914,10 @@ async fn messages_survive_a_restart() {
         .expect("history");
     assert_eq!(history.len(), 1);
     assert_eq!(
-        history.first().map(|m| m.body.as_str()),
+        history
+            .first()
+            .and_then(|m| m.body.as_ref())
+            .map(MessageBody::as_str),
         Some("see you tomorrow")
     );
 
@@ -997,6 +1030,354 @@ async fn two_instances_find_each_other_over_mdns() {
         "both ends must see the connection: {seen:?}"
     );
 
+    // Real discovery keeps announcing both peers, which is what makes them dial each other at the
+    // same moment over and over. The connection has to survive that: longer than a heartbeat
+    // timeout, because a pair that drops and reconnects would be online for most of this window
+    // and still be broken.
+    let deadline = Instant::now() + Duration::from_secs(25);
+    while Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let anna_sees = anna
+            .session
+            .list_peers()
+            .await
+            .unwrap_or_default()
+            .iter()
+            .any(|peer| peer.device_id == boris_id && peer.online);
+        let boris_sees = boris
+            .session
+            .list_peers()
+            .await
+            .unwrap_or_default()
+            .iter()
+            .any(|peer| peer.device_id == anna_id && peer.online);
+        assert!(
+            anna_sees && boris_sees,
+            "the connection flapped: anna={anna_sees} boris={boris_sees}"
+        );
+    }
+
     anna.shutdown().await;
     boris.shutdown().await;
+}
+
+/// A file and the message that carries it: chunked, verified, stored — and exactly the bytes
+/// that were sent.
+#[tokio::test]
+async fn a_file_arrives_with_its_message_and_lands_byte_for_byte() {
+    let anna = Instance::start("anna").await;
+    let boris = Instance::start("boris").await;
+    anna.discover(&boris, "boris").await;
+    eventually(
+        "boris to appear online for anna",
+        Duration::from_secs(10),
+        || async {
+            anna.peer(boris.device_id())
+                .await
+                .is_some_and(|peer| peer.online)
+        },
+    )
+    .await;
+
+    // Three chunks and a bit: more than one frame, and not a multiple of the chunk size, so an
+    // off-by-one in the stitching would show up as a missing or duplicated byte.
+    let size = FILE_CHUNK_BYTES * 3 + 777;
+    let bytes: Vec<u8> = (0..size).map(|index| (index % 251) as u8).collect();
+    let source = anna._data_dir.path().join("holiday.bin");
+    std::fs::write(&source, &bytes).expect("write the source");
+
+    let sent = anna
+        .core
+        .session
+        .send_message(boris.device_id(), Some(body("look at this")), vec![source])
+        .await
+        .expect("the message is accepted");
+    assert_eq!(sent.attachments.len(), 1);
+    let file = sent.attachments[0].id;
+
+    eventually("the file to arrive", Duration::from_secs(30), || async {
+        boris
+            .core
+            .session
+            .history(anna.device_id(), None, 10)
+            .await
+            .map(|page| {
+                page.iter()
+                    .flat_map(|message| message.attachments.iter())
+                    .any(|attachment| {
+                        attachment.id == file && attachment.state == AttachmentState::Complete
+                    })
+            })
+            .unwrap_or(false)
+    })
+    .await;
+
+    let page = boris
+        .core
+        .session
+        .history(anna.device_id(), None, 10)
+        .await
+        .expect("history");
+    let message = page.first().expect("the message");
+    assert_eq!(
+        message.body.as_ref().map(MessageBody::as_str),
+        Some("look at this"),
+        "the text travels with the file"
+    );
+    let attachment = message
+        .attachments
+        .iter()
+        .find(|attachment| attachment.id == file)
+        .expect("the attachment");
+    assert_eq!(attachment.size, size as u64);
+    assert_eq!(attachment.name.as_str(), "holiday.bin");
+    let stored = attachment.path.clone().expect("the recipient's copy");
+    assert_eq!(
+        std::fs::read(&stored).expect("read the received file"),
+        bytes,
+        "the received bytes must be the sent bytes"
+    );
+    assert!(
+        !std::path::Path::new(&stored)
+            .with_file_name("holiday.part.bin")
+            .exists(),
+        "the part file must be gone once the transfer is complete"
+    );
+
+    eventually(
+        "the sender to see it complete",
+        Duration::from_secs(10),
+        || async {
+            anna.core
+                .session
+                .history(boris.device_id(), None, 10)
+                .await
+                .map(|page| {
+                    page.iter()
+                        .flat_map(|message| message.attachments.iter())
+                        .any(|attachment| {
+                            attachment.id == file && attachment.state == AttachmentState::Complete
+                        })
+                })
+                .unwrap_or(false)
+        },
+    )
+    .await;
+
+    anna.core.shutdown().await;
+    boris.core.shutdown().await;
+}
+
+/// The recipient is stopped in the middle of a file and comes back: the transfer continues from
+/// the part file instead of starting over, and the result is still byte-for-byte correct.
+#[tokio::test]
+async fn an_interrupted_transfer_resumes_from_where_the_recipient_stopped() {
+    init_logging();
+    let anna = Instance::start("anna").await;
+    let boris = Instance::start("boris").await;
+    anna.discover(&boris, "boris").await;
+    eventually(
+        "boris to appear online for anna",
+        Duration::from_secs(10),
+        || async {
+            anna.peer(boris.device_id())
+                .await
+                .is_some_and(|peer| peer.online)
+        },
+    )
+    .await;
+
+    // Big enough that the transfer is still running when the recipient is stopped. The pace is
+    // deliberately below the inbound budget, so this takes a few seconds — which is the point.
+    let size = 12 * 1024 * 1024;
+    let bytes: Vec<u8> = (0..size).map(|index| (index % 251) as u8).collect();
+    let source = anna._data_dir.path().join("big.bin");
+    std::fs::write(&source, &bytes).expect("write the source");
+
+    let sent = anna
+        .core
+        .session
+        .send_message(boris.device_id(), None, vec![source])
+        .await
+        .expect("a file-only message is accepted");
+    assert!(
+        sent.body.is_none(),
+        "a message with no text carries no body"
+    );
+    let file = sent.attachments[0].id;
+    let anna_id = anna.device_id();
+    let boris_id = boris.device_id();
+
+    eventually(
+        "the recipient to be part way through",
+        Duration::from_secs(30),
+        || async {
+            boris
+                .core
+                .session
+                .history(anna_id, None, 10)
+                .await
+                .map(|page| {
+                    page.iter()
+                        .flat_map(|message| message.attachments.iter())
+                        .any(|attachment| {
+                            attachment.id == file
+                                && attachment.state == AttachmentState::Receiving
+                                && attachment.transferred > 0
+                        })
+                })
+                .unwrap_or(false)
+        },
+    )
+    .await;
+
+    // Stop the recipient mid-file, then bring it back over the same data directory. What the
+    // part file holds is what the sender will be told to continue from.
+    boris.core.shutdown().await;
+    let config = CoreConfig::without_discovery(
+        Path::to_path_buf(boris._data_dir.path()),
+        Nickname::parse("ignored").expect("valid nickname"),
+        0,
+        0,
+    );
+    let reopened = Core::start(config).await.expect("the recipient restarts");
+    assert_eq!(reopened.device_id, boris_id, "the identity survives");
+    anna.announce(
+        reopened.device_id,
+        reopened.profile.avatar_seed.clone(),
+        SocketAddr::from(([127, 0, 0, 1], reopened.port)),
+        "boris",
+    )
+    .await;
+
+    eventually(
+        "the rest of the file to arrive",
+        Duration::from_secs(60),
+        || async {
+            reopened
+                .session
+                .history(anna_id, None, 10)
+                .await
+                .map(|page| {
+                    page.iter()
+                        .flat_map(|message| message.attachments.iter())
+                        .any(|attachment| {
+                            attachment.id == file && attachment.state == AttachmentState::Complete
+                        })
+                })
+                .unwrap_or(false)
+        },
+    )
+    .await;
+
+    let page = reopened
+        .session
+        .history(anna_id, None, 10)
+        .await
+        .expect("history");
+    let attachment = page
+        .iter()
+        .flat_map(|message| message.attachments.iter())
+        .find(|attachment| attachment.id == file)
+        .expect("the attachment");
+    let stored = attachment.path.clone().expect("the recipient's copy");
+    assert_eq!(
+        std::fs::read(&stored).expect("read the resumed file"),
+        bytes,
+        "a resumed transfer must produce the same bytes as an uninterrupted one"
+    );
+
+    anna.core.shutdown().await;
+    reopened.shutdown().await;
+}
+
+/// Both peers dial at once, which is what actually happens on a LAN.
+///
+/// Exactly one of the two connections survives the tie-break, and the loser's goodbye must not
+/// take the winner down with it: a session that clears its link on any disconnect flaps the peer
+/// offline, redials, and never settles. The failure is immediate rather than gradual, so a short
+/// window of vigilance catches it.
+#[tokio::test]
+async fn a_simultaneous_dial_settles_on_one_connection_instead_of_flapping() {
+    let anna = Instance::start("anna").await;
+    let boris = Instance::start("boris").await;
+
+    // Issued together, so both sessions decide to dial before either connection can complete:
+    // that simultaneity is the whole point of the test.
+    tokio::join!(
+        anna.discover(&boris, "boris"),
+        boris.discover(&anna, "anna")
+    );
+
+    eventually(
+        "both to see each other online",
+        Duration::from_secs(10),
+        || async {
+            anna.peer(boris.device_id())
+                .await
+                .is_some_and(|peer| peer.online)
+                && boris
+                    .peer(anna.device_id())
+                    .await
+                    .is_some_and(|peer| peer.online)
+        },
+    )
+    .await;
+
+    // A heartbeat is what keeps the peer online: the presence machine stalls a peer it has not
+    // heard from for `HEARTBEAT_TIMEOUT`. Waiting past that and observing that `last_seen` has
+    // not moved is deterministic — a reconnect is fast enough on the loopback that polling for
+    // an offline window would miss it.
+    let before = anna
+        .peer(boris.device_id())
+        .await
+        .and_then(|peer| peer.last_seen_ms)
+        .expect("the connection stamps last seen");
+    tokio::time::sleep(Duration::from_secs(20)).await;
+    let after = anna
+        .peer(boris.device_id())
+        .await
+        .and_then(|peer| peer.last_seen_ms);
+    assert_eq!(
+        after,
+        Some(before),
+        "the peer stalled and reconnected: an idle connection must stay online"
+    );
+    assert!(
+        anna.peer(boris.device_id())
+            .await
+            .is_some_and(|peer| peer.online),
+        "anna lost boris while idle"
+    );
+    assert!(
+        boris
+            .peer(anna.device_id())
+            .await
+            .is_some_and(|peer| peer.online),
+        "boris lost anna while idle"
+    );
+
+    // And the surviving connection is the one messages travel over.
+    anna.core
+        .session
+        .send_message(boris.device_id(), Some(body("still here?")), Vec::new())
+        .await
+        .expect("the message is accepted");
+    eventually(
+        "the message to be delivered",
+        Duration::from_secs(10),
+        || async {
+            boris
+                .core
+                .session
+                .history(anna.device_id(), None, 10)
+                .await
+                .map(|page| page.len() == 1)
+                .unwrap_or(false)
+        },
+    )
+    .await;
+
+    anna.core.shutdown().await;
+    boris.core.shutdown().await;
 }

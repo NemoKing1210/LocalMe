@@ -2,7 +2,7 @@ import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 
 import * as ipc from '@/ipc';
-import type { DeviceId, Message, PageCursor } from '@/ipc';
+import type { Attachment, DeviceId, Message, PageCursor } from '@/ipc';
 
 /** How many messages one page holds. Matches the host's default. */
 const PAGE_SIZE = 50;
@@ -74,13 +74,13 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
-  async function send(body: string): Promise<void> {
+  async function send(body: string, files: readonly string[] = []): Promise<void> {
     const current = peerId.value;
     if (current === null || sending.value) return;
 
     sending.value = true;
     try {
-      const stored = await ipc.sendMessage(current, body);
+      const stored = await ipc.sendMessage(current, body, files);
       if (peerId.value !== current) return;
       add(stored);
     } finally {
@@ -124,6 +124,24 @@ export const useChatStore = defineStore('chat', () => {
     );
   }
 
+  /**
+   * Replaces one attachment inside its message.
+   *
+   * The host sends the whole row on every change, so there is nothing to merge: the row that
+   * arrives is the row that is true.
+   */
+  function applyAttachment(attachment: Attachment): void {
+    messages.value = messages.value.map((message) => {
+      if (!message.attachments.some((known) => known.id === attachment.id)) return message;
+      return {
+        ...message,
+        attachments: message.attachments.map((known) =>
+          known.id === attachment.id ? attachment : known,
+        ),
+      };
+    });
+  }
+
   function clear(deviceId: DeviceId): void {
     if (peerId.value !== deviceId) return;
     messages.value = [];
@@ -144,6 +162,7 @@ export const useChatStore = defineStore('chat', () => {
     send,
     add,
     update,
+    applyAttachment,
     clear,
     consumeEntrance,
   };

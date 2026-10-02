@@ -1,6 +1,6 @@
 [package]
 name = "localme"
-version = "0.8.0"
+version = "0.9.0"
 edition = "2024"
 rust-version = "1.85"
 description = "LocalMe — a zero-configuration messenger for the local network"
@@ -12,8 +12,10 @@ members = [".", "core"]
 resolver = "3"
 
 [workspace.dependencies]
+base64 = "0.22.1"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.145"
+sha2 = "0.10.9"
 thiserror = "2.0.21"
 tokio = { version = "1.53.1", features = [
   "rt-multi-thread",
@@ -42,8 +44,9 @@ tauri-build = { version = "2.7.0", features = [] }
 localme-core = { path = "core" }
 serde = { workspace = true }
 serde_json = { workspace = true }
-tauri = { version = "2.12.0", features = ["tray-icon"] }
+tauri = { version = "2.12.0", features = ["tray-icon", "protocol-asset"] }
 tauri-plugin-autostart = "2.6.0"
+tauri-plugin-dialog = "2.8.1"
 tauri-plugin-notification = "2.5.0"
 tauri-plugin-os = "2.4.0"
 tauri-plugin-process = "2.4.0"

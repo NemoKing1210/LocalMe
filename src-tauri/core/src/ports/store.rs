@@ -10,7 +10,10 @@
 //!   socket failed, so `next_outbox_message` and `requeue_pending_messages` are the only ways a
 //!   waiting message changes state.
 
-use crate::domain::ids::{AvatarSeed, DeviceId, MessageId};
+use std::path::Path;
+
+use crate::domain::attachment::{Attachment, AttachmentState, Sha256};
+use crate::domain::ids::{AttachmentId, AvatarSeed, DeviceId, MessageId};
 use crate::domain::message::{ChatMessage, MessagePreview, MessageStatus};
 use crate::domain::nickname::Nickname;
 use crate::domain::peer::PeerProfile;
@@ -132,10 +135,56 @@ pub trait Store: Send + Sync + 'static {
     /// Returns `true` when the row was inserted and `false` when a message with the same
     /// identifier already existed. A duplicate is not an error: it is how a retransmission is
     /// absorbed.
+    ///
+    /// The message's attachments are written in the same transaction, and each is inserted with
+    /// `INSERT OR IGNORE` as well, so a retransmitted `chat` frame leaves the state of a
+    /// half-received file exactly as it was.
     fn insert_message(
         &self,
         message: &ChatMessage,
     ) -> impl Future<Output = Result<bool, StorageError>> + Send;
+
+    /// Where attachment files live on this machine. One directory per attachment, named after its
+    /// identifier, so a hostile file name never becomes part of a path.
+    fn files_root(&self) -> &Path;
+
+    fn attachment(
+        &self,
+        id: AttachmentId,
+    ) -> impl Future<Output = Result<Option<Attachment>, StorageError>> + Send;
+
+    /// Outgoing messages that still have an attachment to deliver, oldest first, each carrying
+    /// every one of its attachments.
+    ///
+    /// This is what a reconnected peer is offered: the metadata may need to be repeated (the
+    /// recipient may have been reinstalled) and the stream has to resume wherever the recipient
+    /// actually is.
+    fn messages_with_unfinished_attachments(
+        &self,
+        device_id: DeviceId,
+    ) -> impl Future<Output = Result<Vec<ChatMessage>, StorageError>> + Send;
+
+    /// How many bytes are known to have arrived. Written on every acknowledgement, so a crash
+    /// loses at most one window of progress.
+    fn set_attachment_progress(
+        &self,
+        id: AttachmentId,
+        transferred: u64,
+    ) -> impl Future<Output = Result<(), StorageError>> + Send;
+
+    fn set_attachment_state(
+        &self,
+        id: AttachmentId,
+        state: AttachmentState,
+    ) -> impl Future<Output = Result<(), StorageError>> + Send;
+
+    /// Records the whole-file digest before the first chunk leaves, so a resumed transfer does
+    /// not have to read the source again.
+    fn set_attachment_digest(
+        &self,
+        id: AttachmentId,
+        sha256: Sha256,
+    ) -> impl Future<Output = Result<(), StorageError>> + Send;
 
     fn set_message_status(
         &self,

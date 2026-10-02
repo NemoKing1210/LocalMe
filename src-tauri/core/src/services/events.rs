@@ -1,5 +1,6 @@
 //! Events the core emits for the host application to forward to the interface.
 
+use crate::domain::attachment::Attachment;
 use crate::domain::clock::UnixMillis;
 use crate::domain::ids::{AvatarSeed, DeviceId, MessageId};
 use crate::domain::message::{ChatMessage, MessageStatus};
@@ -31,6 +32,14 @@ pub enum CoreEvent {
         /// while it is queued or in flight.
         delivered_at: Option<UnixMillis>,
     },
+    /// An attachment moved: progress, completion, or a failure worth showing.
+    ///
+    /// The whole row travels rather than a delta, so the interface has one shape to apply and a
+    /// dropped event costs a repaint rather than a wrong bar.
+    Attachment {
+        peer: DeviceId,
+        attachment: Attachment,
+    },
     OwnProfile {
         nickname: Nickname,
         avatar_seed: AvatarSeed,
@@ -57,6 +66,7 @@ impl CoreEvent {
             Self::Peers { .. } => "peers",
             Self::Message { .. } => "message",
             Self::MessageStatus { .. } => "message_status",
+            Self::Attachment { .. } => "attachment",
             Self::OwnProfile { .. } => "own_profile",
             Self::Notice { .. } => "notice",
             Self::Stopped => "stopped",
@@ -160,7 +170,8 @@ mod tests {
             id: MessageId::generate(),
             peer,
             direction: Direction::Incoming,
-            body: MessageBody::parse("hallo").expect("valid body"),
+            body: Some(MessageBody::parse("hallo").expect("valid body")),
+            attachments: Vec::new(),
             sent_at: UnixMillis(1_790_000_000_000),
             received_at: UnixMillis(1_790_000_000_001),
             delivered_at: None,
@@ -200,6 +211,23 @@ mod tests {
         // otherwise be a subscription that silently never fires.
         let names: Vec<&str> = [
             CoreEvent::Peers { peers: Vec::new() },
+            CoreEvent::Attachment {
+                peer: DeviceId::generate(),
+                attachment: Attachment {
+                    id: crate::domain::ids::AttachmentId::generate(),
+                    message_id: MessageId::generate(),
+                    peer: DeviceId::generate(),
+                    direction: Direction::Outgoing,
+                    name: crate::domain::attachment::FileName::sanitise("a.bin"),
+                    size: 1,
+                    kind: crate::domain::attachment::AttachmentKind::File,
+                    state: crate::domain::attachment::AttachmentState::Queued,
+                    transferred: 0,
+                    sha256: None,
+                    created_at: UnixMillis(1),
+                    path: None,
+                },
+            },
             CoreEvent::Notice {
                 level: NoticeLevel::Info,
                 message: String::new(),
@@ -209,6 +237,6 @@ mod tests {
         .iter()
         .map(CoreEvent::name)
         .collect();
-        assert_eq!(names, vec!["peers", "notice", "stopped"]);
+        assert_eq!(names, vec!["peers", "attachment", "notice", "stopped"]);
     }
 }

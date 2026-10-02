@@ -40,6 +40,21 @@ impl TokenBucket {
     /// Returns `true` when the frame is allowed. A denied frame costs nothing — the connection
     /// is closed on the first denial, so there is no reason to keep counting.
     pub fn try_acquire(&mut self, now: Instant) -> bool {
+        self.try_acquire_n(1.0, now)
+    }
+
+    /// The same for a cost measured in something other than frames — file payload bytes, where
+    /// one frame may spend forty kilobytes of the budget.
+    ///
+    /// An amount larger than the capacity can never be admitted, which is why the capacity of a
+    /// byte budget is chosen above the largest single spend
+    /// ([`FILE_CHUNK_BYTES`](crate::protocol::limits::FILE_CHUNK_BYTES)).
+    pub fn try_acquire_n(&mut self, amount: f64, now: Instant) -> bool {
+        let amount = if amount.is_finite() && amount > 0.0 {
+            amount
+        } else {
+            1.0
+        };
         let elapsed = now
             .saturating_duration_since(self.last_refill)
             .as_secs_f64();
@@ -47,8 +62,8 @@ impl TokenBucket {
             self.tokens = (self.tokens + elapsed * self.refill_per_second).min(self.capacity);
             self.last_refill = now;
         }
-        if self.tokens >= 1.0 {
-            self.tokens -= 1.0;
+        if self.tokens >= amount {
+            self.tokens -= amount;
             true
         } else {
             false
@@ -165,5 +180,23 @@ mod tests {
         let mut bucket = TokenBucket::new(f64::NAN, 0.0, base);
         assert!(bucket.try_acquire(base));
         assert!(!bucket.try_acquire(base));
+    }
+
+    #[test]
+    fn a_byte_budget_spends_and_refills_in_bytes() {
+        let base = Instant::now();
+        // 1 MiB burst, 1 MiB/s sustained: a 40 KiB chunk costs 40 KiB of the budget.
+        let mut bucket = TokenBucket::new(1024.0 * 1024.0, 1024.0 * 1024.0, base);
+        assert!(bucket.try_acquire_n(40.0 * 1024.0, base));
+        assert_eq!(bucket.available(base), 1024.0 * 1024.0 - 40.0 * 1024.0);
+
+        // An amount above the capacity is never admitted, however long it waits.
+        assert!(!bucket.try_acquire_n(2.0 * 1024.0 * 1024.0, at(base, 10_000)));
+        // Half a second of refill buys 512 KiB, so the next chunk fits.
+        assert!(bucket.try_acquire_n(40.0 * 1024.0, at(base, 500)));
+        // A denied spend costs nothing, which is what makes a retry free.
+        let before = bucket.available(at(base, 500));
+        assert!(!bucket.try_acquire_n(4.0 * 1024.0 * 1024.0, at(base, 500)));
+        assert_eq!(bucket.available(at(base, 500)), before);
     }
 }

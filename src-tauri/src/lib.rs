@@ -27,6 +27,7 @@ mod autostart;
 mod commands;
 mod error;
 mod events;
+mod files;
 mod logging;
 mod notifications;
 mod state;
@@ -43,6 +44,13 @@ macro_rules! ipc_handler {
             $crate::commands::history,
             $crate::commands::send_message,
             $crate::commands::mark_read,
+            $crate::commands::pick_files,
+            $crate::commands::inspect_files,
+            $crate::commands::open_attachment,
+            $crate::commands::reveal_attachment,
+            $crate::commands::save_attachment,
+            $crate::commands::cancel_attachment,
+            $crate::commands::retry_attachment,
             $crate::commands::forget_peer,
             $crate::commands::restore_peer,
             $crate::commands::set_peer_muted,
@@ -113,6 +121,7 @@ fn run_inner() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     builder
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_process::init())
@@ -133,10 +142,22 @@ fn run_inner() -> Result<(), Box<dyn std::error::Error>> {
                 "LocalMe starting"
             );
 
-            let state = tauri::async_runtime::block_on(start_core(&handle, data_dir))?;
+            let state =
+                tauri::async_runtime::block_on(start_core(&handle, data_dir.clone()))?;
             // The document owns the level and the retention; the subscriber follows it.
             logging::apply(&state.settings_snapshot().logging);
             app.manage(state);
+
+            // The interface may render exactly two sets of files: the ones it is about to send
+            // (granted one by one as they are inspected) and the ones that have arrived. The
+            // received ones live under the data directory, which is granted here — once, at
+            // startup, so a data directory chosen at runtime is covered as well.
+            let attachments = data_dir.join(localme_core::storage::FILES_DIRECTORY);
+            if let Ok(()) = std::fs::create_dir_all(&attachments)
+                && let Err(error) = app.asset_protocol_scope().allow_directory(&attachments, true)
+            {
+                tracing::warn!(%error, path = %attachments.display(), "received files cannot be previewed");
+            }
 
             window::install_ready_gate(&handle);
             webview::disable_saved_info(&handle);

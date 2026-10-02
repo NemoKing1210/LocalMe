@@ -1,16 +1,20 @@
 //! The IPC surface: every command parses its arguments, calls one service method and lets the
 //! error convert. Argument names are camelCase on the JavaScript side, as Tauri defaults to.
 
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use localme_core::domain::message::ChatMessage;
 use localme_core::domain::peer::{PeerProfile, PeerView};
+use localme_core::domain::{Attachment, AttachmentId, AttachmentKind};
 use localme_core::ports::store::{HistoryCursor, KnownDevice};
 use localme_core::services::Settings;
 use tauri::{AppHandle, Emitter, Runtime, State};
+use tauri_plugin_dialog::DialogExt;
 
 use crate::args::{self, PageCursor};
 use crate::error::ApiError;
+use crate::files::{self, FilePick};
 use crate::logging::{self, LogsInfo};
 use crate::state::{AppState, UiLabels};
 use crate::{tray, window};
@@ -82,7 +86,8 @@ pub async fn list_peers(state: State<'_, Arc<AppState>>) -> Result<Vec<PeerView>
 ///
 /// [`ApiError::InvalidInput`] for a malformed cursor.
 #[tauri::command]
-pub async fn history(
+pub async fn history<R: Runtime>(
+    app: AppHandle<R>,
     state: State<'_, Arc<AppState>>,
     peer_id: String,
     before: Option<PageCursor>,
@@ -91,25 +96,59 @@ pub async fn history(
     let peer = args::device_id(&peer_id)?;
     let cursor = before.map(HistoryCursor::try_from).transpose()?;
     let limit = limit.unwrap_or(localme_core::protocol::limits::HISTORY_PAGE_SIZE);
-    Ok(state.session.history(peer, cursor, limit).await?)
+    let page = state.session.history(peer, cursor, limit).await?;
+
+    // A picture you sent is rendered from its original file, and the asset protocol's scope is
+    // built afresh on every start — so without this, every image you have ever sent becomes a
+    // broken placeholder the next time the application is opened. Only images are granted, and
+    // only ones that are still on disk: this is the whole of what the interface will draw.
+    for attachment in page
+        .iter()
+        .flat_map(|message| message.attachments.iter())
+        .filter(|attachment| attachment.kind == AttachmentKind::Image)
+    {
+        if let Some(path) = attachment.path.as_deref() {
+            let path = Path::new(path);
+            if path.is_file() {
+                files::allow_preview(&app, path);
+            }
+        }
+    }
+
+    Ok(page)
 }
 
 /// Stores the message and hands it to the peer when it is reachable; a peer that is away is not
 /// an error, because the message waits in the outbox and is sent, in order, once it returns.
 ///
+/// `attachments` are paths the interface has already inspected; the core looks at them again
+/// before it writes anything down.
+///
 /// # Errors
 ///
-/// [`ApiError::InvalidInput`] if the body is empty or too long, [`ApiError::UnknownPeer`] if the
-/// device is no longer in the list, [`ApiError::Storage`] if the message could not be stored.
+/// [`ApiError::InvalidInput`] if the text is too long, a path is not a usable file, or there is
+/// neither text nor a file; [`ApiError::UnknownPeer`] if the device is no longer in the list;
+/// [`ApiError::Storage`] if the message could not be stored.
 #[tauri::command]
 pub async fn send_message(
     state: State<'_, Arc<AppState>>,
     peer_id: String,
     body: String,
+    attachments: Option<Vec<String>>,
 ) -> Result<ChatMessage, ApiError> {
     let peer = args::device_id(&peer_id)?;
-    let body = args::message_body(&body)?;
-    Ok(state.session.send_message(peer, body).await?)
+    // A body of nothing but whitespace is not a body: the message is then whatever files came
+    // with it, which is what makes a file-only message expressible at all.
+    let text = match body.trim().is_empty() {
+        true => None,
+        false => Some(args::message_body(&body)?),
+    };
+    let files: Vec<PathBuf> = attachments
+        .unwrap_or_default()
+        .into_iter()
+        .map(PathBuf::from)
+        .collect();
+    Ok(state.session.send_message(peer, text, files).await?)
 }
 
 /// # Errors
@@ -386,6 +425,148 @@ pub fn clear_logs() -> Result<u64, ApiError> {
         "the log files were cleared from the settings screen"
     );
     Ok(freed)
+}
+
+/// Opens the platform's file picker and describes what was chosen.
+///
+/// The paths never reach the interface unexamined: the name, the size and whether the file can
+/// be attached at all come from here, so the chip in the composer and the metadata the core
+/// stores cannot disagree.
+#[tauri::command]
+pub fn pick_files<R: Runtime>(app: AppHandle<R>) -> Vec<FilePick> {
+    let picked = app
+        .dialog()
+        .file()
+        .blocking_pick_files()
+        .unwrap_or_default();
+    picked
+        .iter()
+        .filter_map(|file| file.as_path().map(Path::to_path_buf))
+        .map(|path| files::inspect(&app, &path))
+        .collect()
+}
+
+/// Describes paths the interface already has — the ones a drop produced.
+#[tauri::command]
+pub fn inspect_files<R: Runtime>(app: AppHandle<R>, paths: Vec<String>) -> Vec<FilePick> {
+    paths
+        .iter()
+        .map(|path| files::inspect(&app, Path::new(path)))
+        .collect()
+}
+
+/// Opens a received file with whatever the platform uses for its type.
+///
+/// # Errors
+///
+/// [`ApiError::InvalidInput`] if the attachment is unknown or has not arrived yet,
+/// [`ApiError::Internal`] if no application could be started.
+#[tauri::command]
+pub async fn open_attachment(
+    state: State<'_, Arc<AppState>>,
+    attachment_id: String,
+) -> Result<(), ApiError> {
+    let path = ready_path(&state, &attachment_id).await?;
+    files::open(&path).map_err(|error| ApiError::Internal {
+        message: format!("no application could open that file: {error}"),
+    })
+}
+
+/// Shows a received file in the platform's file manager.
+///
+/// # Errors
+///
+/// [`ApiError::InvalidInput`] if the attachment is unknown or has not arrived yet,
+/// [`ApiError::Internal`] if no file manager could be started.
+#[tauri::command]
+pub async fn reveal_attachment(
+    state: State<'_, Arc<AppState>>,
+    attachment_id: String,
+) -> Result<(), ApiError> {
+    let path = ready_path(&state, &attachment_id).await?;
+    files::reveal(&path).map_err(|error| ApiError::Internal {
+        message: format!("the file manager could not be opened: {error}"),
+    })
+}
+
+/// Copies a received file wherever the user asks for it.
+///
+/// Returns the chosen path, or `None` when the dialog was dismissed.
+///
+/// # Errors
+///
+/// [`ApiError::InvalidInput`] if the attachment is unknown or has not arrived yet,
+/// [`ApiError::Internal`] if the copy failed.
+#[tauri::command]
+pub async fn save_attachment<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, Arc<AppState>>,
+    attachment_id: String,
+) -> Result<Option<String>, ApiError> {
+    let attachment = attachment_of(&state, &attachment_id).await?;
+    let source = files::stored_path(attachment.path.as_deref())
+        .map_err(|error| ApiError::invalid_input("attachmentId", error))?;
+
+    let Some(target) = app
+        .dialog()
+        .file()
+        .set_file_name(attachment.name.as_str())
+        .blocking_save_file()
+        .and_then(|file| file.as_path().map(Path::to_path_buf))
+    else {
+        return Ok(None);
+    };
+    files::copy(&source, &target).map_err(|error| ApiError::Internal {
+        message: format!("the file could not be saved: {error}"),
+    })?;
+    tracing::info!(file = %attachment.name, "a received file was saved");
+    Ok(Some(target.to_string_lossy().into_owned()))
+}
+
+/// Stops a transfer, from either end.
+///
+/// # Errors
+///
+/// [`ApiError::InvalidInput`] for a malformed identifier.
+#[tauri::command]
+pub async fn cancel_attachment(
+    state: State<'_, Arc<AppState>>,
+    attachment_id: String,
+) -> Result<(), ApiError> {
+    let id = args::attachment_id(&attachment_id)?;
+    state.session.cancel_attachment(id).await?;
+    Ok(())
+}
+
+/// Asks for a transfer again, after a failure or a cancellation.
+///
+/// # Errors
+///
+/// [`ApiError::InvalidInput`] for a malformed identifier.
+#[tauri::command]
+pub async fn retry_attachment(
+    state: State<'_, Arc<AppState>>,
+    attachment_id: String,
+) -> Result<(), ApiError> {
+    let id = args::attachment_id(&attachment_id)?;
+    state.session.retry_attachment(id).await?;
+    Ok(())
+}
+
+/// The stored file of an attachment that is ready to be opened.
+async fn ready_path(state: &AppState, attachment_id: &str) -> Result<PathBuf, ApiError> {
+    let attachment = attachment_of(state, attachment_id).await?;
+    files::stored_path(attachment.path.as_deref())
+        .map_err(|error| ApiError::invalid_input("attachmentId", error))
+}
+
+async fn attachment_of(state: &AppState, attachment_id: &str) -> Result<Attachment, ApiError> {
+    let id: AttachmentId = args::attachment_id(attachment_id)?;
+    state
+        .session
+        .attachment(id)
+        .await?
+        .ok_or_else(|| ApiError::invalid_input("attachmentId", "there is no such file"))
 }
 
 /// The front end has no filesystem access and its console is invisible in a packaged build, so
