@@ -1,15 +1,7 @@
 <script setup lang="ts">
 /**
- * The message composer.
- *
- * The textarea grows with its content and then scrolls. That is measured on every keystroke
- * rather than left to `field-sizing: content`, because the ceiling is the token
- * `--localme-composer-max-height` and reading the token back is what keeps the box and the
- * stylesheet from disagreeing about it.
- *
- * The length limit belongs to the host — `localme_core::protocol::MAX_BODY_CHARS`, which
- * `send_message` enforces and rejects with `invalid_input`. The composer mirrors it so an
- * over-long message is caught where it can be explained, before the draft is thrown away.
+ * The textarea height is measured against `--localme-composer-max-height`; the length limit
+ * mirrors the host's `MAX_BODY_CHARS`, which `send_message` enforces.
  */
 import { computed, nextTick, onMounted, ref } from 'vue';
 
@@ -18,9 +10,7 @@ import type { Peer } from '@/ipc';
 import MdIconButton from '@/ui/MdIconButton.vue';
 
 const props = defineProps<{
-  /** The conversation this composer writes into. */
   peer: Peer;
-  /** Whether a send is already in flight. */
   sending: boolean;
 }>();
 
@@ -45,7 +35,6 @@ const canSend = computed(
   () => online.value && !props.sending && !tooLong.value && draft.value.trim().length > 0,
 );
 
-/** The accessible name of the field, and the placeholder while the peer can be written to. */
 const invitation = computed(() =>
   i18n.t('chat.composerPlaceholder', { name: props.peer.nickname }),
 );
@@ -55,7 +44,6 @@ const placeholder = computed(() =>
     : i18n.t('chat.composerOffline', { name: props.peer.nickname }),
 );
 
-/** Fits the box to its content, up to the ceiling the token sets. */
 function resize(): void {
   const element = textarea.value;
   if (element === null) return;

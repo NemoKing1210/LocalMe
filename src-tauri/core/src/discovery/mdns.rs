@@ -1,10 +1,6 @@
 //! mDNS/DNS-SD discovery: the primary mechanism, see `docs/ARCHITECTURE.md` §6.
 //!
-//! One [`ServiceDaemon`] owns the mDNS sockets; it browses our service type and registers
-//! our own service on every interface it can find. The daemon's channels are `flume`
-//! channels, which are not async-friendly, so two plain threads drain them: one forwards
-//! browse results into the session's sink, the other watches the daemon itself and restarts
-//! the browse after an error, with exponential backoff.
+//! The daemon's `flume` channels are not async-friendly, so two plain threads drain them.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -25,10 +21,8 @@ use crate::protocol::limits::{PROTOCOL_VERSION, SERVICE_TYPE};
 
 use super::{OwnAnnouncement, ordered_addresses};
 
-/// Delay before the first re-browse after a daemon error.
 const BACKOFF_INITIAL_SECS: u64 = 3;
 
-/// Ceiling of the re-browse delay, however many errors arrive in a row.
 const BACKOFF_MAX_SECS: u64 = 60;
 
 /// Discovered peers via mDNS.

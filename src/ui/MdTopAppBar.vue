@@ -1,27 +1,11 @@
 <script setup lang="ts">
-/**
- * A Material 3 top app bar.
- *
- * The bar is sticky rather than fixed: it belongs to the scroll container it is placed in (the
- * peer list, or the conversation), and a fixed bar would need the layout to reserve its height
- * in two places. Sticking also means each pane can have its own bar, which a two-pane layout
- * needs.
- *
- * The title row is exactly `--localme-top-bar-height` tall, and anything in the default slot
- * is laid out *below* it. A search field therefore only appears when a caller passes one, and
- * its arrival does not reflow the title: the row heights are the same whether or not the slot
- * is used, so the list underneath does not jump when search is opened.
- *
- * The background is the surface, not a container role, so the bar reads as part of the pane
- * rather than as a card floating over it.
- */
+// The title row is exactly `--localme-top-bar-height` tall and the default slot lays out below it,
+// so a search field's arrival does not reflow the title and the list underneath does not jump.
 // The `| undefined` is what lets the `undefined` default typecheck under
 // `exactOptionalPropertyTypes`; the prop's type is the same either way.
 withDefaults(
   defineProps<{
-    /** The headline. */
     title: string;
-    /** A secondary line under the headline, such as a peer's presence. */
     subtitle?: string | undefined;
   }>(),
   { subtitle: undefined },
@@ -77,7 +61,6 @@ withDefaults(
   align-items: center;
 }
 
-/* The title takes the space between the two slot clusters and truncates rather than wraps. */
 .md-top-app-bar__titles {
   display: flex;
   flex: 1;

@@ -1,16 +1,4 @@
 <script setup lang="ts">
-/**
- * The window shell: the people list beside whatever the current page is.
- *
- * It owns the layout and nothing else. The list is always mounted, because it is the navigation
- * of the application rather than a page; the detail pane is a `RouterView`, so a conversation
- * and the settings page swap in and out of it as pages. On a narrow window only one of the two
- * is visible, and which one is decided by whether the current route *is* a detail route —
- * which is the difference between the old `screen` flag and this: the address is the state.
- *
- * The selected peer is mirrored into the peer store here, from the route, so the list's
- * highlight has one writer and cannot disagree with the address bar.
- */
 import { computed, watch } from 'vue';
 import { AnimatePresence, motion } from 'motion-v';
 import { RouterView, useRoute } from 'vue-router';
@@ -24,25 +12,15 @@ const route = useRoute();
 const peers = usePeerStore();
 const wide = useMediaQuery(TWO_PANE_QUERY);
 
-/** The conversation in the address, if the address names one. */
 const chatPeerId = computed<string | null>(() => {
   const id = route.params['deviceId'];
   return typeof id === 'string' && id.length > 0 ? id : null;
 });
 
-/** Whether the detail pane is holding something the user asked for. */
 const hasDetail = computed<boolean>(
   () => route.name === ROUTE.settings || chatPeerId.value !== null,
 );
 
-/**
- * A page's identity for the transition.
- *
- * A conversation is keyed by the peer, because moving between two conversations *is* a page
- * change: the log, the header and the composer all belong to the peer in the address, and the
- * reader should see one arrive as the other leaves. Within a conversation the key is stable, so
- * a message arriving — or the day heading moving — never remounts anything.
- */
 const page = computed<string>(() => {
   if (route.name === ROUTE.settings) return 'settings';
   return chatPeerId.value === null ? 'chat' : `chat:${chatPeerId.value}`;
@@ -97,7 +75,6 @@ watch(
   min-height: 0;
 }
 
-/* One pane at a time until the window is wide enough for two. */
 .shell[data-wide='false'] {
   grid-template-columns: 1fr;
 }
@@ -140,11 +117,6 @@ watch(
   overflow: hidden;
 }
 
-/*
- * The animated wrapper has to fill the pane: the pages inside it are laid out with the pane's
- * height (a message log that scrolls, a settings list that scrolls), so a wrapper that sizes to
- * its content would push the whole layout open instead.
- */
 .shell__page {
   display: flex;
   flex: 1;

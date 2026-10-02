@@ -1,8 +1,7 @@
 //! Peer identity, the handshake payload, and the projection the UI renders.
 //!
 //! [`PeerView`] is the only peer shape that crosses the IPC boundary, and it carries the
-//! sort key with it so the ordering rule lives in one place instead of being re-derived in
-//! TypeScript.
+//! sort key with it so the ordering rule lives in one place.
 
 use crate::domain::ids::{AvatarSeed, DeviceId};
 use crate::domain::message::MessagePreview;
@@ -11,25 +10,18 @@ use crate::domain::nickname::Nickname;
 /// The identity exchange at the start of every connection.
 ///
 /// Sent by the dialer as `hello` and echoed by the acceptor as `welcome`, so both ends learn
-/// the other's identity from the handshake rather than from the (unauthenticated) discovery
-/// record.
+/// the other's identity from the handshake rather than the unauthenticated discovery record.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Handshake {
-    /// Protocol version the sender speaks.
     pub protocol_version: u16,
-    /// The sender's stable device id.
     pub device_id: DeviceId,
-    /// The sender's current nickname.
     pub nickname: Nickname,
-    /// The seed the sender's avatar must be rendered from.
     pub avatar_seed: AvatarSeed,
-    /// The TCP port the sender listens on, so a responder can dial back without asking
-    /// discovery again. Zero when the sender could not determine it.
+    /// Zero when the sender could not determine it.
     pub listen_port: u16,
 }
 
 impl Handshake {
-    /// Builds a handshake for this device.
     #[must_use]
     pub fn new(protocol_version: u16, profile: &PeerProfile, listen_port: u16) -> Self {
         Self {
@@ -41,8 +33,6 @@ impl Handshake {
         }
     }
 
-    /// The same handshake with a different nickname and the derived seed, used when the
-    /// user renames this device.
     #[must_use]
     pub fn with_nickname(&self, nickname: Nickname) -> Self {
         let profile = PeerProfile::new(self.device_id, nickname);
@@ -54,20 +44,15 @@ impl Handshake {
     }
 }
 
-/// A device's public identity: what it calls itself and what its avatar looks like.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PeerProfile {
-    /// Stable identifier.
     pub device_id: DeviceId,
-    /// Display name; not unique, may change.
     pub nickname: Nickname,
-    /// Avatar seed owned by this device.
     pub avatar_seed: AvatarSeed,
 }
 
 impl PeerProfile {
-    /// Builds a profile, deriving the avatar seed from the device id and nickname.
     #[must_use]
     pub fn new(device_id: DeviceId, nickname: Nickname) -> Self {
         let avatar_seed = AvatarSeed::derive(device_id, &nickname);
@@ -80,9 +65,8 @@ impl PeerProfile {
 
     /// Applies a profile update received from the network.
     ///
-    /// The seed is taken as announced rather than re-derived: the remote device is the
-    /// authority on its own avatar, and re-deriving locally is exactly the mistake that
-    /// makes two machines disagree about what a peer looks like.
+    /// The seed is taken as announced, not re-derived: the remote device is the authority on
+    /// its own avatar, and re-deriving locally is what makes two machines disagree.
     pub fn apply_update(&mut self, nickname: Nickname, avatar_seed: AvatarSeed) {
         self.nickname = nickname;
         self.avatar_seed = avatar_seed;
@@ -91,39 +75,29 @@ impl PeerProfile {
 
 /// One row of the user list.
 ///
-/// This is the shape the interface renders, so it is serialised directly rather than copied
-/// into a transport DTO: the ordering rule and the fields travel together.
+/// Serialised directly as the interface renders it, so the ordering rule and the fields travel
+/// together.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PeerView {
-    /// Stable identifier, serialised as a UUID string over IPC.
     pub device_id: DeviceId,
-    /// Display name.
     pub nickname: Nickname,
-    /// Avatar seed to render from.
     pub avatar_seed: AvatarSeed,
-    /// Whether the peer is reachable; the composer is disabled when it is not.
     pub online: bool,
-    /// Receiver-clock timestamp of the last time the peer was online.
     pub last_seen_ms: Option<i64>,
-    /// Unread incoming messages.
     pub unread: u32,
-    /// Whether this peer is exempt from notifications.
     pub notify_muted: bool,
     /// Newest of `last_seen_ms` and the last message timestamp, in milliseconds.
     ///
-    /// Carried explicitly rather than recomputed in the front end so that "last activity"
-    /// cannot mean two different things in two places.
+    /// Carried explicitly rather than recomputed in the front end so "last activity" cannot
+    /// mean two different things in two places.
     pub last_activity_ms: Option<i64>,
-    /// The newest message in this conversation, if there is one, for the list's second line.
     pub last_message: Option<MessagePreview>,
 }
 
 impl PeerView {
-    /// Whether this peer matches a search query.
-    ///
-    /// Case-insensitive substring match over the nickname. Matching is done in the front end
-    /// over the in-memory list, but the rule lives here so both sides agree.
+    /// Case-insensitive substring match over the nickname. The rule lives here so both sides
+    /// agree, even though the front end applies it to the in-memory list.
     #[must_use]
     pub fn matches_query(&self, query: &str) -> bool {
         let needle = query.trim().to_lowercase();
@@ -133,13 +107,10 @@ impl PeerView {
         self.nickname.as_str().to_lowercase().contains(&needle)
     }
 
-    /// Newest known activity, or [`i64::MIN`] for a peer never seen and never written to.
     fn activity(&self) -> i64 {
         self.last_activity_ms.unwrap_or(i64::MIN)
     }
 
-    /// Orders a list for display.
-    ///
     /// Unread first, then online, then most recent activity, then nickname **ascending**.
     /// The last term is not cosmetic: without it the order is not total, and two devices
     /// receiving the same events in a different order would show a different list.
@@ -155,7 +126,6 @@ impl PeerView {
         });
     }
 
-    /// Filters and orders a list in one step, which is what the user list component needs.
     #[must_use]
     pub fn arrange(peers: impl IntoIterator<Item = Self>, query: &str) -> Vec<Self> {
         let mut peers: Vec<Self> = peers

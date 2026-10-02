@@ -1,18 +1,3 @@
-/**
- * English messages.
- *
- * This file is the source of truth for the message catalogue: `MessageKey` is derived from
- * its keys, so `t('typo.key')` is a compile error in every component.
- *
- * Plural variants use the CLDR categories the runtime reports through `Intl.PluralRules`:
- * a message `x.y` may be specialised as `x.y.one`, `x.y.few`, `x.y.many`, `x.y.other`, and a
- * locale that needs fewer categories simply declares fewer. English needs `one`/`other`;
- * Russian also needs `few`/`many`.
- *
- * Relative times are *not* in here. They come from `Intl.RelativeTimeFormat`, which already
- * knows that Russian says «5 минут назад» and English «5 minutes ago», including the
- * singular/plural agreement this file would otherwise have to reimplement.
- */
 export const en = {
   'app.name': 'LocalMe',
   'app.tagline': 'Messages on your local network',

@@ -30,5 +30,4 @@ app.use(router);
 app.use(i18n);
 app.mount('#app');
 
-// After mounting: the host reveals the window once this arrives.
 void signalReady();

@@ -1,14 +1,9 @@
 //! Application settings: a typed, versioned document plus the actor that owns it.
 //!
-//! The settings file is the one piece of state the *host* needs before the interface has
-//! loaded — `startMinimized` and `closeToTray` decide what happens at startup and when the
-//! window is closed. That is why the document and its persistence live here rather than in
-//! the front end: one owner, one file, one schema, and no possibility of the Rust side and
-//! the TypeScript side disagreeing about what was saved.
-//!
-//! The profile is deliberately *not* here. A nickname lives in the database beside the device
-//! id it belongs to (see [`super::session`]), and duplicating it would create two answers to
-//! "what am I called" that can drift apart.
+//! The document lives here rather than in the front end (one owner, one file, one schema),
+//! because the host needs `startMinimized`/`closeToTray` before the interface has loaded. The
+//! nickname is deliberately not here: it lives in the database beside the device id, and
+//! duplicating it would create two answers to "what am I called".
 
 use std::path::{Path, PathBuf};
 
@@ -17,57 +12,37 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 
 use crate::error::CoreError;
 
-/// Capacity of the event channel. Settings change rarely; a consumer that falls this far
-/// behind has stopped reading and does not need a backlog.
 const EVENT_CHANNEL_CAPACITY: usize = 16;
 
-/// Capacity of the command mailbox.
 const COMMAND_CHANNEL_CAPACITY: usize = 32;
 
-/// Current version of the settings schema.
-///
-/// Version 2 added the `logging` group. Adding it needed no migration step because every
-/// group carries `#[serde(default)]`, which is exactly what that attribute is for.
+/// Version 2 added the `logging` group; every group carries `#[serde(default)]`, so no
+/// migration step was needed.
 pub const SETTINGS_VERSION: u32 = 2;
 
-/// Shortest log retention the settings screen offers.
 pub const MIN_LOG_RETENTION_DAYS: u32 = 1;
 
-/// Longest log retention the settings screen offers.
 pub const MAX_LOG_RETENTION_DAYS: u32 = 365;
 
-/// Retention a fresh install starts with.
-///
-/// Two weeks of a desktop messenger's own records is enough to diagnose a report from last
-/// month's release and small enough that nobody has to think about the disk usage.
 pub const DEFAULT_LOG_RETENTION_DAYS: u32 = 14;
 
-/// Interface languages this build ships.
-///
 /// The front end keeps the other half of this list in `src/i18n/locales.ts`; a variant added
-/// here without a catalogue there would let the user pick a language the interface cannot
-/// speak, so `messages.spec.ts` fails when a locale in that list has no label of its own.
+/// here without a catalogue there would let the user pick a language the interface cannot speak,
+/// so `messages.spec.ts` fails when a locale in that list has no label of its own.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Locale {
-    /// English.
     En,
-    /// Russian.
     Ru,
-    /// Spanish.
     Es,
-    /// German.
     De,
-    /// French.
     Fr,
-    /// Portuguese.
     Pt,
     /// Chinese, Simplified.
     Zh,
 }
 
 impl Locale {
-    /// The BCP 47 tag.
     #[must_use]
     pub const fn tag(self) -> &'static str {
         match self {
@@ -82,23 +57,17 @@ impl Locale {
     }
 }
 
-/// Which palette to use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ThemeMode {
-    /// Follow the operating system.
     System,
-    /// Always light.
     Light,
-    /// Always dark.
     Dark,
 }
 
-/// Appearance settings.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct AppearanceSettings {
-    /// Light, dark, or follow the system.
     pub theme: ThemeMode,
     /// Accent colour the Material 3 palette is generated from, as `#rrggbb`.
     pub accent: String,
@@ -113,15 +82,11 @@ impl Default for AppearanceSettings {
     }
 }
 
-/// Notification settings.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct NotificationSettings {
-    /// Whether any native notification is shown.
     pub enabled: bool,
-    /// Whether the notification contains the message text.
     pub show_text: bool,
-    /// Whether a sound plays.
     pub sound: bool,
 }
 
@@ -135,26 +100,20 @@ impl Default for NotificationSettings {
     }
 }
 
-/// How much of its own activity the application writes to the log.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum LogLevel {
-    /// Failures only.
     Error,
-    /// Failures and warnings.
     Warn,
-    /// The default: lifecycle, discovery and delivery events.
     Info,
     /// Everything, including per-frame protocol detail. Verbose and slow.
     Debug,
 }
 
 impl LogLevel {
-    /// The `tracing` filter this level installs.
-    ///
-    /// The dependency tree stays at `warn` whatever the user picks: a debug-level messenger
-    /// that also logs every mDNS packet is a log nobody can read, and the user's choice is
-    /// about *our* records.
+    /// The dependency tree stays at `warn` whatever the user picks: a debug-level messenger that
+    /// also logs every mDNS packet is a log nobody can read, and the user's choice is about
+    /// *our* records.
     #[must_use]
     pub const fn filter(self) -> &'static str {
         match self {
@@ -166,16 +125,12 @@ impl LogLevel {
     }
 }
 
-/// Logging settings.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct LoggingSettings {
-    /// Verbosity of the application's own records.
     pub level: LogLevel,
-    /// How many days of daily log files to keep.
-    ///
     /// Pruning happens at startup and whenever the log rolls over to a new day, so this is a
-    /// bound on the directory rather than a scheduled job that has to keep running.
+    /// bound on the directory rather than a scheduled job.
     pub retention_days: u32,
 }
 
@@ -188,18 +143,11 @@ impl Default for LoggingSettings {
     }
 }
 
-/// Operating-system integration settings.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct SystemSettings {
-    /// Launch at sign-in.
     pub autostart: bool,
-    /// Launch hidden in the tray.
     pub start_minimized: bool,
-    /// Keep running in the tray when the window is closed.
-    ///
-    /// Defaults to on: a messenger that stops receiving when its window is closed is not
-    /// doing what the user expects. The settings screen states the consequence either way.
     pub close_to_tray: bool,
 }
 
@@ -213,27 +161,18 @@ impl Default for SystemSettings {
     }
 }
 
-/// The settings document.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Settings {
-    /// Schema version, used to migrate a file written by an older build.
     pub version: u32,
-    /// Whether the first-run screen has been completed.
-    ///
-    /// This is not derivable from the nickname: the first launch already writes a default
-    /// nickname, so without a separate flag the welcome screen could not tell "a fresh
-    /// install" from "a user who kept the name we suggested".
+    /// Not derivable from the nickname: the first launch already writes a default nickname, so
+    /// without a separate flag the welcome screen could not tell a fresh install from a user who
+    /// kept the suggested name.
     pub onboarded: bool,
-    /// Appearance.
     pub appearance: AppearanceSettings,
-    /// Interface language.
     pub locale: Locale,
-    /// Notifications.
     pub notifications: NotificationSettings,
-    /// System integration.
     pub system: SystemSettings,
-    /// Logging.
     pub logging: LoggingSettings,
 }
 
@@ -252,12 +191,10 @@ impl Default for Settings {
 }
 
 impl Settings {
-    /// Brings a document loaded from disk up to the current schema version.
-    ///
-    /// Unknown fields are *not* an error and are not preserved: the document is written back
-    /// in full on every change, and silently keeping fields this build does not understand
-    /// would make a downgrade look like it worked. A version from the future is refused
-    /// rather than guessed at.
+    /// Unknown fields are *not* an error and are not preserved: the document is written back in
+    /// full on every change, and silently keeping fields this build does not understand would
+    /// make a downgrade look like it worked. A version from the future is refused rather than
+    /// guessed at.
     ///
     /// # Errors
     ///
@@ -271,23 +208,19 @@ impl Settings {
                 ),
             )));
         }
-        // Version 1 is the first schema, so there is nothing to translate yet; the mechanism
-        // exists so that version 2 does not have to invent one.
         self.version = SETTINGS_VERSION;
         self.normalise();
         Ok(self)
     }
 
-    /// Repairs values that are individually valid JSON but not usable.
-    ///
-    /// Applied on load and on update, so a hand-edited file cannot put the application into a
-    /// state the interface cannot render.
+    /// Repairs values that are individually valid JSON but not usable, so a hand-edited file
+    /// cannot put the application into a state the interface cannot render.
     pub fn normalise(&mut self) {
         if !is_hex_colour(&self.appearance.accent) {
             self.appearance.accent = AppearanceSettings::default().accent;
         }
-        // A hand-edited file is as likely to hold `0` (which would delete today's log on the
-        // next start) as it is a sane number, so the field is clamped rather than trusted.
+        // Clamped rather than trusted: a hand-edited `0` would delete today's log on the next
+        // start.
         self.logging.retention_days = self
             .logging
             .retention_days
@@ -304,7 +237,6 @@ fn is_hex_colour(value: &str) -> bool {
     digits.len() == 6 && digits.iter().all(u8::is_ascii_hexdigit)
 }
 
-/// Commands the host application sends to the settings actor.
 #[derive(Debug)]
 enum Command {
     Get {
@@ -316,7 +248,6 @@ enum Command {
     },
 }
 
-/// The host application's handle on the settings actor.
 #[derive(Debug, Clone)]
 pub struct SettingsHandle {
     commands: mpsc::Sender<Command>,
@@ -324,8 +255,6 @@ pub struct SettingsHandle {
 }
 
 impl SettingsHandle {
-    /// The current settings.
-    ///
     /// # Errors
     ///
     /// [`CoreError::Task`] if the actor has stopped.
@@ -338,10 +267,8 @@ impl SettingsHandle {
         receiver.await.map_err(|_| CoreError::ShuttingDown)
     }
 
-    /// Replaces the settings document.
-    ///
     /// The actor writes the file before answering, so an `Ok` here means the change survives a
-    /// restart — which is what a settings screen has to be able to promise.
+    /// restart.
     ///
     /// # Errors
     ///
@@ -356,18 +283,15 @@ impl SettingsHandle {
         receiver.await.map_err(|_| CoreError::ShuttingDown)?
     }
 
-    /// Subscribes to changes made through this handle.
     #[must_use]
     pub fn subscribe(&self) -> broadcast::Receiver<Settings> {
         self.events.subscribe()
     }
 }
 
-/// Loads the settings file, repairs it if necessary, and starts the actor that owns it.
-///
-/// A file that cannot be parsed is *not* fatal: the defaults are used and the reason is
-/// returned so the host can tell the user, because refusing to start over a settings file
-/// would be a worse outcome than resetting it.
+/// A file that cannot be parsed is *not* fatal: the defaults are used and the reason is returned
+/// so the host can tell the user, because refusing to start over a settings file is worse than
+/// resetting it.
 pub async fn spawn(path: PathBuf) -> (SettingsHandle, Option<String>) {
     let (settings, problem) = load(&path).await;
     let (commands_tx, commands_rx) = mpsc::channel(COMMAND_CHANNEL_CAPACITY);
@@ -396,10 +320,7 @@ async fn load(path: &Path) -> (Settings, Option<String>) {
                 Some(format!("settings file is not valid JSON: {error}")),
             ),
         },
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            // First launch: write nothing until the user changes something.
-            (Settings::default(), None)
-        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => (Settings::default(), None),
         Err(error) => (
             Settings::default(),
             Some(format!("settings could not be read: {error}")),
@@ -438,8 +359,8 @@ async fn actor(
     }
 }
 
-/// Writes the document atomically: a settings file that is half-written when the machine
-/// loses power is a file that resets the user's preferences.
+/// Writes the document atomically: a settings file half-written when the machine loses power
+/// resets the user's preferences.
 async fn write(path: &Path, settings: &Settings) -> Result<(), CoreError> {
     let json = serde_json::to_vec_pretty(settings)
         .map_err(|error| CoreError::Task(format!("settings could not be serialised: {error}")))?;
@@ -497,9 +418,8 @@ mod tests {
 
     #[test]
     fn every_shipped_locale_round_trips_through_its_tag() {
-        // The tag is what the front end and `Intl` see, and it is also what the settings file
-        // holds; a variant whose tag did not survive serialisation would silently reset the
-        // user's language on the next start.
+        // The tag is what the front end and `Intl` see, and what the settings file holds; a
+        // variant whose tag did not survive serialisation would silently reset the language.
         let locales = [
             Locale::En,
             Locale::Ru,
@@ -647,7 +567,6 @@ mod tests {
         let saved = handle.update(next.clone()).await.expect("update");
         assert_eq!(saved, next);
 
-        // A fresh actor over the same file sees the change.
         let (restarted, problem) = spawn(path).await;
         assert!(problem.is_none());
         assert_eq!(restarted.get().await.expect("get"), next);
@@ -705,7 +624,6 @@ mod tests {
         handle.update(Settings::default()).await.expect("update");
 
         let text = tokio::fs::read_to_string(&path).await.expect("read");
-        // The interface reads this shape; the TypeScript types are declared to match it.
         assert!(text.contains("\"closeToTray\""), "{text}");
         assert!(text.contains("\"showText\""), "{text}");
         assert!(text.contains("\"startMinimized\""), "{text}");

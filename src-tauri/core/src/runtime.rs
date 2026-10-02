@@ -1,9 +1,4 @@
 //! Wiring: builds the whole object graph and hands out a running core.
-//!
-//! This is the only module that knows which concrete adapters exist. Everything above it —
-//! services, ports, domain — is expressed in terms of traits, and everything below it is an
-//! implementation detail. A test that wants two cores on loopback calls
-//! [`Core::start_for_test`] twice, which is exactly what the integration suite does.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -28,25 +23,18 @@ use crate::storage::SqliteStore;
 use crate::transport::connection;
 use crate::transport::listener::Listener;
 
-/// Everything the core needs to start.
 #[derive(Debug, Clone)]
 pub struct CoreConfig {
-    /// Directory holding the database and the settings file.
     pub data_dir: PathBuf,
-    /// Port to listen on, falling back to an ephemeral one if it is taken.
+    /// Listen port; falls back to an ephemeral one if it is taken.
     pub preferred_port: u16,
-    /// UDP port for the discovery beacon.
     pub beacon_port: u16,
-    /// Nickname to use on the very first launch.
+    /// Nickname for the very first launch only.
     pub default_nickname: Nickname,
-    /// Whether discovery should run at all.
-    ///
-    /// Used by tests that want to control peer discovery precisely; production always runs it.
     pub enable_discovery: bool,
 }
 
 impl CoreConfig {
-    /// A configuration for a normal launch.
     #[must_use]
     pub fn new(data_dir: PathBuf, default_nickname: Nickname) -> Self {
         Self {
@@ -58,7 +46,6 @@ impl CoreConfig {
         }
     }
 
-    /// A configuration with discovery disabled, for tests that drive it themselves.
     #[must_use]
     pub fn without_discovery(
         data_dir: PathBuf,
@@ -76,21 +63,16 @@ impl CoreConfig {
     }
 }
 
-/// A running core: the handles the host application uses, plus what is needed to stop it.
 pub struct Core {
-    /// Commands and events for the session.
     pub session: SessionHandle,
-    /// The settings document.
     pub settings: SettingsHandle,
-    /// The port this instance actually listens on.
+    /// The port actually bound, which may differ from the preferred one.
     pub port: u16,
-    /// Set when the database was unusable and has been preserved under this path.
+    /// Path the unusable database was preserved under, if recovery happened.
     pub storage_recovered: Option<String>,
-    /// Set when discovery could not be started; the application still runs.
+    /// Set when discovery could not start; the application still runs.
     pub discovery_problem: Option<String>,
-    /// This device's identifier.
     pub device_id: DeviceId,
-    /// Our own identity as announced.
     pub profile: PeerProfile,
     discovery: Option<Arc<CompositeDiscovery>>,
     discovery_feed: mpsc::Sender<DiscoveryEvent>,
@@ -99,8 +81,6 @@ pub struct Core {
 }
 
 impl Core {
-    /// Opens the database, binds the listener, starts discovery and the session.
-    ///
     /// # Errors
     ///
     /// [`CoreError::Storage`] if the database cannot be opened or created, and
@@ -166,12 +146,7 @@ impl Core {
         })
     }
 
-    /// A channel that feeds the session's discovery input directly.
-    ///
-    /// Discovery sources normally own this sender. Exposing it is what lets the loopback
-    /// integration test hand the session a peer without depending on multicast, while still
-    /// exercising the production path end to end: the session cannot tell an injected
-    /// `Found` from one a discovery adapter produced.
+    /// Exposes the session's discovery input so a test can inject a peer without multicast.
     #[must_use]
     pub fn discovery_feed(&self) -> mpsc::Sender<DiscoveryEvent> {
         self.discovery_feed.clone()
@@ -192,7 +167,6 @@ impl Core {
     }
 }
 
-/// Reads the durable identity, creating it on first launch.
 async fn resolve_identity(
     store: &SqliteStore,
     fallback_nickname: &Nickname,
@@ -219,9 +193,8 @@ async fn resolve_identity(
             fallback_nickname.clone()
         }),
         None => {
-            // Persist the first-launch nickname immediately. Leaving it only in memory would
-            // make the identity depend on whatever default the *next* launch happens to
-            // compute — a hostname change or a different locale would rename the user.
+            // Persist the first-launch nickname immediately: leaving it in memory would let a
+            // later hostname or locale change rename the user.
             store
                 .meta_set(META_NICKNAME, fallback_nickname.as_str())
                 .await?;
@@ -232,11 +205,8 @@ async fn resolve_identity(
     Ok((device_id, nickname))
 }
 
-/// Starts mDNS and the UDP beacon, reporting a failure instead of aborting the launch.
-///
-/// A mechanism that fails on its own is logged and skipped by the composite, so one blocked
-/// port or an unavailable mDNS stack degrades discovery instead of disabling it. Only a
-/// failure of the composite itself — no runtime, no channel — is reported here.
+/// A source that fails on its own is logged and skipped by the composite; only a failure of
+/// the composite itself is reported here.
 fn start_discovery(
     config: &CoreConfig,
     profile: &PeerProfile,
@@ -262,8 +232,7 @@ fn start_discovery(
             None
         }
         Err(error) => {
-            // The application still works: peers announced before the failure remain
-            // reachable, and messages to them keep flowing.
+            // Peers announced before the failure remain reachable, messages keep flowing.
             let message = format!("discovery could not be started: {error}");
             tracing::warn!(%message);
             Some(message)
@@ -291,8 +260,7 @@ fn spawn_accept_loop(
                 Ok(accepted) => accepted,
                 Err(error) => {
                     tracing::warn!(%error, "accept failed");
-                    // A failing accept is usually resource exhaustion: back off rather than
-                    // spin on the error.
+                    // Usually resource exhaustion: back off rather than spin.
                     tokio::time::sleep(Duration::from_millis(200)).await;
                     continue;
                 }

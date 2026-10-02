@@ -1,18 +1,8 @@
-//! Wire format: framing, the validated frame type, and the raw JSON envelope it is built
-//! from.
+//! Wire format: framing, the validated frame type, and the raw JSON envelope it is built from.
 //!
-//! The public surface is deliberately small:
-//!
-//! ```text
-//! Frame --encode--> bytes --decode--> Frame
-//! ```
-//!
-//! [`decode`] is the *only* way bytes become a [`Frame`], and it validates everything a
-//! hostile peer could get wrong before the value exists. The raw wire shapes inside
-//! [`wire`] use plain `String` fields and are never handed out, so it is impossible to
-//! accidentally treat unvalidated data as a domain value.
-//!
-//! See `docs/ARCHITECTURE.md` §5 for the framing diagram and the field table.
+//! The public surface is deliberately small: `Frame --encode--> bytes --decode--> Frame`.
+//! [`decode`] is the only way bytes become a [`Frame`], and the raw wire shapes inside
+//! [`wire`] are never handed out, so unvalidated data cannot be mistaken for a domain value.
 
 pub mod framing;
 pub mod limits;
@@ -37,22 +27,19 @@ use crate::error::ProtocolError;
 use limits::MAX_ERROR_TEXT_CHARS;
 use wire::WireFrame;
 
-/// Why a peer said goodbye.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GoodbyeReason {
     /// The peer is quitting. Treated as an immediate offline transition.
     Shutdown,
     /// The peer is dropping this connection because it kept the other one it had with us
-    /// (the simultaneous-connect rule, `docs/ARCHITECTURE.md` §5.3).
+    /// (the simultaneous-connect rule).
     Superseded,
-    /// The peer hit a protocol error.
     Error,
     /// A reason this build does not know.
     Unknown,
 }
 
 impl GoodbyeReason {
-    /// The wire representation.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -63,11 +50,8 @@ impl GoodbyeReason {
         }
     }
 
-    /// Parses the wire representation.
-    ///
     /// An unrecognised reason degrades to [`GoodbyeReason::Unknown`] instead of failing the
-    /// frame: a peer that adds a reason in a later version must still be able to say goodbye
-    /// to this one.
+    /// frame: a peer that adds a reason in a later version must still be able to say goodbye.
     #[must_use]
     pub fn from_wire(value: &str) -> Self {
         match value {
@@ -85,28 +69,18 @@ impl GoodbyeReason {
 /// code, never attacker-controlled prose.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ErrorCode {
-    /// The frame did not parse or did not match the schema.
     Malformed,
-    /// The nickname was missing, empty, over-long or contained control characters.
     BadNickname,
-    /// The message body was empty, over-long or contained control characters.
     BadBody,
-    /// The peer exceeded its frame budget.
     RateLimited,
-    /// The peer speaks a protocol version this build does not support.
     VersionMismatch,
-    /// The peer limit is reached.
     PeerLimit,
-    /// The peer announced our own device id.
     SelfConnection,
-    /// The handshake did not arrive in time.
     HandshakeTimeout,
-    /// Something went wrong on our side.
     Internal,
 }
 
 impl ErrorCode {
-    /// The wire representation.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -122,9 +96,8 @@ impl ErrorCode {
         }
     }
 
-    /// Parses the wire representation, mapping anything unrecognised to
-    /// [`ErrorCode::Malformed`] so a peer from the future cannot smuggle an arbitrary string
-    /// into our logs as a code we appear to understand.
+    /// Anything unrecognised maps to [`ErrorCode::Malformed`] so a peer from the future cannot
+    /// smuggle an arbitrary string into our logs as a code we appear to understand.
     #[must_use]
     pub fn from_wire(value: &str) -> Self {
         match value {
@@ -148,50 +121,37 @@ impl ErrorCode {
 /// passed framing, schema and semantic validation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Frame {
-    /// First frame of a connection, sent by the dialer.
     Hello(Handshake),
-    /// The acceptor's reply to `Hello`.
     Welcome(Handshake),
-    /// Liveness probe.
+    /// `seq` is a monotonic counter, useful in a log when a peer claims not to have heard us.
     Heartbeat {
-        /// Monotonic counter, useful in a log when a peer claims not to have heard us.
         seq: u64,
     },
-    /// A chat message.
+    /// `id` is the time-ordered identifier and the deduplication key.
     Chat {
-        /// Time-ordered identifier, also the deduplication key.
         id: MessageId,
-        /// Validated body.
         body: MessageBody,
     },
-    /// The recipient stored a chat message.
     ChatAck {
-        /// The message being acknowledged.
         id: MessageId,
     },
-    /// The peer's profile changed; re-broadcast to every live connection.
+    /// Re-broadcast to every live connection.
     Profile {
-        /// New nickname.
         nickname: Nickname,
-        /// New avatar seed, announced by the peer.
         avatar_seed: AvatarSeed,
     },
-    /// Graceful shutdown of this connection.
+    /// `reason` decides whether to redial.
     Goodbye {
-        /// Reason, used to decide whether to redial.
         reason: GoodbyeReason,
     },
-    /// A protocol error. The connection is closed after it is sent.
+    /// The connection is closed after it is sent; `message` is for logs only.
     Error {
-        /// Machine-readable code.
         code: ErrorCode,
-        /// Human-readable detail, for logs only.
         message: String,
     },
 }
 
 impl Frame {
-    /// A short name for logs and metrics.
     #[must_use]
     pub const fn kind(&self) -> &'static str {
         match self {
@@ -206,14 +166,13 @@ impl Frame {
         }
     }
 
-    /// Whether this frame belongs to the handshake.
     #[must_use]
     pub const fn is_handshake(&self) -> bool {
         matches!(self, Self::Hello(_) | Self::Welcome(_))
     }
 
-    /// Builds an error frame, truncating the detail so a peer cannot use the error channel
-    /// to make us log unbounded text.
+    /// Truncates the detail so a peer cannot use the error channel to make us log unbounded
+    /// text.
     #[must_use]
     pub fn error(code: ErrorCode, message: impl AsRef<str>) -> Self {
         let text: String = message
@@ -228,13 +187,11 @@ impl Frame {
     }
 }
 
-/// Serialises a frame, prefixing it with its big-endian length.
-///
 /// # Errors
 ///
-/// Returns [`ProtocolError::FrameSize`] if the encoded frame would exceed
-/// [`MAX_FRAME_BYTES`]. With the domain limits in place this is unreachable for frames we
-/// construct, but it is checked rather than assumed.
+/// Returns [`ProtocolError::FrameSize`] if the encoded frame would exceed [`MAX_FRAME_BYTES`].
+/// With the domain limits in place this is unreachable for frames we construct, but it is
+/// checked rather than assumed.
 pub fn encode(frame: &Frame) -> Result<Vec<u8>, ProtocolError> {
     let json = serde_json::to_vec(&WireFrame::from_frame(frame))
         .map_err(|err| ProtocolError::Malformed(format!("encode failed: {err}")))?;
@@ -249,9 +206,9 @@ pub fn encode(frame: &Frame) -> Result<Vec<u8>, ProtocolError> {
 
 /// Decodes and validates one frame body: the payload that follows the length prefix.
 ///
-/// This is the trust boundary. Everything after it may assume well-formed domain values.
-/// The announced protocol version is *not* checked here — it is returned inside `Hello` /
-/// `Welcome` so the connection loop can answer a mismatched peer with a precise error.
+/// This is the trust boundary. The announced protocol version is *not* checked here — it is
+/// returned inside `Hello`/`Welcome` so the connection loop can answer a mismatched peer with a
+/// precise error.
 ///
 /// # Errors
 ///
@@ -286,8 +243,8 @@ pub fn round_trip(frame: &Frame) -> Result<Frame, ProtocolError> {
 /// The version an envelope announces, read cheaply from the raw text.
 ///
 /// Used to answer a peer that announces an unsupported version *before* its frame is
-/// interpreted: if the schemas differ, a full decode would fail with a confusing
-/// "malformed" instead of "we do not speak your version".
+/// interpreted: if the schemas differ, a full decode would fail with a confusing "malformed"
+/// instead of "we do not speak your version".
 ///
 /// # Errors
 ///
@@ -358,7 +315,6 @@ mod tests {
         assert_eq!(len, payload.len());
 
         let json: serde_json::Value = serde_json::from_slice(payload).expect("json");
-        // `v` and `t` are flat siblings, not nested under a wrapper key.
         assert_eq!(json["v"], PROTOCOL_VERSION);
         assert_eq!(json["t"], "heartbeat");
         assert_eq!(json["seq"], 7);

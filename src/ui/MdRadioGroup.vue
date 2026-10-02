@@ -1,26 +1,12 @@
 <script setup lang="ts">
-/**
- * A Material 3 radio group.
- *
- * Each option is a real `<input type="radio">` sharing one generated `name`, visually hidden
- * inside its label. The browser then owns grouping, arrow-key traversal and the "one checked
- * per group" invariant, all of which a `role="radio"` reimplementation would have to reproduce
- * by hand. The indicator is drawn as a sibling of the input because a native radio cannot be
- * restyled to M3's ring-and-dot without `appearance: none` on a control whose focus ring and
- * hit area are then also gone.
- *
- * `label` names the group for assistive technology and is not drawn: every caller in this
- * application already has a visible section heading above the group, and a second one inside
- * the control would be a duplicate line of text.
- */
+// The options are real `<input type="radio">` sharing one generated `name`, so the browser owns
+// grouping, arrow-key traversal and the one-checked-per-group invariant.
 import { useId } from 'vue';
 
 defineProps<{
-  /** The `value` of the selected option. */
   modelValue: string;
-  /** The group's accessible name. */
+  /** The group's accessible name; not drawn. */
   label: string;
-  /** The options, in order. */
   options: readonly {
     readonly value: string;
     readonly label: string;
@@ -79,10 +65,7 @@ const name = useId();
   color: var(--md-sys-color-on-surface);
 }
 
-/*
- * The focus ring lives on the indicator, not on the input: the input is clipped away, so the
- * browser's own outline would be drawn where nobody can see it.
- */
+/* The focus ring is drawn on the indicator: the input is visually hidden, so its own outline would be invisible. */
 .md-radio-group__input:focus-visible + .md-radio-group__indicator {
   outline: 2px solid var(--md-sys-color-primary);
   outline-offset: 2px;

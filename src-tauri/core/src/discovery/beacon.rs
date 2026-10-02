@@ -1,19 +1,8 @@
 //! UDP beacon discovery: a datagram announce for networks that filter mDNS.
 //!
-//! The protocol is deliberately minimal, because it exists to work where the smart mechanism
-//! does not:
-//!
-//! * every instance sends an announce to the broadcast address and to the beacon multicast
-//!   group, every [`BEACON_INTERVAL_IDLE`] while it has heard nobody and every
-//!   [`BEACON_INTERVAL_SETTLED`] once it has;
-//! * hearing an announce emits [`DiscoveryEvent::Found`] *and* answers the sender with a
-//!   unicast announce (at most one per peer per [`REPLY_MIN_INTERVAL`]), which is what makes
-//!   discovery work when multicast is blocked for the response direction;
-//! * a peer that goes silent for [`DISCOVERY_TTL`] is reported lost, and a `bye` reports it
-//!   lost immediately.
-//!
-//! Everything received is untrusted: size, encoding and schema are all checked, and a
-//! malformed datagram is a debug log, never an error.
+//! Hearing an announce is answered with a unicast announce (at most one per peer per
+//! [`REPLY_MIN_INTERVAL`]): that reply is what makes discovery work when multicast is
+//! filtered in the response direction.
 
 use std::collections::HashMap;
 use std::io;
@@ -38,53 +27,31 @@ use crate::protocol::limits::{
 
 use super::OwnAnnouncement;
 
-/// Wire format version carried in every datagram. A datagram with any other value is
-/// ignored, so a future format can be rolled out without either side logging errors.
 const WIRE_VERSION: u8 = 1;
 
-/// Largest datagram we accept, in bytes. Anything longer is dropped unparsed.
 const MAX_DATAGRAM_BYTES: usize = 512;
 
-/// Shortest interval between two unicast replies to the same peer.
 const REPLY_MIN_INTERVAL: Duration = Duration::from_secs(5);
 
-/// Age at which a reply-limiter entry is dropped.
 const REPLY_PRUNE_AGE: Duration = Duration::from_secs(60);
 
-/// How often the bookkeeping is swept for peers that went silent.
 const SWEEP_INTERVAL: Duration = Duration::from_secs(5);
 
 /// Discovered peers over UDP broadcast and multicast.
-///
-/// # Socket options
-///
-/// The socket is bound to `0.0.0.0:<port>` with `SO_BROADCAST`, `SO_REUSEADDR` and
-/// `SO_REUSEPORT` enabled and multicast joined where the platform allows it. The reuse options
-/// matter for one specific case: the port being held by another process. Without them the
-/// second binder fails outright and discovery loses its fallback; with them both sockets
-/// receive the announcements, which is the behaviour a peer-to-peer discovery protocol wants.
 pub struct UdpBeacon {
-    /// What we announce about ourselves.
     own: OwnAnnouncement,
-    /// The UDP port the beacon announces on and listens to.
     port: u16,
-    /// The live socket and task, or `None` when stopped.
     running: Mutex<Option<Running>>,
 }
 
-/// A started beacon.
 struct Running {
-    /// Kept so that `stop` can say goodbye without waiting for the task to be scheduled.
+    /// Shared with `shutdown` so the goodbye goes out without scheduling the task.
     socket: Arc<UdpSocket>,
-    /// The receive/announce/sweep loop.
     task: JoinHandle<()>,
 }
 
 impl UdpBeacon {
-    /// Creates the beacon for the given announcement and port.
-    ///
-    /// Nothing is bound until [`Discovery::start`], so constructing one cannot fail; pass
-    /// [`crate::protocol::limits::DEFAULT_BEACON_PORT`] unless a test wants otherwise.
+    /// Nothing is bound until [`Discovery::start`], so constructing one cannot fail.
     #[must_use]
     pub fn new(own: OwnAnnouncement, port: u16) -> Self {
         Self {
@@ -94,7 +61,7 @@ impl UdpBeacon {
         }
     }
 
-    /// Sends a goodbye and stops the task. Safe to call more than once.
+    /// Safe to call more than once.
     fn shutdown(&self) {
         let running = super::lock(&self.running).take();
         let Some(running) = running else {
@@ -102,8 +69,8 @@ impl UdpBeacon {
         };
         if let Some(goodbye) = encode(Tag::Bye, &self.own) {
             for target in announce_targets(self.port) {
-                // Best effort by nature, and `stop` must not block: a full send queue is a
-                // datagram nobody receives, not a reason to wait.
+                // Best effort: a full send queue is a datagram nobody receives, not a
+                // reason to block `stop`.
                 if let Err(err) = running.socket.try_send_to(&goodbye, target) {
                     tracing::debug!(error = %err, %target, "could not send the beacon goodbye");
                 }
@@ -124,23 +91,18 @@ impl Discovery for UdpBeacon {
             DiscoveryError::Beacon(io::Error::other("the udp beacon needs a tokio runtime"))
         })?;
 
-        // Bind and configure synchronously: `start` reports a missing port immediately, and
-        // the socket is moved into the runtime afterwards.
+        // Bind and configure synchronously so `start` reports a taken port immediately.
         //
-        // `SO_REUSEADDR`/`SO_REUSEPORT` are set so that the beacon port being held by another
-        // process — a stale instance, a second copy of this application, anything else that
-        // picked 47821 — degrades to "both sockets receive the announcements" instead of
-        // "discovery is off". `socket2` is already in the dependency tree through `mdns-sd`;
-        // `std` still cannot express these options.
+        // The reuse options make a port held by another process degrade to "both sockets
+        // receive" instead of "discovery is off"; `std` cannot express them, `socket2` can.
         let socket = bind_reusable(SocketAddr::from((Ipv4Addr::UNSPECIFIED, self.port)))
             .map_err(DiscoveryError::Beacon)?;
         socket.set_broadcast(true).map_err(DiscoveryError::Beacon)?;
         if let Err(err) = socket.set_multicast_loop_v4(false) {
             tracing::warn!(error = %err, "could not disable the beacon's multicast loopback");
         }
-        // Joining the group is best effort: the group is a second path to the same peers,
-        // and broadcast covers the machines where the join is refused. `0.0.0.0` as the
-        // interface lets the platform pick the multicast-capable one.
+        // Best effort: broadcast covers the machines where the join is refused, and `0.0.0.0`
+        // lets the platform pick the multicast-capable interface.
         let group = multicast_group();
         if let Err(err) = socket.join_multicast_v4(&group, &Ipv4Addr::UNSPECIFIED) {
             tracing::warn!(
@@ -170,12 +132,10 @@ impl Drop for UdpBeacon {
     }
 }
 
-/// The IPv4 multicast group announcements are also sent to.
 fn multicast_group() -> Ipv4Addr {
     Ipv4Addr::from(BEACON_MULTICAST_ADDR)
 }
 
-/// The two destinations every announce goes to: the local broadcast and the beacon group.
 fn announce_targets(port: u16) -> [SocketAddr; 2] {
     [
         SocketAddr::from((Ipv4Addr::BROADCAST, port)),
@@ -183,53 +143,34 @@ fn announce_targets(port: u16) -> [SocketAddr; 2] {
     ]
 }
 
-/// The `t` field: what the sender is telling us.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 enum Tag {
-    /// The sender is (still) here.
     Announce,
-    /// The sender is going away.
     Bye,
 }
 
-/// The JSON body of a beacon datagram.
-///
-/// The identity fields are flat strings so that they go through the same domain constructors
-/// as any other untrusted input: a datagram carrying an invalid nickname is dropped at the
-/// boundary, exactly like an invalid frame on the TCP path.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct Datagram {
-    /// Wire format version, see [`WIRE_VERSION`].
     v: u8,
-    /// Announce or goodbye.
     t: Tag,
-    /// The sender's device id, as a full UUID string.
+    /// Full UUID string, validated through the domain constructor on decode.
     id: String,
-    /// The sender's nickname.
     nick: String,
-    /// The sender's avatar seed.
     seed: String,
-    /// The TCP port the sender listens on.
     port: u16,
 }
 
-/// A beacon payload that passed validation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Announcement {
-    /// The announcing device.
     device_id: DeviceId,
-    /// The nickname it announced.
     nickname: Nickname,
-    /// The avatar seed it announced.
     avatar_seed: AvatarSeed,
-    /// The TCP port it listens on.
     port: u16,
 }
 
 impl Announcement {
-    /// The peer to report, dialled at the address the datagram came from and the port it
-    /// announced.
+    /// The peer to report, dialled at the datagram's source address and its announced port.
     fn discovered(self, from: SocketAddr) -> DiscoveredPeer {
         DiscoveredPeer {
             device_id: self.device_id,
@@ -242,9 +183,8 @@ impl Announcement {
 
 /// Binds a UDP socket with the reuse options that let two processes share the port.
 ///
-/// On Windows only `SO_REUSEADDR` exists; on Unix `SO_REUSEPORT` is what actually distributes
-/// datagrams between the sockets. Setting whichever the platform has is the most that can be
-/// done from here, and both outcomes are better than refusing to start.
+/// On Windows only `SO_REUSEADDR` exists; on Unix `SO_REUSEPORT` is what actually
+/// distributes datagrams between sockets.
 fn bind_reusable(address: SocketAddr) -> io::Result<std::net::UdpSocket> {
     let socket = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
     socket.set_reuse_address(true)?;
@@ -256,8 +196,8 @@ fn bind_reusable(address: SocketAddr) -> io::Result<std::net::UdpSocket> {
     Ok(socket.into())
 }
 
-/// Returns `None` if serialisation fails, which cannot happen for this shape of data but
-/// must not be a panic either; every caller treats it as "nothing to send".
+/// `None` if serialisation fails, which cannot happen for this data but must not panic;
+/// callers treat it as "nothing to send".
 fn encode(tag: Tag, own: &OwnAnnouncement) -> Option<Vec<u8>> {
     serde_json::to_vec(&Datagram {
         v: WIRE_VERSION,
@@ -270,11 +210,6 @@ fn encode(tag: Tag, own: &OwnAnnouncement) -> Option<Vec<u8>> {
     .ok()
 }
 
-/// Decodes a datagram received from the network.
-///
-/// Returns `None` for an oversized datagram, one that is not UTF-8, one that does not match
-/// the schema, one from another wire version, or one whose identity fields are invalid. All
-/// of those are debug logs: the sender may be another program broadcasting on this port.
 fn decode(bytes: &[u8]) -> Option<(Tag, Announcement)> {
     if bytes.len() > MAX_DATAGRAM_BYTES {
         tracing::debug!(len = bytes.len(), "ignoring an oversized beacon datagram");
@@ -321,19 +256,14 @@ fn decode(bytes: &[u8]) -> Option<(Tag, Announcement)> {
     ))
 }
 
-/// Limits unicast replies to one per peer per [`REPLY_MIN_INTERVAL`].
-///
-/// Replying is what makes the beacon work when multicast is filtered in the response
-/// direction, so it has to happen often enough to be useful and rarely enough that two
-/// instances cannot bounce announces off each other.
+/// Limits unicast replies to one per peer per [`REPLY_MIN_INTERVAL`], so two instances
+/// cannot bounce announces off each other.
 #[derive(Debug, Default)]
 struct ReplyLimiter {
-    /// When each peer was last answered.
     replied: HashMap<DeviceId, Instant>,
 }
 
 impl ReplyLimiter {
-    /// Records an intent to reply, returning whether the reply may be sent now.
     fn allow(&mut self, peer: DeviceId, now: Instant) -> bool {
         match self.replied.get(&peer) {
             Some(last) if now.saturating_duration_since(*last) < REPLY_MIN_INTERVAL => false,
@@ -344,8 +274,6 @@ impl ReplyLimiter {
         }
     }
 
-    /// Drops entries that can no longer suppress anything, so the map stays bounded by the
-    /// number of peers seen in the last [`REPLY_PRUNE_AGE`].
     fn prune(&mut self, now: Instant) {
         self.replied
             .retain(|_, last| now.saturating_duration_since(*last) < REPLY_PRUNE_AGE);
@@ -355,20 +283,16 @@ impl ReplyLimiter {
 /// Tracks when each peer was last heard, so a silent peer is reported lost exactly once.
 #[derive(Debug, Default)]
 struct Liveness {
-    /// When each known peer last announced itself.
     last_heard: HashMap<DeviceId, Instant>,
 }
 
 impl Liveness {
-    /// Records a sighting of a peer.
     fn heard(&mut self, peer: DeviceId, now: Instant) {
         self.last_heard.insert(peer, now);
     }
 
-    /// Removes and returns every peer not heard within [`DISCOVERY_TTL`].
-    ///
-    /// Removing them here is what makes the report happen once: a peer that is returned is
-    /// forgotten, so only a fresh announce can bring it back.
+    /// Removes and returns every peer not heard within [`DISCOVERY_TTL`]; returning forgets
+    /// it, so a peer is only reported lost once.
     fn expire(&mut self, now: Instant) -> Vec<DeviceId> {
         let mut expired = Vec::new();
         self.last_heard.retain(|peer, last| {
@@ -381,23 +305,18 @@ impl Liveness {
         expired
     }
 
-    /// Forgets a peer immediately, returning whether it was known.
     fn forget(&mut self, peer: DeviceId) -> bool {
         self.last_heard.remove(&peer).is_some()
     }
 }
 
 /// Sends one datagram, logging rather than failing.
-///
-/// A beacon that cannot reach one destination — a machine with no multicast route, for
-/// instance — still has to keep the other direction working.
 async fn send_to(socket: &UdpSocket, payload: &[u8], target: SocketAddr) {
     if let Err(err) = socket.send_to(payload, target).await {
         tracing::debug!(error = %err, %target, "could not send a beacon datagram");
     }
 }
 
-/// The beacon's single task: announce, listen, and sweep the bookkeeping.
 async fn run(
     socket: Arc<UdpSocket>,
     own: OwnAnnouncement,
@@ -502,8 +421,6 @@ async fn run(
 mod tests {
     use super::*;
 
-    /// Two sockets on one port is the whole point of the reuse options, and it is what makes a
-    /// second instance on the same machine degrade to "both receive" instead of "no discovery".
     #[test]
     fn two_sockets_can_share_the_beacon_port() {
         let first = bind_reusable(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))).expect("first bind");
@@ -522,8 +439,6 @@ mod tests {
             .send_to(b"announce", SocketAddr::from((Ipv4Addr::LOCALHOST, port)))
             .expect("send");
 
-        // Whichever socket the platform delivers to, the datagram must arrive somewhere: that
-        // is the difference between this and a failed bind.
         let second = second.expect("second socket");
         let mut buffer = [0_u8; 32];
         let received = first
@@ -539,7 +454,6 @@ mod tests {
         );
     }
 
-    /// A stand-in for a peer's announcement.
     fn own_named(nickname: &str) -> OwnAnnouncement {
         let nickname = Nickname::parse(nickname).expect("valid nickname");
         let device_id = DeviceId::generate();
@@ -607,7 +521,6 @@ mod tests {
         let mut encoded = encode(Tag::Announce, &own).expect("encoded");
         assert!(encoded.len() <= MAX_DATAGRAM_BYTES);
 
-        // Still a valid announcement, merely padded past the limit.
         encoded.resize(MAX_DATAGRAM_BYTES + 1, b' ');
         assert!(decode_one(&encoded).is_none());
     }

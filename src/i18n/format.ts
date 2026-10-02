@@ -1,14 +1,3 @@
-/**
- * Locale-aware formatting.
- *
- * Everything user-visible that depends on a locale goes through `Intl`. Hand-written
- * "5 минуты назад" strings are the classic source of wrong grammar in exactly the language
- * this application ships beside English, and `Intl.RelativeTimeFormat` already implements
- * the CLDR rules for both.
- *
- * Formatters are memoised per locale: constructing an `Intl.DateTimeFormat` is not cheap and
- * a virtualised message list formats a timestamp per visible row on every scroll.
- */
 import type { Locale } from './locales';
 
 const relativeFormatters = new Map<Locale, Intl.RelativeTimeFormat>();
@@ -70,12 +59,6 @@ function dateTimeFormatter(locale: Locale): Intl.DateTimeFormat {
   return created;
 }
 
-/**
- * Chooses the largest unit that keeps the number small, then lets `Intl` phrase it.
- *
- * "45 seconds ago" is the last second-based reading; from there the unit steps up to
- * minutes, hours, days, months, years. Millions of seconds are never shown.
- */
 export function formatRelativeTime(timestampMs: number, nowMs: number, locale: Locale): string {
   const delta = timestampMs - nowMs;
   const magnitude = Math.abs(delta);
@@ -99,17 +82,14 @@ export function formatRelativeTime(timestampMs: number, nowMs: number, locale: L
   return formatter.format(Math.round(delta / YEAR), 'year');
 }
 
-/** Clock time of a message, e.g. "14:05" or "2:05 PM". */
 export function formatClockTime(timestampMs: number, locale: Locale): string {
   return timeFormatter(locale).format(new Date(timestampMs));
 }
 
-/** Full date and time, used by the device list and tooltips. */
 export function formatDateTime(timestampMs: number, locale: Locale): string {
   return dateTimeFormatter(locale).format(new Date(timestampMs));
 }
 
-/** Calendar day of a timestamp, in local time. */
 export function dayKey(timestampMs: number): string {
   const date = new Date(timestampMs);
   const month = `${date.getMonth() + 1}`.padStart(2, '0');
@@ -117,12 +97,6 @@ export function dayKey(timestampMs: number): string {
   return `${date.getFullYear()}-${month}-${day}`;
 }
 
-/**
- * Heading for a day separator: "Today", "Yesterday", or a localised date.
- *
- * `today` and `yesterday` are passed in rather than looked up here so this function stays
- * free of the message catalogue.
- */
 export function formatDayHeading(
   timestampMs: number,
   nowMs: number,
@@ -139,13 +113,6 @@ export function formatDayHeading(
   return dateFormatter(locale).format(new Date(timestampMs));
 }
 
-/**
- * The unit and precision for a byte count.
- *
- * Written as its own function, free of `Intl`, because it is the part with a decision in it:
- * a log directory of 1536 bytes must read "1.5 kB" and not "1536 byte". Only the phrasing is
- * left to `Intl`, which is the part that has to be translated.
- */
 export function byteUnit(value: number): {
   readonly unit: 'byte' | 'kilobyte' | 'megabyte' | 'gigabyte';
   readonly digits: number;
@@ -170,12 +137,6 @@ export function byteUnit(value: number): {
   return { unit, digits, scaled };
 }
 
-/**
- * A file size the way the language writes it: "1.5 kB", "1,5 КБ", "1.5 KB".
- *
- * The unit word comes from `Intl` rather than from the catalogue, so it agrees with the number
- * format and needs no plural rules — `Intl` already knows that Russian says «1,5 килобайта».
- */
 export function formatBytes(value: number, locale: Locale): string {
   const { unit, digits, scaled } = byteUnit(value);
   return new Intl.NumberFormat(locale, {
@@ -185,7 +146,6 @@ export function formatBytes(value: number, locale: Locale): string {
   }).format(scaled);
 }
 
-/** A count of days, with the language's own unit word: "14 дней", "14 days". */
 export function formatDays(count: number, locale: Locale): string {
   return new Intl.NumberFormat(locale, { style: 'unit', unit: 'day' }).format(count);
 }

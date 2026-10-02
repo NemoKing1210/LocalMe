@@ -20,7 +20,7 @@ Typical user loop:
 4. History, presence, unread counts and settings persist across restarts.
 
 UI languages: English, Russian, Spanish, German, French, Portuguese and Chinese. Identifier:
-`dev.localme.desktop`. Version: `0.5.0`. Changelog: [CHANGELOG.md](CHANGELOG.md). Design notes:
+`dev.localme.desktop`. Version: `0.5.3`. Changelog: [CHANGELOG.md](CHANGELOG.md). Design notes:
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Stack (accurate)
@@ -214,6 +214,13 @@ a tray-resident instance at ~0 % CPU.
 
 Formatting: Prettier, **100** print width, single quotes (`/.prettierrc.json`). Rust: default
 `rustfmt`.
+
+## Comments
+
+Write code that explains itself. Add a comment only when the reason for a line is not visible in
+the line itself — a non-obvious constraint, a tradeoff, a workaround, a domain rule the code cannot
+express. Do not comment every edit, do not restate the code in prose, and do not annotate an
+obvious change. Keep existing comments true or delete them; never comment out code.
 
 ## How to add work safely
 

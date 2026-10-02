@@ -3,8 +3,6 @@ import { fileURLToPath, URL } from 'node:url';
 import vue from '@vitejs/plugin-vue';
 import { defineConfig } from 'vitest/config';
 
-// The front end is a single window rendered by the Tauri webview, so the build targets a
-// known-modern engine: no polyfills, no legacy transpilation, no bundle of `core-js`.
 export default defineConfig({
   plugins: [vue()],
   resolve: {

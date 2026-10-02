@@ -1,21 +1,9 @@
 //! Time as a dependency, injected rather than read from the environment.
-//!
-//! Two kinds of time matter here and they are never mixed:
-//!
-//! * **Monotonic** (`Instant`) drives timeouts, heartbeats and rate limiting. It cannot jump.
-//! * **Wall clock** (`UnixMillis`) is only ever written down as an observation — `sent_at`,
-//!   `last_seen` — and displayed. It is never used for ordering decisions that must be
-//!   correct, because the user's clock may be wrong and the network's clocks are not ours
-//!   to trust (`docs/ARCHITECTURE.md` §13.2).
 
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-/// Milliseconds since the Unix epoch, as observed by the local clock.
-///
-/// Serialised as a bare number: it crosses the IPC boundary as a number, and a wrapper object
-/// would only make the TypeScript side unwrap it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct UnixMillis(pub i64);
@@ -27,17 +15,14 @@ impl UnixMillis {
         match SystemTime::now().duration_since(UNIX_EPOCH) {
             Ok(since_epoch) => {
                 let millis = since_epoch.as_millis();
-                // Saturating rather than wrapping: a clock set past year 292 278 994 should
-                // pin, not silently become 1970.
+                // Saturate rather than wrap: a clock past year 292 278 994 should pin, not become 1970.
                 Self(i64::try_from(millis).unwrap_or(i64::MAX))
             }
-            // A clock set before 1970 is technically possible; report the epoch rather than
-            // panicking, since this value is only ever displayed.
+            // A pre-1970 clock is only ever displayed, so report the epoch rather than panicking.
             Err(_) => Self(0),
         }
     }
 
-    /// The raw millisecond count.
     #[must_use]
     pub const fn as_i64(self) -> i64 {
         self.0
@@ -49,14 +34,11 @@ impl UnixMillis {
 /// Implementations must be cheap to clone and safe to share: the session actor clones it
 /// into every connection task.
 pub trait Clock: Clone + Send + Sync + 'static {
-    /// Monotonic instant used for all timeout arithmetic.
     fn now(&self) -> Instant;
 
-    /// Wall-clock instant used for values that are stored and displayed.
     fn wall(&self) -> UnixMillis;
 }
 
-/// The real clock.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SystemClock;
 
@@ -70,10 +52,6 @@ impl Clock for SystemClock {
     }
 }
 
-/// A clock that only moves when a test tells it to.
-///
-/// Wall time and monotonic time advance together, so a test can assert on both without
-/// keeping two fictions in sync.
 #[derive(Debug, Clone)]
 pub struct ManualClock {
     base: Instant,
@@ -82,7 +60,6 @@ pub struct ManualClock {
 }
 
 impl ManualClock {
-    /// Creates a clock positioned at `wall_start` milliseconds since the epoch.
     #[must_use]
     pub fn new(wall_start: i64) -> Self {
         Self {
@@ -92,7 +69,6 @@ impl ManualClock {
         }
     }
 
-    /// Advances every reading of this clock by `millis`.
     pub fn advance(&self, millis: u64) {
         self.elapsed
             .fetch_add(millis, std::sync::atomic::Ordering::Relaxed);
@@ -127,8 +103,7 @@ mod tests {
 
     #[test]
     fn system_clock_reads_a_plausible_wall_time() {
-        // Later than 2020-01-01 and earlier than 2100-01-01: a sanity bound that fails if
-        // the epoch conversion is ever wrong.
+        // A sanity bound that fails if the epoch conversion is ever wrong.
         let now = UnixMillis::now().as_i64();
         assert!(now > 1_577_836_800_000, "clock reads {now}");
         assert!(now < 4_102_444_800_000, "clock reads {now}");

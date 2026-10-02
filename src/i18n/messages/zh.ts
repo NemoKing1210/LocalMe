@@ -1,10 +1,3 @@
-/**
- * Chinese (Simplified) messages.
- *
- * Typed against the English catalogue's keys through `MessageCatalog`, with no additional
- * CLDR plural categories (Chinese has no plural distinction). The `i18n` test suite fails
- * if a key is missing, unknown, or if a placeholder does not match the English one.
- */
 import type { MessageCatalog } from './types';
 
 export const zh: MessageCatalog = {

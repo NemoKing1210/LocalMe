@@ -1,43 +1,24 @@
-/**
- * Types mirrored from the Rust side.
- *
- * These are hand-written rather than generated. `tauri-specta` was the alternative and was
- * rejected because it is at `2.0.0-rc`: a release candidate in the build to generate a few
- * dozen type pairs is a supply-chain and churn risk for a saving of one file. The property
- * that actually matters — a renamed Rust field breaks the front-end build — is kept by
- * declaring the shapes here exactly as serde emits them (`camelCase`, see the `rename_all`
- * attributes in `localme-core`) and by keeping every consumer type-checked against them.
- */
-
-/** A device identifier: a UUID string. */
 export type DeviceId = string;
 
-/** A message identifier: a UUID v7 string. */
 export type MessageId = string;
 
-/** Milliseconds since the Unix epoch, as observed by this machine. */
 export type UnixMillis = number;
 
-/** Which way a message travelled. */
 export type MessageDirection = 'incoming' | 'outgoing';
 
-/** Delivery progress of a message. */
 export type MessageStatus = 'sending' | 'sent' | 'delivered' | 'received' | 'failed';
 
-/** A device's public identity. */
 export interface Profile {
   readonly deviceId: DeviceId;
   readonly nickname: string;
   readonly avatarSeed: string;
 }
 
-/** The newest message in a conversation, reduced to what the user list draws. */
 export interface MessagePreview {
   readonly direction: MessageDirection;
   readonly body: string;
 }
 
-/** One row of the user list, already ordered as the interface should show it. */
 export interface Peer {
   readonly deviceId: DeviceId;
   readonly nickname: string;
@@ -50,7 +31,6 @@ export interface Peer {
   readonly lastMessage: MessagePreview | null;
 }
 
-/** A stored chat message. */
 export interface Message {
   readonly id: MessageId;
   readonly peer: DeviceId;
@@ -62,7 +42,6 @@ export interface Message {
   readonly read: boolean;
 }
 
-/** A device this installation has seen, for the settings screen. */
 export interface KnownDevice {
   readonly deviceId: DeviceId;
   readonly nickname: string;
@@ -73,42 +52,35 @@ export interface KnownDevice {
   readonly messageCount: number;
 }
 
-/** Which palette to use. */
 export type ThemeMode = 'system' | 'light' | 'dark';
 
 /** Interface language. Mirrors the `Locale` enum in `localme-core`. */
 export type Locale = 'en' | 'ru' | 'es' | 'de' | 'fr' | 'pt' | 'zh';
 
-/** Appearance settings. */
 export interface AppearanceSettings {
   theme: ThemeMode;
   accent: string;
 }
 
-/** Notification settings. */
 export interface NotificationSettings {
   enabled: boolean;
   showText: boolean;
   sound: boolean;
 }
 
-/** Operating-system integration settings. */
 export interface SystemSettings {
   autostart: boolean;
   startMinimized: boolean;
   closeToTray: boolean;
 }
 
-/** How much of its own activity the application writes to the log. */
 export type LogLevel = 'error' | 'warn' | 'info' | 'debug';
 
-/** Logging settings. */
 export interface LoggingSettings {
   level: LogLevel;
   retentionDays: number;
 }
 
-/** The settings document, as stored by the host. */
 export interface Settings {
   version: number;
   onboarded: boolean;
@@ -119,13 +91,11 @@ export interface Settings {
   logging: LoggingSettings;
 }
 
-/** Where a page of history starts. */
 export interface PageCursor {
   readonly sentAtMs: UnixMillis;
   readonly id: MessageId;
 }
 
-/** Everything the interface needs for its first paint. */
 export interface Bootstrap {
   readonly profile: Profile;
   readonly settings: Settings;
@@ -136,7 +106,6 @@ export interface Bootstrap {
   readonly version: string;
 }
 
-/** Ports, identity and versions, for the About section. */
 export interface Diagnostics {
   readonly version: string;
   readonly protocolVersion: number;
@@ -145,14 +114,12 @@ export interface Diagnostics {
   readonly platform: string;
 }
 
-/** One daily log file. */
 export interface LogFile {
   readonly name: string;
   readonly sizeBytes: number;
   readonly modifiedMs: number | null;
 }
 
-/** The log directory, as the settings screen describes it. */
 export interface LogsInfo {
   readonly directory: string;
   readonly files: readonly LogFile[];
@@ -160,7 +127,6 @@ export interface LogsInfo {
   readonly retentionDays: number;
 }
 
-/** Labels the host draws outside the web view. */
 export interface UiLabels {
   appName: string;
   open: string;
@@ -172,12 +138,6 @@ export interface UiLabels {
   newMessage: string;
 }
 
-/**
- * A failure returned by a command.
- *
- * A tagged enum rather than a message string, so the interface can say something useful in the
- * user's language per case instead of printing English from the Rust layer.
- */
 export type ApiError =
   | { readonly kind: 'invalid_input'; readonly field: string; readonly message: string }
   | { readonly kind: 'unknown_peer'; readonly deviceId: string }
@@ -188,7 +148,6 @@ export type ApiError =
   | { readonly kind: 'shutting_down' }
   | { readonly kind: 'internal'; readonly message: string };
 
-/** Severity of a notice from the core. */
 export type NoticeLevel = 'info' | 'warning' | 'error';
 
 /**
@@ -213,5 +172,4 @@ export interface CoreEventMap {
   onboarding_complete: null;
 }
 
-/** The name of a core event. */
 export type CoreEventName = keyof CoreEventMap;

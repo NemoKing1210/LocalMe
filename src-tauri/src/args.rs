@@ -1,14 +1,5 @@
-//! Argument handling for the IPC surface.
-//!
-//! Every command in `commands.rs` parses its string arguments into domain types through one of
-//! these functions, which is why they are here rather than inline: they are the whole of the
-//! layer's own logic, they are what the tests in this file exercise, and they are the only place
-//! a caller-supplied value becomes a validated one.
-//!
-//! The `field` each error names is part of the contract: the interface uses it to decide which
-//! input to mark, so a command that renamed `peerId` to `peer_id` would break the interface's
-//! error display. Tauri's `#[tauri::command]` argument names are camelCase on the JavaScript
-//! side by default, and the field names below match them.
+//! Argument handling for the IPC surface. Each error's `field` is part of the contract: it names
+//! the camelCase JavaScript argument the interface uses, so the interface can mark the right input.
 
 use localme_core::domain::ids::DeviceId;
 use localme_core::domain::message::MessageBody;
@@ -18,8 +9,6 @@ use localme_core::protocol::MAX_BODY_CHARS;
 
 use crate::error::ApiError;
 
-/// A device identifier, as the interface sends it.
-///
 /// # Errors
 ///
 /// [`ApiError::InvalidInput`] naming the `peerId` argument.
@@ -29,8 +18,6 @@ pub fn device_id(value: &str) -> Result<DeviceId, ApiError> {
         .map_err(|error| ApiError::invalid_input("peerId", error))
 }
 
-/// A nickname.
-///
 /// # Errors
 ///
 /// [`ApiError::InvalidInput`] naming the `nickname` argument.
@@ -38,13 +25,6 @@ pub fn nickname(value: &str) -> Result<Nickname, ApiError> {
     Nickname::parse(value).map_err(|error| ApiError::invalid_input("nickname", error))
 }
 
-/// An `#RRGGBB` colour, as the interface sends one.
-///
-/// The window frame is painted from the palette the front end generated, so a colour is one of
-/// the few values that crosses the boundary as a string. Parsing it here keeps the frame code
-/// free of string handling and turns a malformed value into an input error rather than a silent
-/// default colour.
-///
 /// # Errors
 ///
 /// [`ApiError::InvalidInput`] naming `field`.
@@ -63,14 +43,9 @@ pub fn hex_color(field: &str, value: &str) -> Result<[u8; 3], ApiError> {
     Ok(channels)
 }
 
-/// A message body.
-///
-/// The length error is enriched with the limit, because "message body has 9000 characters, the
-/// limit is 8000" is what the interface shows next to the counter and the limit belongs with it.
-///
 /// # Errors
 ///
-/// [`ApiError::InvalidInput`] naming the `body` argument.
+/// [`ApiError::InvalidInput`] naming the `body` argument; the message names the length limit.
 pub fn message_body(value: &str) -> Result<MessageBody, ApiError> {
     MessageBody::parse(value).map_err(|error| {
         if matches!(error, localme_core::error::DomainError::BodyTooLong { .. }) {
@@ -84,7 +59,6 @@ pub fn message_body(value: &str) -> Result<MessageBody, ApiError> {
     })
 }
 
-/// Where a page of a conversation should start, as the interface sends it.
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PageCursor {
@@ -120,8 +94,6 @@ mod tests {
 
     #[test]
     fn a_bad_device_id_names_the_argument_the_interface_sent() {
-        // The field name is what the interface marks as invalid, so it has to be the JavaScript
-        // argument name and not the Rust parameter name.
         let error = device_id("nope").expect_err("not an identifier");
         match error {
             ApiError::InvalidInput { field, .. } => assert_eq!(field, "peerId"),

@@ -1,17 +1,3 @@
-//! Discovery adapters.
-//!
-//! Three [`Discovery`](crate::ports::discovery::Discovery) implementations live here:
-//!
-//! * [`MdnsDiscovery`] — the primary mechanism: DNS-SD for `_localme._tcp.local.` through the
-//!   `mdns-sd` crate, which already solves query/response, caching, name conflicts and
-//!   per-interface behaviour, and interoperates with the responder every desktop OS ships.
-//! * [`UdpBeacon`] — the escape hatch for networks that filter mDNS. It is deliberately dumb
-//!   (periodic announce plus a direct reply, no query) because it has to work exactly where
-//!   the smart mechanism does not.
-//! * [`CompositeDiscovery`] — merges any number of sources into one event stream, so a peer
-//!   seen by both mechanisms is reported once and is only reported lost when every
-//!   mechanism has given up on it.
-//!
 //! Every adapter filters our own device id at the [`DiscoveryEvent`] boundary, so our own
 //! announcement never reaches the session, whichever mechanism found it.
 
@@ -29,27 +15,18 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use crate::domain::ids::{AvatarSeed, DeviceId};
 use crate::domain::nickname::Nickname;
 
-/// What this device tells the network about itself.
-///
 /// The same values are sent over every mechanism, and peers keep them until the handshake
 /// confirms them: a nickname and an avatar seed taken from an announcement are
 /// unauthenticated, good enough to draw a row in a peer list, and replaced by the
 /// handshake's values as soon as a connection is established.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OwnAnnouncement {
-    /// Our stable device identifier, announced in full so a peer never parses a name.
     pub device_id: DeviceId,
-    /// The nickname peers should display for us.
     pub nickname: Nickname,
-    /// The avatar seed peers should render for us.
     pub avatar_seed: AvatarSeed,
-    /// The TCP port our listener is bound to.
     pub port: u16,
 }
 
-/// Orders advertised addresses for dialling: every IPv4 address before any IPv6 address, in
-/// a deterministic order within each family.
-///
 /// IPv4 goes first because a dual-stack host usually advertises link-local IPv6 addresses
 /// that are only usable on one link, while its IPv4 address is reachable from the whole
 /// LAN. The caller remembers which address worked last and tries that one first.
@@ -66,8 +43,6 @@ fn ordered_addresses(addresses: impl IntoIterator<Item = IpAddr>, port: u16) -> 
         .collect()
 }
 
-/// Locks a mutex, recovering the value if a panic poisoned it.
-///
 /// The guarded state is only ever replaced, never half-updated, so a poisoned lock carries
 /// nothing worth propagating a panic for — and panic-free production code is a rule here.
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {

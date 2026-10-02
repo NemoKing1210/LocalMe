@@ -1,17 +1,5 @@
-/**
- * Icon rendering.
- *
- * Icons are data, not markup: each one is a list of primitives rendered through `v-for`. That
- * keeps the component free of `v-html` — which the CSP and the lint rules forbid, and which
- * would be the wrong shape for a design system anyway — and it means an icon can be sized and
- * coloured by the same CSS custom properties as everything else.
- *
- * The set is hand-drawn from primitives rather than copied from an icon font. A font is a
- * download, a licence and a CSP `font-src` entry for two dozen glyphs, and an icon whose exact
- * geometry we do not control is an icon that cannot be adjusted to sit optically right next to
- * our own type.
- */
-/** One drawing primitive. */
+// Icons are data, not markup: each is a list of primitives rendered through `v-for`, so the
+// component needs no `v-html` (which the CSP and lint rules forbid).
 type Shape =
   | { readonly kind: 'path'; readonly d: string }
   | {
@@ -33,12 +21,7 @@ type Shape =
     }
   | { readonly kind: 'dot'; readonly cx: number; readonly cy: number; readonly r: number };
 
-/**
- * Three slider rows, the glyph the button that opens settings uses.
- *
- * It is deliberately not a cog: at 24 px the teeth of a gear blur into a ring, while three
- * tracks with offset handles stay legible and read as "adjust", which is what the screen is.
- */
+// Three slider rows, not a cog: gear teeth blur into a ring at 24px, while offset tracks stay legible.
 function tuneRows(): Shape[] {
   const rows: readonly (readonly [y: number, handleX: number])[] = [
     [6.5, 15.2],
@@ -53,7 +36,6 @@ function tuneRows(): Shape[] {
   return shapes;
 }
 
-/** Sun rays, the same polar loop as the sliders. */
 function sunRays(): Shape[] {
   const rays: Shape[] = [];
   for (let index = 0; index < 8; index += 1) {
@@ -210,5 +192,4 @@ export const ICONS: Record<string, readonly Shape[]> = {
   ],
 };
 
-/** Every icon name, so a typo is caught by the type checker at the call site. */
 export type IconName = keyof typeof ICONS;

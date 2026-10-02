@@ -1,8 +1,4 @@
 //! Pure domain: identity, peers, messages and the presence state machine.
-//!
-//! Nothing here touches the network, the database, the clock or the UI. Every rule that
-//! can be expressed as a function of its inputs is expressed here, which is what makes the
-//! interesting parts of the system unit-testable without a socket or a filesystem.
 
 pub mod clock;
 pub mod ids;

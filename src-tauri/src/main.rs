@@ -1,8 +1,4 @@
-//! The binary entry point.
-//!
-//! On Windows a release build must not allocate a console window, which is what the
-//! `windows_subsystem` attribute below is for; debug builds keep the console so that
-//! `cargo run` shows the log.
+//! Windows release builds must not allocate a console; debug builds keep it for `cargo run`.
 
 #![cfg_attr(
     all(not(debug_assertions), target_os = "windows"),

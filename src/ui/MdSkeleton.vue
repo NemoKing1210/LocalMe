@@ -1,27 +1,12 @@
 <script setup lang="ts">
-/**
- * A shimmering placeholder block.
- *
- * The block is deliberately dumb — a box, a shape and a sweep — because every skeleton in the
- * application is a different *arrangement* of boxes, and the arrangement belongs to the screen
- * that knows what is arriving (see `MessageSkeleton`).
- *
- * The sweep is a background gradient moved with `background-position`, not a transform and not
- * an animated opacity: nothing about the block's box changes, so a column of them cannot cause
- * a reflow, and the whole effect stays on one composited layer.
- *
- * The animation carries its own tempo rather than reading `--md-sys-motion-duration-*`, because
- * the token sheet zeroes those under `prefers-reduced-motion`, and a placeholder whose sweep has
- * stopped is exactly what a reduced-motion user should get — a static block, not a strobe. That
- * override is declared below.
- */
+// The sweep is a background gradient moved with `background-position`, not a transform: nothing
+// about the block's box changes, so a column of them cannot reflow and the effect stays on one
+// composited layer. The duration is hardcoded because the `--md-sys-motion-*` tokens are zeroed
+// under `prefers-reduced-motion`, which is the intended static result here (see the media query).
 withDefaults(
   defineProps<{
-    /** Any CSS length; a percentage of the row is the usual choice. */
     width?: string;
-    /** Any CSS length. */
     height?: string;
-    /** Which corner radius belongs on this block. */
     shape?: 'bubble' | 'pill' | 'text';
   }>(),
   { width: '100%', height: '1em', shape: 'text' },
@@ -40,8 +25,7 @@ withDefaults(
 <style scoped>
 .md-skeleton {
   display: block;
-  /* The gradient is a translucent highlight over the container role, so the same rule reads
-     correctly in light and dark without a second token pair. */
+  /* A translucent highlight over the container role, so one rule reads in both light and dark. */
   background-color: var(--md-sys-color-surface-container-highest);
   background-image: linear-gradient(
     90deg,

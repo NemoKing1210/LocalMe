@@ -1,11 +1,4 @@
 <script setup lang="ts">
-/**
- * A Material 3 icon button.
- *
- * The accessible name is a required prop rather than derived: an icon-only control has no text
- * for a screen reader to read, and making the label mandatory is the only way to guarantee one
- * exists.
- */
 import { computed } from 'vue';
 
 import MdIcon from './MdIcon.vue';
@@ -13,17 +6,11 @@ import type { IconName } from './icons';
 
 const props = withDefaults(
   defineProps<{
-    /** Which icon to draw. */
     icon: IconName;
-    /** The accessible name, and the tooltip. */
     label: string;
-    /** `standard` has no container; the others draw one. */
     variant?: 'standard' | 'filled' | 'tonal';
-    /** Whether the button is unavailable. */
     disabled?: boolean;
-    /** Whether the control is currently engaged, such as a muted toggle. */
     selected?: boolean;
-    /** Shrinks the box for dense layouts. */
     size?: 'small' | 'medium';
   }>(),
   { variant: 'standard', disabled: false, selected: false, size: 'medium' },

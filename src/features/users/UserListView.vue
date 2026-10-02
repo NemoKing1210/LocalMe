@@ -1,16 +1,5 @@
 <script setup lang="ts">
-/**
- * The people pane: a search field, a virtualised list, and the two per-person actions that do
- * not open a conversation (mute, forget).
- *
- * The list is virtualised with fixed-size rows rather than measured ones. Every row is exactly
- * `--localme-user-row-height`, so the row's start offset is `index * height` and the virtualiser
- * never has to measure the DOM — which in turn means scrolling cannot invalidate a measurement
- * and there is no reflow between a row entering the viewport and being drawn.
- *
- * Emptying the list has two meanings and they are answered differently: "nobody on the network"
- * explains discovery, while "nobody matches what you typed" names the search that hid everyone.
- */
+/** Rows are fixed-height, so the virtualiser never measures the DOM. */
 import { useVirtualizer } from '@tanstack/vue-virtual';
 import { computed, ref } from 'vue';
 import { motion } from 'motion-v';
@@ -49,7 +38,6 @@ const router = useRouter();
 
 const scroll = ref<HTMLElement | null>(null);
 
-/** Rows fade in while the list is appearing; a row mounted by scrolling simply is. */
 const entering = useEntranceWindow();
 
 const virtualizer = useVirtualizer(
@@ -63,7 +51,6 @@ const virtualizer = useVirtualizer(
 
 const totalSize = computed<number>(() => virtualizer.value.getTotalSize());
 
-/** Only the rows in (and near) the viewport, paired with the peer each one stands for. */
 const rows = computed<readonly Row[]>(() =>
   virtualizer.value.getVirtualItems().flatMap((item) => {
     const peer = peers.visible[item.index];
@@ -106,8 +93,7 @@ async function onForgetConfirmed(deleteHistory: boolean): Promise<void> {
   }
 
   chat.clear(peer.deviceId);
-  // The conversation is gone from the list, so an address pointing at it would be an address
-  // pointing at nothing.
+  // The address pointed at a conversation that is now gone.
   if (peers.selectedId === peer.deviceId) void router.replace({ name: ROUTE.chat });
 }
 </script>
@@ -194,12 +180,8 @@ async function onForgetConfirmed(deleteHistory: boolean): Promise<void> {
   list-style: none;
 }
 
-/* Rows are absolutely positioned because their order in the DOM is the order of the visible
-   slice, not the order of the list. `top` rather than `transform: translateY` places them at
-   their offset on purpose: a transform would make every row its own stacking context, and the
-   overflow menu opened from a row could then never paint above the rows below it. The entrance
-   animation is opacity-only for that same reason — motion at rest leaves `opacity: 1`, which
-   creates no stacking context, where a `y` or `x` would leave a transform behind forever. */
+/* `top`, not `transform`, and opacity-only animation: a lingering transform makes each row its
+   own stacking context, so the overflow menu could not paint above the rows below. */
 .users__row {
   position: absolute;
   inset-inline: 0;

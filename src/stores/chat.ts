@@ -1,11 +1,3 @@
-/**
- * One conversation: its loaded messages, its paging cursor and its sending state.
- *
- * Messages are held newest-last (the order they are rendered in) while pages are fetched
- * newest-first, because that is the shape every virtualised list and every `scrollTop`
- * calculation expects. Only one conversation is held at a time: keeping every conversation in
- * memory would undo the point of paging.
- */
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 
@@ -15,15 +7,6 @@ import type { DeviceId, Message, PageCursor } from '@/ipc';
 /** How many messages one page holds. Matches the host's default. */
 const PAGE_SIZE = 50;
 
-/**
- * Whether `left` sorts strictly before `right`.
- *
- * Timestamp first, identifier second — the same total order the storage index uses, so a
- * conversation loaded by pages and extended by live messages cannot interleave differently from
- * the way it was stored. The name says "before", not "after": the previous version of this
- * function had the right body and the wrong name, and the call site then read it backwards and
- * inserted every new message at the front of the log.
- */
 function precedes(left: Message, right: Message): boolean {
   return left.sentAt === right.sentAt
     ? left.id.localeCompare(right.id) < 0
@@ -37,31 +20,18 @@ export const useChatStore = defineStore('chat', () => {
   const hasMore = ref(false);
   const sending = ref(false);
 
-  /**
-   * Messages that have not been drawn yet.
-   *
-   * The log is virtualised, so a row mounts and unmounts as the reader scrolls; a bubble that
-   * animated itself on mount would therefore play its entrance every time the reader flicked
-   * past it. This set turns the animation into a property of the *message arriving* rather than
-   * of a row appearing: the bubble asks once, the store forgets, and a scroll can never make it
-   * ask twice. Bounded because nothing consumes the entry of a message that arrives while the
-   * reader is far up the history and never scrolls down to it.
-   */
   const undrawn = new Set<string>();
   const UNDRAWN_LIMIT = 64;
 
-  /** The oldest loaded message, which is where the previous page starts from. */
   const oldestCursor = computed<PageCursor | null>(() => {
     const oldest = messages.value[0];
     return oldest ? { sentAtMs: oldest.sentAt, id: oldest.id } : null;
   });
 
-  /** A message that has not been acknowledged yet and can therefore still fail. */
   const pendingCount = computed(
     () => messages.value.filter((message) => message.status === 'sending').length,
   );
 
-  /** Opens a conversation, loading its first page. */
   async function open(next: DeviceId | null): Promise<void> {
     peerId.value = next;
     messages.value = [];
@@ -80,7 +50,6 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
-  /** Loads the page before the oldest loaded message. */
   async function loadOlder(): Promise<void> {
     const current = peerId.value;
     const cursor = oldestCursor.value;
@@ -101,7 +70,6 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
-  /** Sends a message, adding it immediately so the composer feels instant. */
   async function send(body: string): Promise<void> {
     const current = peerId.value;
     if (current === null || sending.value) return;
@@ -116,7 +84,6 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
-  /** Records a message for this conversation, keeping the list in time order. */
   function add(message: Message): void {
     if (message.peer !== peerId.value) return;
     const existing = messages.value.find((known) => known.id === message.id);
@@ -139,24 +106,16 @@ export const useChatStore = defineStore('chat', () => {
     undrawn.add(message.id);
   }
 
-  /**
-   * Whether this message should play its entrance, exactly once.
-   *
-   * Called from a bubble's setup, which runs once per mounted row: the first caller gets `true`
-   * and every later mount of the same message gets `false`.
-   */
   function consumeEntrance(id: string): boolean {
     return undrawn.delete(id);
   }
 
-  /** Applies a delivery-status change, wherever the message came from. */
   function update(id: string, patch: Partial<Message>): void {
     messages.value = messages.value.map((message) =>
       message.id === id ? { ...message, ...patch } : message,
     );
   }
 
-  /** Forgets everything about the open conversation, for the forget path. */
   function clear(deviceId: DeviceId): void {
     if (peerId.value !== deviceId) return;
     messages.value = [];

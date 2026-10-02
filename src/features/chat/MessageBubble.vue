@@ -1,13 +1,4 @@
 <script setup lang="ts">
-/**
- * One message bubble.
- *
- * Three decisions are visible here. The direction chooses the colour roles and the side of the
- * column. Only the corner nearest the sender is pulled tight — the other three stay `large` —
- * which is what makes a run of messages read as one column instead of a stack of cards. And the
- * body is text with `white-space: pre-wrap`, so a newline is a line break and a `<script>` tag
- * is nine characters, never markup.
- */
 import { computed } from 'vue';
 import { AnimatePresence, motion } from 'motion-v';
 
@@ -18,29 +9,17 @@ import MdIcon from '@/ui/MdIcon.vue';
 import type { IconName } from '@/ui/icons';
 
 const props = defineProps<{
-  /** The message to draw. */
   message: Message;
-  /** Whether delivery progress belongs beside the time. History does not need it. */
   showStatus: boolean;
 }>();
 
 const i18n = useI18n();
 const chat = useChatStore();
 
-/**
- * Whether this bubble is being drawn for the first time.
- *
- * Asked once, in `setup`: a message that arrives animates in, and the same message scrolling
- * back into view is drawn without ceremony. See `chat.consumeEntrance`.
- */
+// Asked once: a message animates only on first arrival, not when scrolled back into view.
 const entrance = chat.consumeEntrance(props.message.id);
 
-/**
- * The glyph and the sentence for each delivery state.
- *
- * A record rather than a `switch`, so a state added to the host's enum is a compile error here
- * instead of a message that silently shows nothing.
- */
+/** A record so a new host status is a compile error here, not a silently blank bubble. */
 const GLYPHS: Record<MessageStatus, { readonly icon: IconName; readonly key: MessageKey } | null> =
   {
     sending: { icon: 'clock', key: 'chat.statusSending' },
@@ -52,13 +31,7 @@ const GLYPHS: Record<MessageStatus, { readonly icon: IconName; readonly key: Mes
 
 const outgoing = computed(() => props.message.direction === 'outgoing');
 
-/**
- * The delivery glyph, with the sentence that explains it.
- *
- * `null` covers two cases that are deliberately the same: a message that is not ours — its
- * delivery is not our business — and `received`, which is the state every incoming message is
- * in and therefore says nothing.
- */
+/** `null` for a message that is not ours and for `received`: both say nothing. */
 const status = computed<{ readonly icon: IconName; readonly label: string } | null>(() => {
   if (!props.showStatus || props.message.direction !== 'outgoing') return null;
   const glyph = GLYPHS[props.message.status];
@@ -77,9 +50,6 @@ const status = computed<{ readonly icon: IconName; readonly label: string } | nu
     <p class="md-typescale-body-medium bubble__body" data-selectable>{{ message.body }}</p>
     <footer class="md-typescale-label-small bubble__meta">
       <span class="bubble__time">{{ i18n.clock(message.sentAt) }}</span>
-      <!-- One glyph at a time, cross-faded: sending → sent → delivered is the one thing on a
-           bubble that changes after it is on screen, and a swap with no transition reads as a
-           rendering glitch rather than as progress. -->
       <AnimatePresence mode="wait">
         <motion.span
           v-if="status"

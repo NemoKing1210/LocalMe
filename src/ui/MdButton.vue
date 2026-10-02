@@ -1,12 +1,4 @@
 <script setup lang="ts">
-/**
- * A Material 3 button.
- *
- * Every variant is the same box: 40 units tall, a fully rounded corner, the label style, 24
- * units of horizontal padding, and a state layer drawn over the container. The variants differ
- * only in which colour roles they use, which is why they share one implementation — five
- * near-identical components would be five places for the corner radius to be different.
- */
 import { computed } from 'vue';
 
 import MdIcon from './MdIcon.vue';
@@ -14,15 +6,10 @@ import type { IconName } from './icons';
 
 const props = withDefaults(
   defineProps<{
-    /** Which colour role the button takes. */
     variant?: 'filled' | 'tonal' | 'outlined' | 'text' | 'elevated';
-    /** An optional leading icon. */
     icon?: IconName;
-    /** Whether the button is unavailable. */
     disabled?: boolean;
-    /** Whether the label is replaced by a spinner while an action is running. */
     busy?: boolean;
-    /** The native button type; only `submit` behaves differently inside a form. */
     type?: 'button' | 'submit' | 'reset';
   }>(),
   { variant: 'filled', disabled: false, busy: false, type: 'button' },

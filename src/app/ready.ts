@@ -1,11 +1,3 @@
-/**
- * Startup handshake with the host.
- *
- * The window is created hidden so that the first thing the user sees is a fully themed
- * frame, not a white one that turns dark a moment later. The front end reports readiness
- * once Vue has mounted, and the host reveals the window then. The host also has a timeout
- * of its own, so a front-end failure cannot leave an invisible application running.
- */
 import { emit } from '@tauri-apps/api/event';
 
 /** Event name shared with `src-tauri/src/window.rs`. */

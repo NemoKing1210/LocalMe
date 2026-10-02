@@ -1,12 +1,6 @@
-//! TCP transport: the listening socket, outbound dials, and one task per connection.
+//! TCP transport: listening socket, outbound dials, and one task per connection.
 //!
-//! The transport owns sockets and frames; it owns no policy about *who* a peer is. It reports
-//! what happened on a connection as a [`TransportEvent`] and accepts writes through a
-//! [`PeerLink`] handle, which is what keeps the peer table, presence and message pipeline in
-//! the session actor where they can be reasoned about sequentially.
-//!
-//! Framing, handshake and the connection loop are in [`codec`] and [`connection`]; the
-//! listening socket is in [`listener`].
+//! Framing, handshake and the connection loop are in [`codec`] and [`connection`]; the listening socket is in [`listener`].
 
 pub mod codec;
 pub mod connection;
@@ -27,21 +21,13 @@ use crate::domain::peer::Handshake;
 use crate::error::TransportError;
 use crate::protocol::{Frame, GoodbyeReason, limits::OUTBOUND_QUEUE_CAPACITY};
 
-/// Which side initiated a connection.
-///
-/// Part of the deterministic tie-break for simultaneous connections: both peers evaluate
-/// [`is_preferred`] on the same pair of identifiers and reach the same conclusion, so exactly
-/// one connection survives without any additional exchange.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
-    /// We opened this connection.
     Dialer,
-    /// The peer opened it and we accepted.
     Acceptor,
 }
 
 impl Role {
-    /// A short label for logs.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -50,7 +36,7 @@ impl Role {
         }
     }
 
-    /// The identifiers of this connection, as `(dialer, acceptor)`.
+    /// Identifiers as `(dialer, acceptor)`.
     #[must_use]
     pub fn endpoints(self, own: DeviceId, peer: DeviceId) -> (DeviceId, DeviceId) {
         match self {
@@ -60,22 +46,19 @@ impl Role {
     }
 }
 
-/// Whether a connection is the one both peers keep when they dial each other at the same time.
+/// Whether a connection is the one both peers keep when they dial each other simultaneously.
 ///
-/// The rule is "the connection initiated by the peer with the smaller identifier wins". It is
-/// total and stable, and both ends can evaluate it from the same two values, so the losing
-/// connection is closed by both sides and the winner is never dropped by one of them.
+/// The connection initiated by the peer with the smaller identifier wins. Both ends evaluate
+/// it from the same two values, so exactly one connection survives.
 #[must_use]
 pub fn is_preferred(dialer: DeviceId, acceptor: DeviceId) -> bool {
     dialer < acceptor
 }
 
-/// Commands the connection task accepts from the session.
 #[derive(Debug)]
 pub enum LinkCommand {
     /// Write a frame, failing if the peer stops reading for too long.
     Send(Frame),
-    /// Say goodbye and close.
     Close(GoodbyeReason),
 }
 

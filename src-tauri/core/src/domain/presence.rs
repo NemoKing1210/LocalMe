@@ -1,65 +1,48 @@
 //! The presence state machine.
 //!
-//! Presence is derived, never guessed. It is a function of three independent observations
-//! (`docs/ARCHITECTURE.md` §4.2): the peer was discovered, a connection to it was
-//! established and handshaken, and that connection is still receiving heartbeats.
-//!
-//! The machine has no clock: every transition takes `now`, so a test can drive a peer
-//! through a full online → stalled → offline → online cycle in microseconds.
+//! Presence is derived from three observations (discovered, connection handshaken, heartbeats
+//! still arriving), never guessed. The machine has no clock: every transition takes `now`.
 
 use std::time::{Duration, Instant};
 
 use crate::protocol::limits::HEARTBEAT_TIMEOUT;
 
-/// What the UI shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PresenceStatus {
-    /// Reachable now.
     Online,
-    /// Listed, but not reachable.
     Offline,
 }
 
-/// The internal phase, which is finer-grained than what the UI shows.
+/// The internal phase, finer-grained than what the UI shows.
 ///
 /// `Connecting` and `Stalled` both report [`PresenceStatus::Offline`] but are kept apart so
-/// logs and tests can tell "we are still dialling" from "the connection went quiet".
+/// logs and tests can tell "still dialling" from "connection went quiet".
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PresencePhase {
-    /// Nothing known about this device beyond a row in the database.
     Unknown,
-    /// Discovered and dialling, or dialling again after a failure.
     Connecting,
-    /// Handshaken and receiving heartbeats.
     Online,
-    /// Connected, but no heartbeat within the timeout; the socket is being torn down.
+    /// Connected but silent past the timeout; the socket is being torn down.
     Stalled,
-    /// Discovered before, not reachable now.
     Offline,
 }
 
-/// A state change worth telling the world about.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PresenceChange {
-    /// Nothing the UI cares about changed.
     Unchanged,
-    /// The peer became reachable.
     CameOnline,
-    /// The peer stopped being reachable.
     WentOffline,
-    /// The phase changed but the reported status did not (e.g. `Connecting` → `Stalled`).
+    /// The phase changed but the reported status did not.
     InternalOnly,
 }
 
 impl PresenceChange {
-    /// Whether the reported online/offline status differs from before.
     #[must_use]
     pub const fn is_visible(self) -> bool {
         matches!(self, Self::CameOnline | Self::WentOffline)
     }
 }
 
-/// Presence of a single peer.
 #[derive(Debug, Clone)]
 pub struct PresenceMachine {
     phase: PresencePhase,
@@ -75,7 +58,6 @@ impl Default for PresenceMachine {
 }
 
 impl PresenceMachine {
-    /// A machine for a device we have never observed.
     #[must_use]
     pub const fn new() -> Self {
         Self {
@@ -85,13 +67,11 @@ impl PresenceMachine {
         }
     }
 
-    /// The current phase.
     #[must_use]
     pub const fn phase(&self) -> PresencePhase {
         self.phase
     }
 
-    /// What the UI shows.
     #[must_use]
     pub const fn status(&self) -> PresenceStatus {
         match self.phase {
@@ -100,23 +80,19 @@ impl PresenceMachine {
         }
     }
 
-    /// Whether the peer is reachable right now.
     #[must_use]
     pub const fn is_online(&self) -> bool {
         matches!(self.status(), PresenceStatus::Online)
     }
 
-    /// When the last heartbeat arrived, on the monotonic clock.
     #[must_use]
     pub const fn last_heartbeat(&self) -> Option<Instant> {
         self.last_heartbeat
     }
 
-    /// The peer was seen by discovery.
-    ///
-    /// Returns `true` when the caller should start (or retry) a dial. The machine refuses
-    /// to ask for a second dial while one is in flight or while the peer is already online,
-    /// so a chatty discovery source cannot turn into a connection storm.
+    /// Returns `true` when the caller should start (or retry) a dial. A second dial is refused
+    /// while one is in flight or the peer is already online, so a chatty discovery source
+    /// cannot turn into a connection storm.
     pub fn discovered(&mut self) -> bool {
         match self.phase {
             PresencePhase::Unknown | PresencePhase::Offline => {
@@ -128,8 +104,6 @@ impl PresenceMachine {
         }
     }
 
-    /// A dial attempt failed. Marks the peer offline but ready to be dialled again on the
-    /// next discovery event.
     pub fn dial_failed(&mut self) -> PresenceChange {
         self.dial_in_flight = false;
         let before = self.status();
@@ -139,7 +113,6 @@ impl PresenceMachine {
         Self::change(before, self.status())
     }
 
-    /// A handshake completed.
     pub fn connected(&mut self, now: Instant) -> PresenceChange {
         let before = self.status();
         self.phase = PresencePhase::Online;
@@ -148,7 +121,6 @@ impl PresenceMachine {
         Self::change(before, self.status())
     }
 
-    /// A heartbeat arrived.
     pub fn heartbeat(&mut self, now: Instant) -> PresenceChange {
         let before = self.status();
         self.phase = PresencePhase::Online;
@@ -157,21 +129,17 @@ impl PresenceMachine {
         Self::change(before, self.status())
     }
 
-    /// The connection ended, whether by `goodbye`, by an error or by the socket closing.
     pub fn disconnected(&mut self) -> PresenceChange {
         self.dial_in_flight = false;
         let before = self.status();
-        // A peer that we still see announced stays `Offline` (not `Unknown`): the discovery
+        // A peer that we still see announced stays `Offline`, not `Unknown`: the discovery
         // record keeps it listed, and the next announcement re-dials it.
         self.phase = PresencePhase::Offline;
         Self::change(before, self.status())
     }
 
-    /// Periodic check for a connection that went quiet without closing.
-    ///
-    /// A half-open TCP connection — the peer slept, the cable was pulled, a NAT rule
-    /// expired — produces no error, so silence has to be turned into a state change
-    /// explicitly.
+    /// A half-open TCP connection — the peer slept, the cable was pulled, a NAT rule expired —
+    /// produces no error, so silence has to be turned into a state change explicitly.
     pub fn tick(&mut self, now: Instant) -> PresenceChange {
         if self.phase != PresencePhase::Online {
             return PresenceChange::Unchanged;
@@ -187,20 +155,17 @@ impl PresenceMachine {
         PresenceChange::Unchanged
     }
 
-    /// How long the peer has been silent, if it is online.
     #[must_use]
     pub fn silence(&self, now: Instant) -> Option<Duration> {
         self.last_heartbeat
             .map(|last| now.saturating_duration_since(last))
     }
 
-    /// Forgets the device entirely. A later `discovered` treats it as brand new, which is
-    /// exactly the behaviour required after "forget this user".
+    /// A later `discovered` treats it as brand new, which is required after "forget this user".
     pub fn forget(&mut self) {
         *self = Self::new();
     }
 
-    /// Whether the peer is online *and* therefore writable.
     #[must_use]
     pub const fn accepts_messages(&self) -> bool {
         self.is_online()
@@ -269,14 +234,12 @@ mod tests {
         machine.discovered();
         machine.connected(base);
 
-        // One heartbeat interval of silence is not enough to change anything.
         assert_eq!(
             machine.tick(at(base, HEARTBEAT_TIMEOUT.as_millis() as u64 - 1)),
             PresenceChange::Unchanged
         );
         assert_eq!(machine.status(), PresenceStatus::Online);
 
-        // Past the timeout the peer goes offline without any socket error.
         assert_eq!(
             machine.tick(at(base, HEARTBEAT_TIMEOUT.as_millis() as u64)),
             PresenceChange::Unchanged,
@@ -300,7 +263,6 @@ mod tests {
         machine.tick(at(base, 20_000));
         assert_eq!(machine.phase(), PresencePhase::Stalled);
 
-        // The late heartbeat arrives before the socket error is observed.
         assert_eq!(
             machine.heartbeat(at(base, 20_100)),
             PresenceChange::CameOnline
@@ -386,21 +348,17 @@ mod tests {
     fn a_full_lifecycle_behaves_as_the_ui_expects() {
         let base = Instant::now();
 
-        // Seen for the first time from discovery alone: listed, offline.
         let mut machine = PresenceMachine::new();
         machine.discovered();
         assert_eq!(machine.status(), PresenceStatus::Offline);
 
-        // Handshake: online, writable.
         machine.connected(base);
         assert_eq!(machine.status(), PresenceStatus::Online);
         assert!(machine.accepts_messages());
 
-        // The peer is killed without a goodbye frame. Within the timeout nothing changes.
         assert_eq!(machine.tick(at(base, 5_000)), PresenceChange::Unchanged);
         assert_eq!(machine.status(), PresenceStatus::Online);
 
-        // After the timeout the peer reads as offline and cannot be written to.
         assert_eq!(machine.tick(at(base, 16_000)), PresenceChange::WentOffline);
         assert_eq!(machine.status(), PresenceStatus::Offline);
         assert!(!machine.accepts_messages());

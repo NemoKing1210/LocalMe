@@ -1,7 +1,7 @@
 //! Handshakes and the per-connection loop.
 //!
-//! One task per connection. It owns both halves of the socket, which is what makes the write
-//! order — heartbeat, message, acknowledgement, goodbye — well defined without any locking.
+//! One task per connection owns both halves of the socket, which is what makes the write
+//! order well defined without any locking.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -25,19 +25,15 @@ use super::{
     PeerLink, Role, TransportEvent,
 };
 
-/// Shared, immutable context for every connection task.
 #[derive(Debug)]
 pub struct ConnectionContext {
-    /// Where connection events go.
     pub events: mpsc::Sender<TransportEvent>,
-    /// Live connection count, shared with the listener so the limit is global.
+    /// Shared with the listener so the limit is global.
     pub live: LiveConnections,
-    /// Maximum simultaneous connections.
     pub max_peers: usize,
 }
 
 impl ConnectionContext {
-    /// Builds a context.
     #[must_use]
     pub fn new(events: mpsc::Sender<TransportEvent>, max_peers: usize) -> Self {
         Self {
@@ -48,34 +44,21 @@ impl ConnectionContext {
     }
 }
 
-/// A connection whose handshake succeeded, before it is handed to the session.
 #[derive(Debug)]
 pub struct Handshaken {
-    /// Which side initiated it.
     pub role: Role,
     /// The peer's announced identity, taken from the handshake and not from discovery.
     pub peer: Handshake,
-    /// Frame reader.
     pub reader: FrameReader,
-    /// Frame writer.
     pub writer: FrameWriter,
     /// Keeps the connection slot reserved for as long as the connection lives.
     pub guard: LiveConnectionGuard,
-    /// The address this connection actually runs over.
-    ///
     /// Kept because a peer multi-homed on several interfaces may be reachable on only one of
-    /// them, and remembering which one worked is what makes the next dial immediate instead
-    /// of a hunt through the address list.
+    /// them, and remembering which one worked makes the next dial immediate.
     pub remote: SocketAddr,
 }
 
 /// Opens a connection to `address` and performs the dialer side of the handshake.
-///
-/// # Errors
-///
-/// Returns [`TransportError`] for a connection that never became usable. The caller treats
-/// every variant the same way — mark the peer offline and retry after the backoff — so the
-/// variants exist for the log, not for control flow.
 pub async fn dial(
     address: SocketAddr,
     own: &Handshake,
@@ -191,8 +174,6 @@ pub async fn accept(
     };
 
     if peer.device_id == own.device_id {
-        // Two profiles with the same device id — a copied data directory, or a peer that
-        // somehow got our identifier. Nothing good can come of proceeding.
         tracing::warn!(peer = %peer.device_id, "rejecting a connection from our own device id");
         refuse_with(
             &mut writer,
@@ -233,9 +214,6 @@ pub async fn accept(
 }
 
 /// Runs a handshaken connection until it ends, reporting everything through the context.
-///
-/// This is the only place frames are read on a connection. It answers heartbeats itself,
-/// applies the rate limit itself, and forwards content frames to the session.
 pub async fn serve(handshaken: Handshaken, context: Arc<ConnectionContext>) {
     let Handshaken {
         role,
@@ -320,8 +298,6 @@ async fn pump(
                     }
                     Ok(None) => return DisconnectReason::Closed,
                     Err(error) => {
-                        // A protocol error the peer can still be told about, before the
-                        // socket goes away.
                         report_protocol_error(writer, &error).await;
                         return DisconnectReason::Failed(error.to_string());
                     }
@@ -370,13 +346,9 @@ async fn pump(
     }
 }
 
-/// What the loop should do with a frame that arrived.
 enum FrameOutcome {
-    /// Pass it to the session.
     Forward(Frame),
-    /// Handled here; keep going.
     Continue,
-    /// End the connection.
     Close(DisconnectReason),
 }
 
@@ -422,7 +394,6 @@ async fn handle_frame(
     }
 }
 
-/// Turns a transport-level protocol failure into the most specific error frame we can.
 async fn report_protocol_error(writer: &mut FrameWriter, error: &TransportError) {
     let (code, message) = match error {
         TransportError::Protocol(ProtocolError::VersionMismatch { got, supported }) => (
@@ -448,7 +419,6 @@ async fn report_protocol_error(writer: &mut FrameWriter, error: &TransportError)
     writer.finish().await;
 }
 
-/// Refuses a connection whose handshake failed, mapping the failure to an error code.
 async fn refuse(writer: &mut FrameWriter, error: &TransportError) -> TransportError {
     let (code, message) = match error {
         TransportError::Protocol(ProtocolError::VersionMismatch { got, supported }) => (

@@ -1,14 +1,6 @@
 //! Framed reading and writing over a TCP half-connection.
 //!
-//! The reader owns the decode buffer, so a partial frame that arrives across several reads
-//! lives here rather than in the connection loop. The writer owns the write half and
-//! serialises frames one at a time, which is what makes "send a goodbye, then close" a
-//! single ordered operation.
-//!
-//! Both halves are generic over nothing: they wrap a `TcpStream`'s owned halves. When the
-//! encryption layer of `docs/ARCHITECTURE.md` §5.6 is added, this is the module it plugs
-//! into — the reader and writer become generic over `AsyncRead`/`AsyncWrite`, and nothing
-//! above them changes.
+//! The reader owns the decode buffer; the writer serialises frames one at a time.
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
@@ -19,23 +11,19 @@ use crate::protocol::{Frame, FrameDecoder, decode, encode, peek_version};
 
 /// Size of the scratch buffer used per read.
 ///
-/// Independent of the frame size cap: a peer that sends one enormous frame in many packets
-/// still occupies only this much memory in this task, and the decoder rejects the frame on
-/// its length prefix before anything proportional is allocated.
+/// The decoder rejects an oversized frame on its length prefix before anything proportional
+/// is allocated, so this stays independent of the frame size cap.
 const READ_CHUNK: usize = 8 * 1024;
 
-/// Reads frames from one direction of a connection.
 #[derive(Debug)]
 pub struct FrameReader {
     inner: BufReader<OwnedReadHalf>,
     decoder: FrameDecoder,
-    /// Reused across reads: allocating (and zeroing) 8 KiB per frame would be a pointless
-    /// cost at message rates, and this buffer is touched only by this task.
+    /// Reused across reads instead of allocating per frame.
     scratch: Box<[u8; READ_CHUNK]>,
 }
 
 impl FrameReader {
-    /// Wraps the read half.
     #[must_use]
     pub fn new(read: OwnedReadHalf) -> Self {
         Self {
@@ -47,23 +35,18 @@ impl FrameReader {
 
     /// Reads the next frame.
     ///
-    /// Returns `Ok(None)` on a clean end of stream between frames, which is a normal way for
-    /// a connection to end and must be distinguished from an error.
+    /// Returns `Ok(None)` on a clean end of stream between frames, which is not an error.
     ///
     /// # Errors
     ///
-    /// * [`TransportError::Io`] — the socket failed.
-    /// * [`TransportError::TruncatedFrame`] — the stream ended in the middle of a frame.
-    /// * [`TransportError::Protocol`] — the peer sent something that is not a valid frame for
-    ///   this protocol version. The connection is not recoverable from any of these, but the
-    ///   distinction is what lets the caller answer with a specific error code.
+    /// [`TransportError::Io`], [`TransportError::TruncatedFrame`] or
+    /// [`TransportError::Protocol`]; none are recoverable, but the distinction is what lets
+    /// the caller answer with a specific error code.
     pub async fn next(&mut self) -> Result<Option<Frame>, TransportError> {
         loop {
             if let Some(payload) = self.decoder.next_frame()? {
-                // The version check happens before the full decode: if the peer speaks a
-                // different version, its schema may not even parse, and reporting
-                // "malformed" instead of "wrong version" would send the user hunting for a
-                // bug that does not exist.
+                // Version check before the full decode: a peer on another version may not
+                // even parse, and "malformed" would be misleading where "wrong version" is meant.
                 let announced = peek_version(&payload)?;
                 if announced != PROTOCOL_VERSION {
                     return Err(TransportError::Protocol(ProtocolError::VersionMismatch {
@@ -77,8 +60,7 @@ impl FrameReader {
             let read = self.inner.read(self.scratch.as_mut_slice()).await?;
             if read == 0 {
                 if self.decoder.buffered() > 0 {
-                    // Half a frame followed by a closed socket: a peer that died mid-write.
-                    // Reporting end-of-stream here would silently drop a message.
+                    // Half a frame then close: reporting end-of-stream would silently drop a message.
                     return Err(TransportError::TruncatedFrame {
                         buffered: self.decoder.buffered(),
                     });
@@ -98,18 +80,11 @@ pub struct FrameWriter {
 }
 
 impl FrameWriter {
-    /// Wraps the write half.
     #[must_use]
     pub fn new(write: OwnedWriteHalf) -> Self {
         Self { inner: write }
     }
 
-    /// Encodes and sends one frame.
-    ///
-    /// # Errors
-    ///
-    /// [`TransportError::Io`] on a socket failure, or [`TransportError::Protocol`] if the
-    /// frame does not encode — which cannot happen for a frame built from domain values.
     pub async fn send(&mut self, frame: &Frame) -> Result<(), TransportError> {
         let bytes = encode(frame)?;
         self.inner.write_all(&bytes).await?;
@@ -117,9 +92,8 @@ impl FrameWriter {
         Ok(())
     }
 
-    /// Sends the pending bytes and closes the write direction.
-    ///
-    /// Called with a goodbye so the peer sees a clean end of stream rather than a reset.
+    /// Closes the write direction; called after a goodbye so the peer sees a clean end of
+    /// stream rather than a reset.
     pub async fn finish(&mut self) {
         if let Err(error) = self.inner.shutdown().await {
             tracing::debug!(%error, "failed to shut down the write half cleanly");
@@ -136,7 +110,6 @@ mod tests {
     use crate::protocol::{GoodbyeReason, MAX_FRAME_BYTES};
     use tokio::net::TcpListener;
 
-    /// Sends `bytes` over a real socket pair and returns what the reader produces.
     async fn round_trip_bytes(bytes: Vec<u8>) -> (Option<Frame>, Option<TransportError>) {
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let addr = listener.local_addr().expect("addr");

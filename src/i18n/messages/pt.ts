@@ -1,10 +1,3 @@
-/**
- * Portuguese messages.
- *
- * Typed against the English catalogue's keys through `MessageCatalog`, with the additional
- * CLDR plural category Portuguese needs (`many`) permitted. The `i18n` test suite fails if a
- * key is missing, unknown, or if a placeholder does not match the English one.
- */
 import type { MessageCatalog } from './types';
 
 export const pt: MessageCatalog = {

@@ -1,24 +1,13 @@
 <script setup lang="ts">
-/**
- * A count badge, for unread messages.
- *
- * The badge renders *nothing* rather than an empty pill when the count is zero or absent: an
- * unread indicator that says "0" is worse than no indicator, and `v-if` at the call site is a
- * rule every caller can forget. Above `max` the count is clamped to `max+`, because a badge
- * wide enough for a four-digit number would push the row's layout around to communicate one
- * bit of information.
- */
 import { computed } from 'vue';
 import { AnimatePresence, motion } from 'motion-v';
 
 const props = withDefaults(
-  // The `| undefined` is not decoration: an optional prop already has that type, but
-  // `exactOptionalPropertyTypes` only accepts an explicit `undefined` default — which
-  // `vue/require-default-prop` demands for every optional prop — when it is written out.
+  // `exactOptionalPropertyTypes` only accepts the explicit `undefined` default when written out.
   defineProps<{
-    /** The count. Nothing is rendered when absent or zero. */
+    /** The count. */
     value?: number | undefined;
-    /** The largest count shown in full; above it the badge reads `max+`. */
+    /** The largest count shown in full. */
     max?: number;
   }>(),
   { value: undefined, max: 99 },
@@ -33,9 +22,8 @@ const text = computed(() => {
 </script>
 
 <template>
-  <!-- Keyed by the number so the value change is an animation rather than a silent rewrite, and
-       `popLayout` takes the outgoing badge out of the layout while it leaves, so the row does
-       not jump sideways for the length of the cross-fade. -->
+  <!-- Keyed by the number so a value change animates; `popLayout` keeps the outgoing badge out of
+       the layout so the row does not jump during the cross-fade. -->
   <AnimatePresence mode="popLayout">
     <motion.span
       v-if="visible"

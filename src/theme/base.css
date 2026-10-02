@@ -1,12 +1,3 @@
-/*
- * Base layer: reset, document defaults, and the M3 typescale as classes.
- *
- * The typescale is exposed as `.md-typescale-*` classes rather than as CSS variables used
- * directly, because a token used directly (`font-size: var(--md-sys-typescale-body-large-size)`)
- * silently drops the line-height, weight and tracking that belong with it. One class, one
- * complete text style.
- */
-
 *,
 *::before,
 *::after {
@@ -21,7 +12,6 @@ body,
 }
 
 html {
-  /* The application owns its own scrolling surfaces; the document never scrolls. */
   overflow: hidden;
 }
 
@@ -33,12 +23,10 @@ body {
   background: var(--md-sys-color-surface);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
-  /* The window chrome is the only place a drag should select text. */
   user-select: none;
   cursor: default;
 }
 
-/* Text the user may want to copy opts back in explicitly. */
 [data-selectable],
 input,
 textarea {
@@ -86,8 +74,6 @@ svg {
   max-width: 100%;
 }
 
-/* ---- Focus ---- */
-
 :focus {
   outline: none;
 }
@@ -97,8 +83,6 @@ svg {
   outline-offset: 2px;
   border-radius: var(--md-sys-shape-corner-extra-small);
 }
-
-/* ---- Scrolling ---- */
 
 * {
   scrollbar-width: thin;
@@ -123,8 +107,6 @@ svg {
   background: var(--md-sys-color-primary-container);
   color: var(--md-sys-color-on-primary-container);
 }
-
-/* ---- Typescale ---- */
 
 .md-typescale-display-large,
 .md-typescale-display-medium,
@@ -250,13 +232,6 @@ svg {
   letter-spacing: var(--md-sys-typescale-label-small-tracking);
 }
 
-/* ---- Shared primitives ---- */
-
-/*
- * State layer: M3 expresses hover/focus/press on a component as a translucent overlay of
- * the component's "on" colour, drawn *over* the surface rather than replacing it. One
- * implementation, used by every interactive component.
- */
 .md-state-layer {
   position: relative;
 }
@@ -289,7 +264,6 @@ svg {
   opacity: 0;
 }
 
-/* Visually hidden but available to assistive technology. */
 .md-visually-hidden {
   position: absolute;
   width: 1px;

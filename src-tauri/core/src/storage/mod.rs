@@ -1,13 +1,9 @@
 //! SQLite storage adapter.
 //!
-//! One dedicated writer thread owns the `rusqlite::Connection` (it is `!Sync`); callers
-//! send a [`Request`] over a bounded channel and await a `oneshot` reply. That is the
-//! storage concurrency model from `docs/ARCHITECTURE.md` §3.2: serialised writes, no lock
-//! contention, no thread pool, and back pressure instead of an unbounded queue.
-//!
-//! On open the database is verified with `PRAGMA integrity_check`; an unusable file is
-//! quarantined rather than deleted and a fresh database is created in its place, so the
-//! application always starts (`docs/ARCHITECTURE.md` §7.3).
+//! One dedicated writer thread owns the `rusqlite::Connection` (it is `!Sync`); callers send
+//! a [`Request`] over a bounded channel and await a `oneshot` reply. On open the database is
+//! verified with `PRAGMA integrity_check`; an unusable file is quarantined rather than
+//! deleted and a fresh database is created in its place, so the application always starts.
 
 mod schema;
 
@@ -29,141 +25,84 @@ use crate::ports::store::{HistoryCursor, KnownDevice, Store, StoredPeer};
 
 use schema::migrate;
 
-/// Capacity of the bounded request mailbox.
 const REQUEST_QUEUE_CAPACITY: usize = 64;
 
-/// Upper bound on how long `Drop` waits for the writer thread to finish.
 const SHUTDOWN_JOIN_TIMEOUT: Duration = Duration::from_secs(1);
 
-/// A reply channel carrying one operation's outcome.
 type Reply<T> = oneshot::Sender<Result<T, StorageError>>;
 
-/// The SQLite-backed [`Store`].
-///
-/// Cloning is deliberately not offered: the store owns the single writer thread, and the
-/// service layer shares it behind an `Arc` if it needs to.
+/// Not `Clone`: the single writer thread is shared behind an `Arc` if needed.
 pub struct SqliteStore {
-    /// The mailbox to the writer thread; `None` once `Drop` has begun tearing it down.
+    /// `None` once `Drop` has begun tearing the mailbox down.
     sender: Option<mpsc::Sender<Request>>,
-    /// The writer thread; `None` in the closed-channel construction used by tests.
+    /// `None` in the closed-channel construction used by tests.
     writer: Option<thread::JoinHandle<()>>,
 }
 
-/// One unit of work for the writer thread.
 enum Request {
-    /// Reads one metadata value.
     MetaGet {
-        /// Metadata key.
         key: String,
-        /// Reply channel.
         reply: Reply<Option<String>>,
     },
-    /// Writes one metadata value.
     MetaSet {
-        /// Metadata key.
         key: String,
-        /// Metadata value.
         value: String,
-        /// Reply channel.
         reply: Reply<()>,
     },
-    /// Inserts or updates a peer seen on the network.
     UpsertPeerSeen {
-        /// The announced identity.
         profile: PeerProfile,
-        /// Last successfully used address.
         address: Option<String>,
-        /// Liveness evidence: when the peer was last confirmed online, if ever.
         seen_at_ms: Option<i64>,
-        /// Reply channel.
         reply: Reply<StoredPeer>,
     },
-    /// Reads one peer.
     Peer {
-        /// Peer to read.
         device_id: DeviceId,
-        /// Reply channel.
         reply: Reply<Option<StoredPeer>>,
     },
-    /// Reads every peer.
     Peers(Reply<Vec<StoredPeer>>),
-    /// Sets a peer's notification preference.
     SetPeerMuted {
-        /// Peer to update.
         device_id: DeviceId,
-        /// Whether notifications are suppressed.
         muted: bool,
-        /// Reply channel.
         reply: Reply<()>,
     },
-    /// Updates a peer's `last_seen_ms`.
     TouchPeerSeen {
-        /// Peer to update.
         device_id: DeviceId,
-        /// When the peer was seen, on the local clock.
         seen_at_ms: i64,
-        /// Reply channel.
         reply: Reply<()>,
     },
-    /// Marks a peer's incoming messages read.
     MarkPeerRead {
-        /// Peer whose conversation is read.
         device_id: DeviceId,
-        /// Reply channel.
         reply: Reply<u32>,
     },
-    /// Forgets a peer, with or without its history.
     ForgetPeer {
-        /// Peer to forget.
         device_id: DeviceId,
-        /// Whether the stored conversation is deleted.
         delete_history: bool,
-        /// Reply channel.
         reply: Reply<()>,
     },
-    /// Lists every known device.
     KnownDevices(Reply<Vec<KnownDevice>>),
-    /// Stores a message.
     InsertMessage {
-        /// The message to store.
         message: ChatMessage,
-        /// Reply channel carrying whether a row was inserted.
         reply: Reply<bool>,
     },
-    /// Updates a message's delivery status.
     SetMessageStatus {
-        /// Message to update.
         id: MessageId,
-        /// New status.
         status: MessageStatus,
-        /// Reply channel.
         reply: Reply<()>,
     },
-    /// Fails every pending outgoing message for a peer.
     FailPendingMessages {
-        /// Peer whose queue is being abandoned.
         device_id: DeviceId,
-        /// Reply channel carrying the number of rows changed.
         reply: Reply<u32>,
     },
-    /// Reads one page of a conversation.
     HistoryPage {
-        /// Conversation to read.
         device_id: DeviceId,
-        /// Exclusive cursor, if paging past the first page.
         before: Option<HistoryCursor>,
-        /// Requested page size; clamped by the implementation.
         limit: u32,
-        /// Reply channel.
         reply: Reply<Vec<ChatMessage>>,
     },
-    /// Deletes every stored message.
     ClearHistory(Reply<u64>),
 }
 
 impl SqliteStore {
-    /// Opens (or creates) the database at `path`, discarding the corruption report.
-    ///
     /// # Errors
     ///
     /// Returns [`StorageError`] if the database cannot be opened, migrated, or quarantined.
@@ -171,13 +110,10 @@ impl SqliteStore {
         Self::open_with_report(path).map(|(store, _report)| store)
     }
 
-    /// Opens (or creates) the database at `path`.
-    ///
-    /// If the file is not a usable SQLite database, it is renamed to
-    /// `<name>.corrupt-<unix-millis>` (together with its `-wal`/`-shm` siblings), a fresh
-    /// database is created, and the preserved path is returned as the second element. This
-    /// is not an error: the application must start. [`StorageError::Corrupted`] is returned
-    /// only when the quarantine itself fails, because then the user's data cannot be saved.
+    /// An unusable file is renamed to `<name>.corrupt-<unix-millis>` with its `-wal`/`-shm`
+    /// siblings, and its path is returned; this is not an error, because the application must
+    /// start. [`StorageError::Corrupted`] means the quarantine itself failed, so the user's
+    /// data could not be preserved.
     ///
     /// # Errors
     ///
@@ -211,7 +147,6 @@ impl SqliteStore {
         ))
     }
 
-    /// Sends one request and awaits its reply, mapping a closed mailbox to `Unavailable`.
     async fn call<R>(&self, build: impl FnOnce(Reply<R>) -> Request) -> Result<R, StorageError>
     where
         R: Send + 'static,
@@ -226,7 +161,6 @@ impl SqliteStore {
     }
 }
 
-/// Connects, applies the connection pragmas, and verifies the file is a database.
 fn connect_and_check(path: &Path) -> Result<Connection, StorageError> {
     let conn = Connection::open(path).map_err(sqlite_error)?;
     conn.pragma_update(None, "journal_mode", "WAL")
@@ -257,11 +191,9 @@ fn integrity_ok(conn: &Connection) -> rusqlite::Result<bool> {
     }
 }
 
-/// Moves an unusable database aside, along with its WAL siblings.
-///
-/// Returns the path the main file was preserved under. Sibling renames are best effort: a
-/// stale `-wal` next to a fresh database is harmless, but the main file is the user's data,
-/// and failing to preserve it is reported as [`StorageError::Corrupted`].
+/// Moves an unusable database aside with its `-wal`/`-shm` siblings, returning the preserved
+/// path. Sibling renames are best effort; only failing to preserve the main file is reported
+/// as [`StorageError::Corrupted`].
 fn quarantine(path: &Path) -> Result<PathBuf, StorageError> {
     let millis = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -284,14 +216,12 @@ fn quarantine(path: &Path) -> Result<PathBuf, StorageError> {
     Ok(preserved)
 }
 
-/// Appends a suffix to a path's file name, e.g. `localme.db` + `.corrupt-1`.
 fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
     let mut os = path.as_os_str().to_os_string();
     os.push(suffix);
     PathBuf::from(os)
 }
 
-/// The writer thread: owns the connection and serves requests until the mailbox closes.
 fn run(mut conn: Connection, mut receiver: mpsc::Receiver<Request>) {
     while let Some(request) = receiver.blocking_recv() {
         dispatch(&mut conn, request);
@@ -299,7 +229,6 @@ fn run(mut conn: Connection, mut receiver: mpsc::Receiver<Request>) {
     // `conn` drops here, closing the file after the WAL is checkpointed.
 }
 
-/// Executes one request and delivers its outcome.
 fn dispatch(conn: &mut Connection, request: Request) {
     match request {
         Request::MetaGet { key, reply } => {
@@ -377,46 +306,39 @@ fn dispatch(conn: &mut Connection, request: Request) {
     }
 }
 
-/// Wraps any displayable error as [`StorageError::Sqlite`].
 fn sqlite_error(error: impl std::fmt::Display) -> StorageError {
     StorageError::Sqlite(error.to_string())
 }
 
-/// Builds an [`StorageError::InvalidRow`].
 fn invalid_row(message: impl Into<String>) -> StorageError {
     StorageError::InvalidRow(message.into())
 }
 
-/// Parses a stored device identifier.
 fn parse_device(raw: &str) -> Result<DeviceId, StorageError> {
     raw.parse::<DeviceId>()
         .map_err(|error| invalid_row(format!("device id `{raw}`: {error}")))
 }
 
-/// Parses a stored message identifier.
 fn parse_message_id(raw: &str) -> Result<MessageId, StorageError> {
     raw.parse::<MessageId>()
         .map_err(|error| invalid_row(format!("message id `{raw}`: {error}")))
 }
 
-/// Parses a stored nickname.
 fn parse_nickname(raw: &str) -> Result<Nickname, StorageError> {
     Nickname::parse(raw).map_err(|error| invalid_row(format!("nickname `{raw}`: {error}")))
 }
 
-/// Parses a stored avatar seed.
 fn parse_avatar(raw: &str) -> Result<AvatarSeed, StorageError> {
     AvatarSeed::parse(raw).map_err(|error| invalid_row(format!("avatar seed `{raw}`: {error}")))
 }
 
-/// Narrows a stored count to `u32`.
 fn to_u32(value: i64) -> Result<u32, StorageError> {
     u32::try_from(value)
         .map_err(|_| invalid_row(format!("expected a non-negative count, found {value}")))
 }
 
-/// The columns of `peers` plus the computed `last_activity_ms` and last-message preview, in
-/// row order.
+/// `peers` columns plus the computed `last_activity_ms` and last-message preview, in row
+/// order.
 const PEER_COLUMNS: &str = "\
   p.device_id, p.nickname, p.avatar_seed, p.last_address, p.last_seen_ms, \
   p.first_seen_ms, p.unread, p.notify_muted, p.forgotten, \
@@ -434,7 +356,6 @@ const PEER_COLUMNS: &str = "\
   (SELECT m.outgoing FROM messages m WHERE m.peer_id = p.device_id \
     ORDER BY m.sent_at_ms DESC, m.id DESC LIMIT 1)";
 
-/// One `peers` row as read from SQLite, before validation.
 struct PeerRow {
     device_id: String,
     nickname: String,
@@ -451,7 +372,6 @@ struct PeerRow {
 }
 
 impl PeerRow {
-    /// Reads a row from the column list in [`PEER_COLUMNS`].
     fn read(row: &rusqlite::Row<'_>) -> rusqlite::Result<Self> {
         Ok(Self {
             device_id: row.get(0)?,
@@ -469,7 +389,6 @@ impl PeerRow {
         })
     }
 
-    /// Validates the raw strings into a [`StoredPeer`].
     fn into_stored(self) -> Result<StoredPeer, StorageError> {
         let last_message = match (self.last_body, self.last_outgoing) {
             (Some(body), Some(outgoing)) => Some(MessagePreview::new(
@@ -501,7 +420,6 @@ impl PeerRow {
     }
 }
 
-/// One `messages` row as read from SQLite, before validation.
 struct MessageRow {
     id: String,
     peer_id: String,
@@ -514,7 +432,6 @@ struct MessageRow {
 }
 
 impl MessageRow {
-    /// Reads a row from the standard `messages` column list.
     fn read(row: &rusqlite::Row<'_>) -> rusqlite::Result<Self> {
         Ok(Self {
             id: row.get(0)?,
@@ -528,7 +445,6 @@ impl MessageRow {
         })
     }
 
-    /// Validates the raw strings into a [`ChatMessage`].
     fn into_message(self) -> Result<ChatMessage, StorageError> {
         Ok(ChatMessage {
             id: parse_message_id(&self.id)?,
@@ -549,7 +465,6 @@ impl MessageRow {
     }
 }
 
-/// One `peers` row projected for the settings screen.
 struct KnownDeviceRow {
     device_id: String,
     nickname: String,
@@ -561,7 +476,6 @@ struct KnownDeviceRow {
 }
 
 impl KnownDeviceRow {
-    /// Reads a row from the `known_devices` query.
     fn read(row: &rusqlite::Row<'_>) -> rusqlite::Result<Self> {
         Ok(Self {
             device_id: row.get(0)?,
@@ -574,7 +488,6 @@ impl KnownDeviceRow {
         })
     }
 
-    /// Validates the raw strings into a [`KnownDevice`].
     fn into_device(self) -> Result<KnownDevice, StorageError> {
         Ok(KnownDevice {
             device_id: parse_device(&self.device_id)?,
@@ -593,7 +506,6 @@ impl KnownDeviceRow {
     }
 }
 
-/// Reads one metadata value.
 fn meta_get(conn: &Connection, key: &str) -> Result<Option<String>, StorageError> {
     conn.query_row(
         "SELECT value FROM meta WHERE key = ?1",
@@ -604,7 +516,6 @@ fn meta_get(conn: &Connection, key: &str) -> Result<Option<String>, StorageError
     .map_err(sqlite_error)
 }
 
-/// Upserts one metadata value.
 fn meta_set(conn: &Connection, key: &str, value: &str) -> Result<(), StorageError> {
     conn.execute(
         "INSERT INTO meta (key, value) VALUES (?1, ?2) \
@@ -615,12 +526,8 @@ fn meta_set(conn: &Connection, key: &str, value: &str) -> Result<(), StorageErro
     Ok(())
 }
 
-/// Inserts or updates a peer's announced identity and returns the stored row.
-///
-/// `seen_at_ms` carries liveness evidence only. On update the stored `last_seen_ms` moves
-/// forward monotonically and is left untouched when there is no evidence; on insert it
-/// starts NULL. `first_seen_ms` is stamped from `seen_at_ms` when present, or from the
-/// local clock otherwise, because a row only exists once the peer has at least been seen.
+/// `seen_at_ms` is liveness evidence only: `last_seen_ms` moves forward monotonically and is
+/// left untouched without evidence, while `first_seen_ms` falls back to the local clock.
 fn upsert_peer_seen(
     conn: &Connection,
     profile: &PeerProfile,
@@ -661,7 +568,6 @@ fn upsert_peer_seen(
     })
 }
 
-/// Reads one peer, computing `last_activity_ms`.
 fn read_peer(conn: &Connection, device_id: DeviceId) -> Result<Option<StoredPeer>, StorageError> {
     let sql = format!(
         "SELECT {} FROM peers p WHERE p.device_id = ?1",
@@ -674,7 +580,6 @@ fn read_peer(conn: &Connection, device_id: DeviceId) -> Result<Option<StoredPeer
     raw.map(PeerRow::into_stored).transpose()
 }
 
-/// Reads every peer, forgotten ones included.
 fn read_peers(conn: &Connection) -> Result<Vec<StoredPeer>, StorageError> {
     let sql = format!(
         "SELECT {} FROM peers p ORDER BY p.nickname ASC, p.device_id ASC",
@@ -688,7 +593,6 @@ fn read_peers(conn: &Connection) -> Result<Vec<StoredPeer>, StorageError> {
     raw.into_iter().map(PeerRow::into_stored).collect()
 }
 
-/// Sets a peer's notification preference.
 fn set_peer_muted(conn: &Connection, device_id: DeviceId, muted: bool) -> Result<(), StorageError> {
     conn.execute(
         "UPDATE peers SET notify_muted = ?2 WHERE device_id = ?1",
@@ -698,7 +602,6 @@ fn set_peer_muted(conn: &Connection, device_id: DeviceId, muted: bool) -> Result
     Ok(())
 }
 
-/// Updates a peer's `last_seen_ms`.
 fn touch_peer_seen(
     conn: &Connection,
     device_id: DeviceId,
@@ -712,7 +615,6 @@ fn touch_peer_seen(
     Ok(())
 }
 
-/// Marks a peer's incoming messages read and clears its unread count.
 fn mark_peer_read(conn: &mut Connection, device_id: DeviceId) -> Result<u32, StorageError> {
     let tx = conn.transaction().map_err(sqlite_error)?;
     let changed = tx
@@ -731,7 +633,6 @@ fn mark_peer_read(conn: &mut Connection, device_id: DeviceId) -> Result<u32, Sto
     Ok(u32::try_from(changed).unwrap_or(u32::MAX))
 }
 
-/// Forgets a peer, optionally deleting its conversation.
 fn forget_peer(
     conn: &mut Connection,
     device_id: DeviceId,
@@ -745,9 +646,8 @@ fn forget_peer(
         )
         .map_err(sqlite_error)?;
     }
-    // The row is always flagged, and never deleted: the settings screen lists forgotten
-    // devices so the user can see what they have forgotten and restore it. The history
-    // choice only decides whether the conversation goes with it.
+    // The row is always flagged, never deleted: the settings screen lists forgotten devices
+    // so the user can see and restore them; `delete_history` only drops the conversation.
     tx.execute(
         "UPDATE peers SET forgotten = 1, unread = 0 WHERE device_id = ?1",
         params![device_id.to_string()],
@@ -756,7 +656,6 @@ fn forget_peer(
     tx.commit().map_err(sqlite_error)
 }
 
-/// Lists every known device, newest activity first.
 fn read_known_devices(conn: &Connection) -> Result<Vec<KnownDevice>, StorageError> {
     let sql = "\
         SELECT p.device_id, p.nickname, p.avatar_seed, p.forgotten, p.first_seen_ms, \
@@ -785,7 +684,6 @@ fn read_known_devices(conn: &Connection) -> Result<Vec<KnownDevice>, StorageErro
     raw.into_iter().map(KnownDeviceRow::into_device).collect()
 }
 
-/// Stores a message, incrementing unread for a new incoming unread one.
 fn insert_message(conn: &mut Connection, message: &ChatMessage) -> Result<bool, StorageError> {
     let tx = conn.transaction().map_err(sqlite_error)?;
     tx.execute(
@@ -817,7 +715,6 @@ fn insert_message(conn: &mut Connection, message: &ChatMessage) -> Result<bool, 
     Ok(inserted)
 }
 
-/// Updates a message's delivery status.
 fn set_message_status(
     conn: &Connection,
     id: MessageId,
@@ -831,7 +728,6 @@ fn set_message_status(
     Ok(())
 }
 
-/// Fails every pending outgoing message for a peer.
 fn fail_pending_messages(conn: &Connection, device_id: DeviceId) -> Result<u32, StorageError> {
     let changed = conn
         .execute(
@@ -843,7 +739,6 @@ fn fail_pending_messages(conn: &Connection, device_id: DeviceId) -> Result<u32, 
     Ok(u32::try_from(changed).unwrap_or(u32::MAX))
 }
 
-/// Reads one page of a conversation, newest first, strictly below the cursor.
 fn history_page(
     conn: &Connection,
     device_id: DeviceId,
@@ -876,7 +771,6 @@ fn history_page(
     raw.into_iter().map(MessageRow::into_message).collect()
 }
 
-/// Deletes every stored message, keeping the peer list.
 fn clear_history(conn: &mut Connection) -> Result<u64, StorageError> {
     let tx = conn.transaction().map_err(sqlite_error)?;
     let deleted = tx
@@ -1017,8 +911,8 @@ impl Store for SqliteStore {
 
 impl Drop for SqliteStore {
     fn drop(&mut self) {
-        // Dropping the sender closes the mailbox, which makes the writer thread's
-        // `blocking_recv` return and the loop exit.
+        // Closing the mailbox makes the writer thread's `blocking_recv` return and the loop
+        // exit.
         self.sender.take();
         let Some(writer) = self.writer.take() else {
             return;
@@ -1027,8 +921,8 @@ impl Drop for SqliteStore {
         while !writer.is_finished() && Instant::now() < deadline {
             thread::sleep(Duration::from_millis(5));
         }
-        // Only join when it has finished: joining a wedged thread would hang shutdown,
-        // and abandoning it is the documented trade-off (`docs/ARCHITECTURE.md` §8.4).
+        // Joining a wedged thread would hang shutdown; abandoning it is the documented
+        // trade-off.
         if writer.is_finished() {
             let _ = writer.join();
         }
@@ -1051,24 +945,20 @@ mod tests {
     use crate::domain::peer::PeerProfile;
     use crate::error::StorageError;
 
-    /// A store in a fresh temporary directory, which is kept alive with it.
     fn open_store() -> (TempDir, SqliteStore) {
         let dir = tempfile::tempdir().expect("temp dir");
         let store = SqliteStore::open(&dir.path().join("localme.db")).expect("open store");
         (dir, store)
     }
 
-    /// A deterministic device id.
     fn device(seed: u128) -> DeviceId {
         DeviceId::from_uuid(uuid::Uuid::from_u128(seed))
     }
 
-    /// A profile for a device id derived from `seed`.
     fn profile(seed: u128, nickname: &str) -> PeerProfile {
         PeerProfile::new(device(seed), Nickname::parse(nickname).expect("nickname"))
     }
 
-    /// An incoming message with a fresh id.
     fn incoming(peer: DeviceId, sent_at_ms: i64, read: bool) -> ChatMessage {
         ChatMessage {
             id: MessageId::generate(),
@@ -1082,7 +972,6 @@ mod tests {
         }
     }
 
-    /// An outgoing message with a fresh id.
     fn outgoing(peer: DeviceId, sent_at_ms: i64, status: MessageStatus) -> ChatMessage {
         ChatMessage {
             id: MessageId::generate(),
@@ -1135,7 +1024,6 @@ mod tests {
         assert_eq!(stored.last_seen_ms, Some(1_000));
         assert_eq!(stored.profile.nickname.as_str(), "Alice");
 
-        // Forget it, then see it again: the forgotten flag must clear.
         store.forget_peer(first.device_id, false).await.unwrap();
         assert!(
             store
@@ -1224,7 +1112,6 @@ mod tests {
         let peer = profile(4, "Dave");
         store.upsert_peer_seen(&peer, None, Some(1)).await.unwrap();
 
-        // 120 messages, two sharing each timestamp, so the id tie-break is exercised.
         for i in 0..120_i64 {
             store
                 .insert_message(&incoming(peer.device_id, i / 2, true))
@@ -1486,7 +1373,6 @@ mod tests {
         let (_dir, store) = open_store();
         let peer = profile(21, "Nina");
 
-        // A device we can discover but have never connected to has no liveness evidence.
         let created = store
             .upsert_peer_seen(&peer, Some("4.4.4.4:4"), None)
             .await
@@ -1501,7 +1387,6 @@ mod tests {
             .unwrap();
         assert_eq!(seen.last_seen_ms, Some(10_000));
 
-        // A late, older observation must not move it backwards.
         let older = store
             .upsert_peer_seen(&peer, Some("4.4.4.4:4"), Some(9_000))
             .await

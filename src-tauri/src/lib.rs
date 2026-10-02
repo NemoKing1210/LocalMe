@@ -1,9 +1,5 @@
-//! LocalMe: a zero-configuration messenger for the local network.
-//!
-//! This crate is the Tauri host. It owns the window, the tray, the single-instance guard and
-//! the IPC surface, and it contains no protocol, discovery or storage logic: everything with
-//! behaviour lives in `localme-core`, which has no Tauri dependency at all. See
-//! `docs/ARCHITECTURE.md` §3 and §9.
+//! Tauri host: window, tray, single-instance guard and IPC surface; all behaviour lives in
+//! `localme-core`.
 
 #![cfg_attr(
     not(test),
@@ -38,12 +34,7 @@ mod tray;
 mod webview;
 mod window;
 
-/// The IPC surface, as a handler.
-///
-/// A macro rather than a function because `tauri::generate_handler!` expands to a closure over the
-/// runtime, and a macro rather than an inline list because registration is the one place that has
-/// to name every command: keeping it in one place means a command cannot be written and then
-/// quietly left out.
+/// A macro, not a function: `tauri::generate_handler!` expands to a closure over the runtime.
 macro_rules! ipc_handler {
     () => {
         tauri::generate_handler![
@@ -81,34 +72,23 @@ macro_rules! ipc_handler {
 /// Command-line flag set by the autostart entry when a tray-only launch was requested.
 pub const FLAG_MINIMIZED: &str = "--minimized";
 
-/// Nickname used only if the operating system cannot tell us the computer's name.
 const FALLBACK_NICKNAME: &str = "LocalMe user";
 
-/// Environment variable that overrides the data directory *and* lifts the single-instance guard.
-///
-/// Two instances on one machine are normally forbidden: they would share a database and advertise
-/// the same device id. That default is right, and it is a real obstacle to testing the thing this
-/// application is for — two peers that have to discover each other. Setting this variable points
-/// one instance at its own data directory and lets it run alongside the other, which is how the
-/// two-instance check in the README is performed on a single computer.
+/// Data directory override; also lifts the single-instance guard, which otherwise forbids two
+/// instances sharing a database and advertising the same device id.
 pub const FLAG_DATA_DIR: &str = "LOCALME_DATA_DIR";
 
-/// The data directory override, when one was requested.
 #[must_use]
 pub fn data_dir_override() -> Option<std::path::PathBuf> {
     std::env::var_os(FLAG_DATA_DIR).map(std::path::PathBuf::from)
 }
 
-/// Whether this process was started minimised into the tray.
 #[must_use]
 pub fn started_minimized() -> bool {
     std::env::args().any(|arg| arg == FLAG_MINIMIZED)
 }
 
-/// Builds and runs the application.
-///
-/// Returns a process exit code rather than panicking, so a failed start is reported through
-/// the log with a non-zero status instead of a Rust panic message.
+/// Runs the application, reporting a failed start as a non-zero exit code rather than a panic.
 #[must_use]
 pub fn run() -> ExitCode {
     if let Err(error) = run_inner() {
@@ -123,7 +103,6 @@ fn run_inner() -> Result<(), Box<dyn std::error::Error>> {
 
     if data_dir_override().is_none() {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-            // A second launch is a request to show the window that already exists.
             window::reveal(app);
         }));
     } else {
@@ -144,8 +123,6 @@ fn run_inner() -> Result<(), Box<dyn std::error::Error>> {
         .invoke_handler(ipc_handler!())
         .setup(|app| {
             let handle = app.handle().clone();
-            // Logging comes first, and to a file, because everything between here and the first
-            // frame is exactly what a "the window never appeared" report has to explain.
             let data_dir = resolve_data_dir(&handle)?;
             logging::init(&data_dir);
             logging::install_panic_hook();
@@ -166,8 +143,8 @@ fn run_inner() -> Result<(), Box<dyn std::error::Error>> {
             events::spawn_forwarder(&handle);
             window::refresh_title(&handle, 0);
 
-            // The tray is optional: a minimal Linux desktop without a StatusNotifier host
-            // cannot show one, and that must not stop the application.
+            // The tray is optional: a Linux desktop without a StatusNotifier host cannot show
+            // one, and that must not stop the application.
             let Some(state) = state::from_handle(&handle) else {
                 return Err("the application state was not installed".into());
             };
@@ -183,12 +160,11 @@ fn run_inner() -> Result<(), Box<dyn std::error::Error>> {
         .on_window_event(|window, event| match event {
             WindowEvent::CloseRequested { api, .. } => {
                 let app = window.app_handle().clone();
-                // Before `setup` has installed the state there is no setting to consult, and
-                // the safe reading of "no state yet" is "quit", which is what closing does.
+                // Neither `setup` nor the state exists yet; the safe reading of "no state" is
+                // "quit", which is what closing does.
                 let stays = state::from_handle(&app)
                     .is_some_and(|state| window::should_stay_in_tray(&state));
                 if stays {
-                    // Closing the window is not quitting, when the user asked it not to be.
                     api.prevent_close();
                     window::hide(&app);
                 } else {
@@ -225,11 +201,7 @@ fn run_inner() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// The data directory: the `LOCALME_DATA_DIR` override when one was given, otherwise the
-/// platform's application data directory.
-///
-/// Both logging and the core need it, and they must agree — a log in a different directory from
-/// the database would be a log nobody can correlate with the data it describes.
+/// The data directory, shared by logging and the core so the two cannot disagree.
 fn resolve_data_dir(
     app: &tauri::AppHandle,
 ) -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
@@ -246,10 +218,6 @@ fn resolve_data_dir(
 }
 
 /// Opens the database, binds the listener and starts the session and discovery.
-///
-/// The window is created hidden by the configuration, so the first thing the user sees is a
-/// themed frame rather than a white one — the front end reports readiness and
-/// [`window::install_ready_gate`] reveals it.
 async fn start_core(
     app: &tauri::AppHandle,
     data_dir: std::path::PathBuf,
@@ -263,8 +231,7 @@ async fn start_core(
     let settings = core.settings.get().await?;
     let state = Arc::new(AppState::new(core, settings));
 
-    // The platform's answer about autostart is authoritative; if it disagrees with the file
-    // (the user removed the entry, or a different user installed it), the file follows.
+    // The platform's autostart state is authoritative over the stored setting.
     match autostart::is_enabled(app) {
         Ok(enabled) if enabled != state.settings_snapshot().system.autostart => {
             tracing::info!(

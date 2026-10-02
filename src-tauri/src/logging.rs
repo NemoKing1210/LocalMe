@@ -1,29 +1,7 @@
-//! Logging setup: one subscriber for the process, one file per day, and a bounded directory.
-//!
-//! The log is the only artefact a user can send us about a failure that happened on a machine
-//! we will never see, so it is written by the application itself rather than left to whatever
-//! stderr happens to be attached to. Four decisions shape this module:
-//!
-//! * **One file per day**, named `localme.YYYY-MM-DD.log`, written under `logs/` in the data
-//!   directory. The day comes from UTC: `std` has no local-time API, and a name that is an
-//!   hour or two off at the boundary matters to nobody, while a dependency that can fail to
-//!   resolve a time zone at exactly the moment we need to write a log does.
-//! * **Append on every record.** The file is opened, written and closed per event rather than
-//!   held open, which costs one `open` per record — negligible at this application's volume —
-//!   and buys two things worth far more: "clear logs" and "prune old logs" work while the
-//!   application is running, on Windows too, where deleting an open file fails.
-//! * **Bounded retention.** Pruning runs once a day, triggered by the first record written
-//!   after the date rolls over, so the directory cannot grow without limit and nothing has to
-//!   keep a timer running to keep it that way.
-//! * **Never fatal.** Every filesystem step is best-effort: a log we could not write must not
-//!   take down the messenger that was trying to report a problem.
-//!
-//! `stderr` keeps receiving the same records, so `cargo tauri dev` and a launch from a terminal
-//! behave exactly as they did before files existed.
-//!
-//! The state lives in [`Logs`] rather than in module-level globals so it can be constructed in
-//! a temporary directory by the tests below; [`init`] is the only thing that publishes one for
-//! the rest of the process.
+//! Logging setup: one subscriber for the process, one file per day under `logs/` in the data
+//! directory (UTC day key). Each record is appended by opening, writing and closing the file, so
+//! clearing and pruning work while the process runs; every filesystem step is best-effort,
+//! because a log that cannot be written must not take the process down.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, IsTerminal, Write};
@@ -43,13 +21,10 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::reload;
 use tracing_subscriber::util::SubscriberInitExt;
 
-/// Folder inside the data directory that holds the daily files.
 pub const LOG_DIRECTORY: &str = "logs";
 
-/// Prefix of every file the application writes.
 const FILE_PREFIX: &str = "localme";
 
-/// Extension of every file the application writes.
 const FILE_EXTENSION: &str = "log";
 
 /// Longest record field the front end may send; longer ones are cut, not rejected.
@@ -59,46 +34,36 @@ const MAX_FRONTEND_MESSAGE_CHARS: usize = 4_096;
 const DEFAULT_FILTER: &str =
     "localme=info,localme_core=info,tauri=warn,tauri_runtime=warn,mdns_sd=warn";
 
-/// The directory logs are written to, once [`init`] has run.
 static LOGS: OnceLock<Arc<Logs>> = OnceLock::new();
 
-/// Handle that lets the level be changed without restarting the process.
 static LEVEL: OnceLock<reload::Handle<EnvFilter, Registry>> = OnceLock::new();
 
-/// Whether `RUST_LOG` was set, in which case the settings document does not get to override it.
+/// Whether `RUST_LOG` was set, in which case the settings document does not override it.
 static ENV_OVERRIDE: OnceLock<bool> = OnceLock::new();
 
 /// One file in the log directory, as the settings screen sees it.
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LogFile {
-    /// File name, including the date.
     pub name: String,
-    /// Size in bytes.
     pub size_bytes: u64,
-    /// Last modification time, in milliseconds since the Unix epoch.
+    /// Milliseconds since the Unix epoch.
     pub modified_ms: Option<u64>,
 }
 
-/// What the settings screen needs to describe the log directory.
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LogsInfo {
-    /// Absolute path of the directory, shown so it can be read out in a bug report.
+    /// Absolute path, so it can be read out in a bug report.
     pub directory: String,
-    /// The files, newest first.
+    /// Newest first.
     pub files: Vec<LogFile>,
-    /// Their combined size in bytes.
     pub total_bytes: u64,
-    /// How many days the directory is allowed to hold.
     pub retention_days: u32,
 }
 
-/// The log directory and the policy applied to it.
-///
-/// Owned behind an `Arc` by the subscriber that writes the files and by the commands that
-/// describe and clear them, which is what keeps the two from disagreeing about where the files
-/// are.
+/// The log directory and the policy applied to it, shared behind an `Arc` by the writer and the
+/// commands that describe and clear it.
 #[derive(Debug)]
 pub struct Logs {
     directory: PathBuf,
@@ -108,7 +73,6 @@ pub struct Logs {
 }
 
 impl Logs {
-    /// Prepares the directory; the caller decides whether it is reachable.
     #[must_use]
     pub fn new(directory: PathBuf) -> Self {
         Self {
@@ -124,15 +88,13 @@ impl Logs {
         &self.directory
     }
 
-    /// Applies retention and prunes immediately, so lowering it in the settings screen is
-    /// visible in the directory the settings screen just told the user to open.
+    /// Applies retention and prunes immediately, so a lowered retention is visible at once.
     pub fn set_retention(&self, days: u32) {
         self.retention_days
             .store(clamp_retention(days), Ordering::Relaxed);
         self.prune();
     }
 
-    /// How many days are kept.
     #[must_use]
     pub fn retention_days(&self) -> u32 {
         self.retention_days.load(Ordering::Relaxed)
@@ -172,7 +134,6 @@ impl Logs {
         files
     }
 
-    /// What the settings screen shows, including the retention currently in effect.
     #[must_use]
     pub fn info(&self) -> LogsInfo {
         let files = self.files();
@@ -187,9 +148,7 @@ impl Logs {
 
     /// Deletes every log file, returning the number of bytes freed.
     ///
-    /// A file that cannot be removed is left alone: a partially cleared directory is a smaller
-    /// problem than an error the user cannot act on, and the next record recreates today's file
-    /// anyway.
+    /// A file that cannot be removed is left alone; the next record recreates today's file.
     pub fn clear(&self) -> u64 {
         let mut freed = 0;
         for file in self.files() {
@@ -200,7 +159,6 @@ impl Logs {
         freed
     }
 
-    /// Deletes files that fall outside the retention window.
     pub fn prune(&self) {
         let today = days_since_epoch(SystemTime::now());
         let today_key = date_key(today);
@@ -230,8 +188,6 @@ impl Logs {
         }
     }
 
-    /// Opens the log directory in the platform's file manager.
-    ///
     /// # Errors
     ///
     /// [`io::Error`] if no file manager could be started, which is what a headless Linux session
@@ -241,7 +197,6 @@ impl Logs {
         command.spawn().map(|_| ())
     }
 
-    /// Opens today's file for appending, pruning first if the date has rolled over.
     fn open_today(&self) -> Option<File> {
         self.prune();
         OpenOptions::new()
@@ -255,19 +210,14 @@ impl Logs {
     }
 }
 
-/// The process-wide logs, if [`init`] has run.
 #[must_use]
 pub fn logs() -> Option<&'static Arc<Logs>> {
     LOGS.get()
 }
 
 /// Installs the global subscriber, writing to `stderr` and to a daily file under `data_dir`.
-///
-/// Called once, from `setup`, before the core starts — everything the core and the window policy
-/// have to say therefore lands in the file. A second call leaves the first subscriber in place,
-/// so the function is safe to reach from more than one startup path.
-///
-/// Returns the directory the files are written to.
+/// Called once from `setup`; a second call leaves the first subscriber in place. Returns the
+/// directory the files are written to.
 pub fn init(data_dir: &Path) -> PathBuf {
     let logs = Arc::new(Logs::new(data_dir.join(LOG_DIRECTORY)));
     // Deliberately ignoring the error: if the directory cannot be created, `stderr` still gets
@@ -298,10 +248,8 @@ pub fn init(data_dir: &Path) -> PathBuf {
     directory
 }
 
-/// Reports a panic through the log before the default hook prints it.
-///
-/// With `panic = "abort"` in the release profile the hook is the last code that runs, so this is
-/// the only chance the file has to record why the process went away.
+/// With `panic = "abort"` in the release profile the hook is the last code that runs, so it must
+/// record the panic itself.
 pub fn install_panic_hook() {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -320,11 +268,8 @@ pub fn install_panic_hook() {
     }));
 }
 
-/// Applies the level from the settings document.
-///
-/// `RUST_LOG` wins: it is the escape hatch a developer reaches for when the interface is the
-/// thing that is broken, and a stored preference quietly overriding it would make debugging
-/// harder in exactly the case debugging matters.
+/// `RUST_LOG` wins over the stored level, so the escape hatch keeps working when the interface
+/// is what is broken.
 pub fn set_level(level: LogLevel) {
     if ENV_OVERRIDE.get().copied().unwrap_or(false) {
         tracing::debug!(
@@ -343,7 +288,6 @@ pub fn set_level(level: LogLevel) {
     }
 }
 
-/// Applies both halves of the logging settings.
 pub fn apply(settings: &LoggingSettings) {
     if let Some(logs) = logs() {
         logs.set_retention(settings.retention_days);
@@ -351,11 +295,8 @@ pub fn apply(settings: &LoggingSettings) {
     set_level(settings.level);
 }
 
-/// Records a message from the front end in the same file as everything else.
-///
-/// The web view has no filesystem access and its console is invisible in a packaged build, so
-/// without this an error thrown by a component would exist only on a screen the user has
-/// already closed.
+/// The web view has no filesystem access and its console is invisible in a packaged build, so an
+/// error thrown by a component would otherwise exist only on a screen the user has already closed.
 pub fn log_frontend(level: &str, message: &str, context: Option<&str>) {
     let message = truncate(message);
     let context = context.map(truncate).unwrap_or_default();
@@ -367,7 +308,6 @@ pub fn log_frontend(level: &str, message: &str, context: Option<&str>) {
     }
 }
 
-/// Keeps a retention value inside the range the settings screen offers.
 fn clamp_retention(days: u32) -> u32 {
     days.clamp(MIN_LOG_RETENTION_DAYS, MAX_LOG_RETENTION_DAYS)
 }
@@ -382,7 +322,6 @@ fn truncate(value: &str) -> String {
     text
 }
 
-/// The command that opens a directory in the platform's file manager.
 #[must_use]
 pub fn opener(directory: &Path) -> std::process::Command {
     #[cfg(target_os = "windows")]
@@ -399,7 +338,6 @@ pub fn opener(directory: &Path) -> std::process::Command {
     command
 }
 
-/// The writer `tracing` asks for once per record.
 #[derive(Clone)]
 struct LogsWriter {
     logs: Arc<Logs>,
@@ -416,7 +354,6 @@ impl<'writer> MakeWriter<'writer> for LogsWriter {
     }
 }
 
-/// Writes one record to `stderr` and to today's file.
 struct MultiWriter {
     stderr: io::Stderr,
     file: Option<File>,
@@ -464,18 +401,14 @@ fn parse_date_key(name: &str) -> Option<String> {
     shaped.then(|| date.to_owned())
 }
 
-/// Whole days between the Unix epoch and `time`.
 fn days_since_epoch(time: SystemTime) -> i64 {
     time.duration_since(UNIX_EPOCH)
         .map(|age| (age.as_secs() / 86_400) as i64)
         .unwrap_or(0)
 }
 
-/// `YYYY-MM-DD` for a count of days since the epoch.
-///
-/// Howard Hinnant's `civil_from_days`, which is why this module needs no date dependency: the
-/// arithmetic is exact for every date the application will ever see, including the leap years
-/// every four-line approximation gets wrong.
+/// `YYYY-MM-DD` from days since the epoch (Howard Hinnant's `civil_from_days`), exact for every
+/// date and leap year this application will see without a date dependency.
 fn date_key(days: i64) -> String {
     let shifted = days + 719_468;
     let era = shifted.div_euclid(146_097);
@@ -495,8 +428,7 @@ fn date_key(days: i64) -> String {
 mod tests {
     use super::*;
 
-    /// A logs directory in a temporary folder, which is the whole reason [`Logs`] is a value
-    /// rather than a module-level global.
+    /// A logs directory in a temporary folder.
     fn temporary() -> (tempfile::TempDir, Arc<Logs>) {
         let dir = tempfile::tempdir().expect("tempdir");
         let logs = Arc::new(Logs::new(dir.path().join(LOG_DIRECTORY)));

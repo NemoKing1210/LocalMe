@@ -7,7 +7,6 @@ import {
 } from '@vue/eslint-config-typescript';
 import pluginVue from 'eslint-plugin-vue';
 
-// Type-aware linting needs to know which files belong to the Vue project.
 configureVueProject({ rootDir: import.meta.dirname, scriptLangs: ['ts'] });
 
 export default defineConfigWithVueTs(
@@ -34,8 +33,6 @@ export default defineConfigWithVueTs(
   {
     name: 'localme/rules',
     rules: {
-      // The design system is a token system plus explicit components; ad-hoc elements with
-      // utility classes would be the start of a second one.
       'vue/component-api-style': ['error', ['script-setup']],
       'vue/block-lang': ['error', { script: { lang: 'ts' } }],
       'vue/multi-word-component-names': ['error', { ignores: ['App'] }],

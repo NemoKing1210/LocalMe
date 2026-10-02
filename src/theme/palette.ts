@@ -1,16 +1,3 @@
-/**
- * Material 3 colour roles, generated from a source colour with the official algorithm.
- *
- * Why generate rather than hard-code a palette: the accent colour is a user setting, and a
- * hand-maintained palette would have to supply ~30 roles × 2 themes × N accents, with the
- * contrast relationships between them maintained by hand. `material-color-utilities` is the
- * same HCT implementation Material's own tooling uses: it maps one source colour onto the
- * whole tonal-palette system, so `primary`, `primaryContainer`, `outline` and the surface
- * containers stay in the relationships the spec defines no matter which accent is chosen.
- *
- * The roles below are exactly the ones the CSS consumes; adding a role here is all that is
- * needed to make `--md-sys-color-<role>` available in a stylesheet.
- */
 import {
   Hct,
   MaterialDynamicColors,
@@ -21,16 +8,8 @@ import {
   type DynamicScheme,
 } from '@material/material-color-utilities';
 
-/**
- * Role table.
- *
- * The role values are produced by a fresh `MaterialDynamicColors` instance rather than by
- * its static properties, which were deprecated in favour of these methods when the spec
- * gained its later roles.
- */
 const dynamicColors = new MaterialDynamicColors();
 
-/** Role name → the dynamic colour that resolves it. */
 const ROLE_COLORS = {
   primary: dynamicColors.primary(),
   'on-primary': dynamicColors.onPrimary(),
@@ -80,21 +59,13 @@ const ROLE_COLORS = {
   scrim: dynamicColors.scrim(),
 } as const satisfies Record<string, DynamicColor>;
 
-/** Every colour role the design system exposes. */
 export type ColorRole = keyof typeof ROLE_COLORS;
 
-/** A resolved role palette, as CSS hex colours. */
 export type ColorScheme = Readonly<Record<ColorRole, string>>;
 
 /** The accent every other accent is compared against, and the one shown before a choice. */
 export const DEFAULT_ACCENT = '#6750A4';
 
-/**
- * Curated accents.
- *
- * A free colour picker is also offered, but these are the ones that look deliberate: the
- * M3 baseline plus the hue families Material You ships as presets.
- */
 export const ACCENT_PRESETS: readonly { readonly id: string; readonly hex: string }[] = [
   { id: 'baseline', hex: '#6750A4' },
   { id: 'indigo', hex: '#4355B9' },
@@ -125,19 +96,12 @@ export function buildColorScheme(sourceHex: string, isDark: boolean): ColorSchem
   return resolved;
 }
 
-/**
- * Coerces arbitrary user input into a `#rrggbb` string, falling back to the default accent.
- *
- * `argbFromHex` tolerates a missing `#` but not garbage, and a bad accent must not be able
- * to break the palette for the whole application.
- */
 export function normalizeHex(value: string): string {
   const trimmed = value.trim();
   const candidate = trimmed.startsWith('#') ? trimmed : `#${trimmed}`;
   return /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(candidate) ? candidate : DEFAULT_ACCENT;
 }
 
-/** Writes a resolved scheme onto an element as `--md-sys-color-*` custom properties. */
 export function applyColorScheme(element: HTMLElement, scheme: ColorScheme): void {
   for (const [role, color] of Object.entries(scheme) as [ColorRole, string][]) {
     element.style.setProperty(`--md-sys-color-${role}`, color);

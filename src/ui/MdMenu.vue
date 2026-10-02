@@ -1,37 +1,19 @@
 <script setup lang="ts">
-/**
- * A Material 3 overflow menu.
- *
- * The trigger is an `MdIconButton` with `aria-haspopup` and `aria-expanded`, and the menu is a
- * `role="menu"` of `role="menuitem"` buttons. Focus is moved into the menu when it opens and
- * left there while it is open — a menu that opens without taking focus is unusable by keyboard,
- * and one that keeps focus on the trigger cannot be arrowed through.
- *
- * It closes on four things, because each is a different user intent that must all be honoured:
- * a selection, a pointer press anywhere outside, `Escape`, and focus leaving the component. The
- * outside press is bound on `pointerdown` in the capture phase rather than on `click`, so the
- * menu is gone before the press reaches whatever is underneath it and cannot swallow a click
- * meant for the page.
- *
- * The items are a prop, not slots. A menu is a list of (label, action) pairs and a caller
- * assembling it from markup would have to reproduce the item's padding, its state layer and its
- * `role` — the three things this component exists to get right.
- */
-import { nextTick, onBeforeUnmount, ref, watch } from 'vue';
+// The outside press is bound on `pointerdown` in the capture phase rather than `click`, so the
+// menu is gone before the press reaches whatever is underneath it.
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 
 import MdIcon from './MdIcon.vue';
 import MdIconButton from './MdIconButton.vue';
 import type { IconName } from './icons';
 
 const props = defineProps<{
-  /** The entries, in order. */
   items: readonly {
     readonly id: string;
     readonly label: string;
     readonly icon?: IconName;
     readonly danger?: boolean;
   }[];
-  /** The trigger's accessible name, such as "Actions for Anna". */
   label: string;
 }>();
 
@@ -42,24 +24,59 @@ const surface = ref<HTMLElement | null>(null);
 const open = ref(false);
 const activeIndex = ref(0);
 
-/** The rendered items, in the order the arrow keys walk them. */
+// Fixed positioning keeps the menu out of the list's scrollable area; the surface is measured
+// before it is shown and stays `visibility: hidden` until then so it never paints in the wrong place.
+const coords = ref<{ left: number; top: number } | null>(null);
+
+const surfaceStyle = computed(() =>
+  coords.value === null
+    ? { visibility: 'hidden' as const }
+    : { left: `${coords.value.left}px`, top: `${coords.value.top}px` },
+);
+
+const GAP = 4;
+const EDGE = 8;
+
 function menuItems(): HTMLButtonElement[] {
   const surfaceElement = surface.value;
   if (surfaceElement === null) return [];
   return Array.from(surfaceElement.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'));
 }
 
+// `preventScroll` keeps the browser from scrolling the list to the newly focused item, which
+// would move the row the menu is attached to.
 function focusItem(index: number): void {
   activeIndex.value = index;
-  menuItems()[index]?.focus();
+  menuItems()[index]?.focus({ preventScroll: true });
+}
+
+function place(): void {
+  const trigger = root.value?.querySelector<HTMLElement>('.md-menu__trigger');
+  const surfaceElement = surface.value;
+  if (trigger === null || trigger === undefined || surfaceElement === null) return;
+
+  const rect = trigger.getBoundingClientRect();
+  const width = surfaceElement.offsetWidth;
+  const height = surfaceElement.offsetHeight;
+
+  let top = rect.bottom + GAP;
+  if (top + height > window.innerHeight - EDGE && rect.top - GAP - height >= EDGE) {
+    top = rect.top - GAP - height;
+  }
+  let left = rect.right - width;
+  left = Math.min(Math.max(EDGE, left), window.innerWidth - width - EDGE);
+
+  coords.value = { left, top };
 }
 
 function show(): void {
   if (props.items.length === 0) return;
   open.value = true;
   activeIndex.value = 0;
-  // The menu does not exist in the DOM until this render has flushed.
+  coords.value = null;
+  // The surface is not in the DOM until this render has flushed, so it cannot be measured before then.
   void nextTick(() => {
+    place();
     focusItem(0);
   });
 }
@@ -67,13 +84,21 @@ function show(): void {
 function close(restoreFocus: boolean): void {
   if (!open.value) return;
   open.value = false;
-  if (restoreFocus) root.value?.querySelector<HTMLButtonElement>('.md-menu__trigger')?.focus();
+  coords.value = null;
+  if (restoreFocus) {
+    root.value
+      ?.querySelector<HTMLButtonElement>('.md-menu__trigger')
+      ?.focus({ preventScroll: true });
+  }
 }
 
 function toggle(): void {
   if (open.value) close(false);
   else show();
 }
+
+// Exposed so a row can open the menu from elsewhere, such as a context-menu gesture.
+defineExpose({ show });
 
 function choose(id: string): void {
   close(true);
@@ -123,13 +148,27 @@ function onPointerDown(event: PointerEvent): void {
   close(false);
 }
 
+/** The fixed menu is placed in viewport coordinates, so it cannot follow a scroll or a resize. */
+function onViewportChange(): void {
+  close(false);
+}
+
 watch(open, (isOpen) => {
-  if (isOpen) document.addEventListener('pointerdown', onPointerDown, true);
-  else document.removeEventListener('pointerdown', onPointerDown, true);
+  if (isOpen) {
+    document.addEventListener('pointerdown', onPointerDown, true);
+    document.addEventListener('scroll', onViewportChange, true);
+    window.addEventListener('resize', onViewportChange);
+  } else {
+    document.removeEventListener('pointerdown', onPointerDown, true);
+    document.removeEventListener('scroll', onViewportChange, true);
+    window.removeEventListener('resize', onViewportChange);
+  }
 });
 
 onBeforeUnmount(() => {
   document.removeEventListener('pointerdown', onPointerDown, true);
+  document.removeEventListener('scroll', onViewportChange, true);
+  window.removeEventListener('resize', onViewportChange);
 });
 </script>
 
@@ -143,7 +182,14 @@ onBeforeUnmount(() => {
       :aria-expanded="open"
       @click="toggle"
     />
-    <div v-if="open" ref="surface" class="md-menu__surface" role="menu" :aria-label="label">
+    <div
+      v-if="open"
+      ref="surface"
+      class="md-menu__surface"
+      role="menu"
+      :aria-label="label"
+      :style="surfaceStyle"
+    >
       <button
         v-for="(item, index) in items"
         :key="item.id"
@@ -164,20 +210,13 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .md-menu {
-  position: relative;
   display: inline-flex;
 }
 
-/*
- * Anchored below the trigger and flush with its inline end, which is where a menu attached to a
- * trailing control is expected to appear. The elevation and the container colour are what make
- * it read as a sheet above the row rather than as part of it.
- */
+/* Painted `fixed` and placed from script (see `place`), so it is not part of the list's scroll area. */
 .md-menu__surface {
-  position: absolute;
+  position: fixed;
   z-index: 3;
-  inset-block-start: calc(100% + 4px);
-  inset-inline-end: 0;
   min-width: 160px;
   padding-block: 8px;
   border-radius: var(--md-sys-shape-corner-extra-small);

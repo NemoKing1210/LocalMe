@@ -1,22 +1,12 @@
 <script setup lang="ts">
-/**
- * Renders one icon from the table in `icons.ts`.
- *
- * Sizing is the font size: an icon is designed on a 24-unit grid and stroked at 2 units, which
- * is the Material ratio, so scaling the box scales the stroke with it and the optical weight
- * stays constant across the interface.
- */
 import { computed } from 'vue';
 
 import { ICONS, type IconName } from './icons';
 
 const props = withDefaults(
   defineProps<{
-    /** Which icon to draw. */
     name: IconName;
-    /** Box size in pixels. */
     size?: number;
-    /** Stroke width on the 24-unit grid. */
     strokeWidth?: number;
   }>(),
   { size: 24, strokeWidth: 2 },

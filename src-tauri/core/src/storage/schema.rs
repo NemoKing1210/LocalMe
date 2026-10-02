@@ -1,20 +1,14 @@
-//! Schema and forward-only migrations.
-//!
-//! The version is stored in `meta.schema_version`. Every migration runs inside a
-//! transaction and bumps the version, so a crash halfway through leaves the database on the
-//! previous version rather than half-upgraded. Version 0 (no tables) to 1 is the initial
-//! migration, which means a fresh database and an upgraded one take the same code path
-//! (`docs/ARCHITECTURE.md` §7.2).
+//! Forward-only migrations. The version is stored in `meta.schema_version`; each migration runs
+//! in a transaction and bumps the version, so a crash leaves the database on the previous version
+//! rather than half-upgraded. A fresh database (version 0) and an upgraded one take the same path.
 
 use rusqlite::{Connection, OptionalExtension, params};
 
 use super::sqlite_error;
 use crate::error::StorageError;
 
-/// The schema version this build expects.
 pub(super) const SCHEMA_VERSION: u32 = 1;
 
-/// Migration from version 0 (an empty database) to version 1.
 const MIGRATION_1: &str = "
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE peers (
@@ -42,7 +36,6 @@ CREATE INDEX messages_peer_time ON messages(peer_id, sent_at_ms DESC, id DESC);
 CREATE INDEX messages_unread    ON messages(peer_id) WHERE read = 0;
 ";
 
-/// Brings the database up to [`SCHEMA_VERSION`], one migration per transaction.
 pub(super) fn migrate(conn: &mut Connection) -> Result<(), StorageError> {
     let mut version = current_version(conn)?;
     while version < SCHEMA_VERSION {
@@ -58,7 +51,6 @@ pub(super) fn migrate(conn: &mut Connection) -> Result<(), StorageError> {
     Ok(())
 }
 
-/// Reads `meta.schema_version`, treating a missing table or key as version 0.
 fn current_version(conn: &Connection) -> Result<u32, StorageError> {
     let has_meta: i64 = conn
         .query_row(
@@ -88,7 +80,6 @@ fn current_version(conn: &Connection) -> Result<u32, StorageError> {
     }
 }
 
-/// Applies one migration and records the new version, atomically.
 fn apply_migration(conn: &mut Connection, version: u32) -> Result<(), StorageError> {
     let sql = match version {
         1 => MIGRATION_1,

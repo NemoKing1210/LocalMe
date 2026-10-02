@@ -1,14 +1,7 @@
 <script setup lang="ts">
 /**
- * Confirms forgetting a peer, optionally deleting the conversation at the same time.
- *
- * The dialog element stays mounted and is driven by the `open` prop; only its content is
- * conditional on there being a peer. That is deliberate: `<dialog>`'s `showModal` is what
- * makes it the top layer, and calling it from a watcher only works if there is a transition
- * to observe — a dialog that mounts already open would never be promoted.
- *
- * The switch is local state, reset every time a new peer is offered, so "also delete the
- * history" can never carry over from the previous person the user opened it for.
+ * Stays mounted, driven by `open`: `<dialog>`'s `showModal` only promotes a dialog that mounts
+ * closed and then opens.
  */
 import { computed, ref, watch } from 'vue';
 
@@ -19,14 +12,11 @@ import MdDialog from '@/ui/MdDialog.vue';
 import MdSwitch from '@/ui/MdSwitch.vue';
 
 const props = defineProps<{
-  /** The peer to forget, or `null` while the dialog is closed. */
   peer: Peer | null;
 }>();
 
 const emit = defineEmits<{
-  /** The dialog was dismissed without confirming. */
   close: [];
-  /** Forget was confirmed; the flag says whether to delete the history too. */
   confirmed: [deleteHistory: boolean];
 }>();
 

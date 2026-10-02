@@ -1,28 +1,12 @@
 <script setup lang="ts">
-/**
- * The "nothing here" panel.
- *
- * One component for every empty surface in the application — no peers yet, no results for a
- * search, no conversation selected — because the alternative is four slightly different
- * centres, four paddings and four tones of grey. The copy and the actions come from the caller;
- * this only decides the shape.
- *
- * The icon is drawn large and at the same `on-surface-variant` colour as the text, with no
- * container behind it: a filled circle here would compete with the empty state's actual job,
- * which is to explain what the user should do next.
- */
 import MdIcon from './MdIcon.vue';
 import type { IconName } from './icons';
 
 withDefaults(
-  // The `| undefined` is what lets the `undefined` defaults typecheck under
-  // `exactOptionalPropertyTypes`; the props' types are the same either way.
+  // `exactOptionalPropertyTypes` only accepts the explicit `undefined` defaults when written out.
   defineProps<{
-    /** The headline. */
     title: string;
-    /** A sentence explaining why the surface is empty, or what to do about it. */
     body?: string | undefined;
-    /** A large illustration glyph. */
     icon?: IconName | undefined;
   }>(),
   { body: undefined, icon: undefined },

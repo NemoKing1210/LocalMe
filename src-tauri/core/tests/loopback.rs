@@ -1,14 +1,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 //! End-to-end tests: two independent cores on the loopback interface.
 //!
-//! These are the tests that prove the acceptance criteria rather than the units: two
-//! instances discover each other, exchange messages, acknowledge them, go offline with a
-//! correct "last seen", and forget each other on request. Nothing here talks to the Tauri
-//! host, which is the point — the core is a complete application on its own.
-//!
 //! Discovery is injected rather than multicast in the deterministic tests, so the suite runs
 //! the same way on a developer machine and in a container without a working multicast route.
-//! [`two_instances_find_each_other_over_mdns`] covers the real discovery path separately.
 
 use std::net::SocketAddr;
 use std::path::Path;
@@ -22,7 +16,6 @@ use localme_core::ports::discovery::{DiscoveredPeer, DiscoveryEvent};
 use localme_core::runtime::{Core, CoreConfig};
 use tempfile::TempDir;
 
-/// A core running out of a temporary directory.
 struct Instance {
     core: Core,
     _data_dir: TempDir,

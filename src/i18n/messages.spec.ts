@@ -1,17 +1,3 @@
-/**
- * Catalogue tests.
- *
- * The type system already guarantees that `t('…')` is called with a key the English catalogue
- * has. What it cannot see is the *other* catalogues: each is typed as
- * `Record<MessageKey, string>` plus optional plural variants, which catches a missing key but
- * not an extra one, a plural variant for a key that has no base, or a placeholder that was
- * renamed in one language and not the other. Those three are what this file checks, because
- * each of them produces a visible bug in exactly one language.
- *
- * The languages themselves are a list in two places — `LOCALES` here and the `Locale` enum in
- * `localme-core` — so the tests below also pin the invariants a new language has to satisfy:
- * a catalogue, a label for itself, and plural forms its own `Intl` data actually selects.
- */
 import { describe, expect, it } from 'vitest';
 
 import { setLocale, translate } from './index';
@@ -24,7 +10,6 @@ import { ru } from './messages/ru';
 import { zh } from './messages/zh';
 import { LOCALES, normalizeLocale } from './locales';
 
-/** `{placeholder}` names in a message, sorted. */
 function placeholders(template: string): string[] {
   return [...template.matchAll(/\{(\w+)\}/g)].map((match) => match[1] ?? '').sort();
 }
@@ -113,10 +98,6 @@ describe('message catalogues', () => {
   });
 
   it('renders plurals with their number in every language', () => {
-    // Walks the plural path for real: `Intl.PluralRules` in the runtime has to find a form for
-    // every count, and whatever it finds must carry the number. A category the catalogue does
-    // not declare falls back to the base message, which is why this asserts on the rendered
-    // text rather than on the catalogue's shape.
     const counts = [0, 1, 2, 5, 11, 21, 101, 1_000_000];
     const keys = ['users.unread', 'notification.newMessageCount'] as const;
     for (const locale of LOCALES) {

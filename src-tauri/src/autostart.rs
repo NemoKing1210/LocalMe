@@ -1,20 +1,11 @@
-//! Autostart registration.
-//!
-//! The operating system owns this flag — a registry key on Windows, a LaunchAgent on macOS, a
-//! desktop entry on Linux — so it is deliberately *not* mirrored into the settings file. What
-//! is stored is the user's intent; what is applied is the platform's state, and the settings
-//! screen reads the platform's answer rather than ours.
-//!
-//! When the app is registered, it is registered with `--minimized`, so an automatic start on
-//! sign-in does not steal focus from whatever the user is doing.
+//! Autostart registration. The operating system owns the flag, so it is not mirrored into the
+//! settings file; registration passes `--minimized` so a sign-in start does not steal focus.
 
 use tauri::{AppHandle, Runtime};
 use tauri_plugin_autostart::ManagerExt;
 
 use crate::error::ApiError;
 
-/// Whether the application is currently registered to start at sign-in.
-///
 /// # Errors
 ///
 /// [`ApiError::Internal`] if the platform refused to answer.
@@ -26,11 +17,9 @@ pub fn is_enabled<R: Runtime>(app: &AppHandle<R>) -> Result<bool, ApiError> {
         })
 }
 
-/// Registers or unregisters the application.
-///
 /// # Errors
 ///
-/// [`ApiError::Internal`] if the platform refused the change. The caller keeps the previous
+/// [`ApiError::Internal`] if the platform refused the change; the caller keeps the previous
 /// setting in that case, so the screen does not claim a change that did not happen.
 pub fn apply<R: Runtime>(app: &AppHandle<R>, enabled: bool) -> Result<(), ApiError> {
     let manager = app.autolaunch();

@@ -1,13 +1,5 @@
-//! The IPC surface.
-//!
-//! Every command here does the same three things: parse its arguments into domain types,
-//! call exactly one service method, and let the error convert. There is no protocol, storage
-//! or presence logic in this file, and there is no command that reaches into the session's
-//! state directly — the session's public methods *are* the API, and this layer only makes them
-//! reachable from JavaScript.
-//!
-//! Argument names are camelCase on the JavaScript side (`peerId`), which is Tauri's default
-//! and matches the TypeScript conventions in `src/ipc`.
+//! The IPC surface: every command parses its arguments, calls one service method and lets the
+//! error convert. Argument names are camelCase on the JavaScript side, as Tauri defaults to.
 
 use std::sync::Arc;
 
@@ -27,24 +19,17 @@ use crate::{tray, window};
 #[derive(Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Bootstrap {
-    /// This device's identity.
     pub profile: PeerProfile,
-    /// The settings document.
     pub settings: Settings,
-    /// The user list, already arranged.
     pub peers: Vec<PeerView>,
-    /// The port this instance listens on; shown in diagnostics.
     pub port: u16,
     /// Set when the database was unusable and has been preserved under this path.
     pub storage_recovered: Option<String>,
     /// Set when discovery could not be started.
     pub discovery_problem: Option<String>,
-    /// The application version, for the About section.
     pub version: String,
 }
 
-/// The identity and the user list, so a lost web view can resynchronise with one call.
-///
 /// # Errors
 ///
 /// [`ApiError::ShuttingDown`] if the core has stopped.
@@ -65,10 +50,6 @@ pub async fn bootstrap(state: State<'_, Arc<AppState>>) -> Result<Bootstrap, Api
             None => (0, None, None),
         };
 
-    // The one line that says the whole IPC path worked: the web view reached the host, the host
-    // read the session and the settings actor, and the answer is on its way back. Without this,
-    // a front end that failed to talk to the host would look identical to one that simply had
-    // nothing to show.
     tracing::info!(
         peers = peers.len(),
         onboarded = settings.onboarded,
@@ -87,8 +68,6 @@ pub async fn bootstrap(state: State<'_, Arc<AppState>>) -> Result<Bootstrap, Api
     })
 }
 
-/// The arranged user list.
-///
 /// # Errors
 ///
 /// [`ApiError::ShuttingDown`] if the core has stopped.
@@ -115,8 +94,6 @@ pub async fn history(
     Ok(state.session.history(peer, cursor, limit).await?)
 }
 
-/// Sends a message.
-///
 /// # Errors
 ///
 /// [`ApiError::InvalidInput`] if the body is empty or too long,
@@ -133,8 +110,6 @@ pub async fn send_message(
     Ok(state.session.send_message(peer, body).await?)
 }
 
-/// Marks a conversation as read.
-///
 /// # Errors
 ///
 /// [`ApiError::ShuttingDown`] if the core has stopped.
@@ -144,8 +119,6 @@ pub async fn mark_read(state: State<'_, Arc<AppState>>, peer_id: String) -> Resu
     Ok(state.session.mark_read(peer).await?)
 }
 
-/// Forgets a device, optionally deleting its conversation.
-///
 /// # Errors
 ///
 /// [`ApiError::InvalidInput`] for a malformed identifier.
@@ -159,8 +132,6 @@ pub async fn forget_peer(
     Ok(state.session.forget(peer, delete_history).await?)
 }
 
-/// Lets a forgotten device back into the list.
-///
 /// # Errors
 ///
 /// [`ApiError::InvalidInput`] for a malformed identifier.
@@ -173,8 +144,6 @@ pub async fn restore_peer(
     Ok(state.session.restore(peer).await?)
 }
 
-/// Suppresses or restores notifications for one device.
-///
 /// # Errors
 ///
 /// [`ApiError::InvalidInput`] for a malformed identifier.
@@ -188,8 +157,6 @@ pub async fn set_peer_muted(
     Ok(state.session.set_muted(peer, muted).await?)
 }
 
-/// Every device this installation has seen, forgotten ones included.
-///
 /// # Errors
 ///
 /// [`ApiError::ShuttingDown`] if the core has stopped.
@@ -198,8 +165,6 @@ pub async fn known_devices(state: State<'_, Arc<AppState>>) -> Result<Vec<KnownD
     Ok(state.session.known_devices().await?)
 }
 
-/// Deletes every stored message.
-///
 /// # Errors
 ///
 /// [`ApiError::ShuttingDown`] if the core has stopped.
@@ -208,8 +173,6 @@ pub async fn clear_history(state: State<'_, Arc<AppState>>) -> Result<u64, ApiEr
     Ok(state.session.clear_history().await?)
 }
 
-/// This device's identity.
-///
 /// # Errors
 ///
 /// [`ApiError::ShuttingDown`] if the core has stopped.
@@ -233,8 +196,6 @@ pub async fn set_nickname(
     Ok(state.session.set_nickname(nickname).await?)
 }
 
-/// Completes the first-run screen: sets the nickname and records that the user was asked.
-///
 /// # Errors
 ///
 /// [`ApiError::InvalidInput`] for a nickname that does not validate.
@@ -255,8 +216,6 @@ pub async fn complete_onboarding<R: Runtime>(
     Ok(profile)
 }
 
-/// The settings document.
-///
 /// # Errors
 ///
 /// [`ApiError::ShuttingDown`] if the host has stopped.
@@ -265,8 +224,6 @@ pub async fn get_settings(state: State<'_, Arc<AppState>>) -> Result<Settings, A
     Ok(state.settings.get().await?)
 }
 
-/// Replaces the settings document.
-///
 /// # Errors
 ///
 /// [`ApiError::Storage`] if the file could not be written; the previous document stays in
@@ -278,14 +235,12 @@ pub async fn update_settings<R: Runtime>(
     settings: Settings,
 ) -> Result<Settings, ApiError> {
     let saved = state.settings.update(settings).await?;
-    // The start-with-system setting is owned by the operating system, not by our file, so it
-    // is applied here rather than read from the document at startup.
+    // The start-with-system setting is owned by the operating system, not by our file, so it is
+    // applied here rather than read from the document at startup.
     crate::autostart::apply(&app, saved.system.autostart)?;
     Ok(saved)
 }
 
-/// Whether the application is registered to start at sign-in.
-///
 /// # Errors
 ///
 /// [`ApiError::Internal`] if the platform refused to answer.
@@ -294,8 +249,6 @@ pub fn is_autostart_enabled<R: Runtime>(app: AppHandle<R>) -> Result<bool, ApiEr
     crate::autostart::is_enabled(&app)
 }
 
-/// Replaces the labels the tray and the notifications are drawn with.
-///
 /// # Errors
 ///
 /// [`ApiError::Internal`] if the tray could not be rebuilt.
@@ -310,11 +263,6 @@ pub fn set_ui_labels<R: Runtime>(
     Ok(())
 }
 
-/// Paints the native title bar in the accent colour.
-///
-/// The palette is the front end's, so it sends the two resolved colours: `accent` for the bar
-/// and `onAccent` for the label on it.
-///
 /// # Errors
 ///
 /// [`ApiError::InvalidInput`] if either colour is not `#RRGGBB`.
@@ -339,15 +287,12 @@ pub fn set_active_chat(
 ) -> Result<(), ApiError> {
     let peer = peer_id.as_deref().map(args::device_id).transpose()?;
     state.set_active_chat(peer);
-    // Opening a conversation is also how the user acknowledges the notification for it.
     if peer.is_some() {
         state.set_last_notified(None);
     }
     Ok(())
 }
 
-/// Shows and focuses the main window.
-///
 /// # Errors
 ///
 /// [`ApiError::Internal`] if the window cannot be shown.
@@ -357,8 +302,6 @@ pub fn show_window<R: Runtime>(app: AppHandle<R>) -> Result<(), ApiError> {
     Ok(())
 }
 
-/// Hides the main window, leaving the application running in the tray.
-///
 /// # Errors
 ///
 /// [`ApiError::Internal`] if the window cannot be hidden.
@@ -368,10 +311,8 @@ pub fn hide_window<R: Runtime>(app: AppHandle<R>) -> Result<(), ApiError> {
     Ok(())
 }
 
-/// Quits the application gracefully.
-///
-/// Returns immediately; the shutdown itself runs on the async runtime so that the web view is
-/// not waiting on it. `RunEvent::Exit` performs the actual teardown.
+/// Returns immediately; the shutdown itself runs on the async runtime, and `RunEvent::Exit`
+/// performs the actual teardown.
 ///
 /// # Errors
 ///
@@ -387,19 +328,14 @@ pub fn quit<R: Runtime>(app: AppHandle<R>) -> Result<(), ApiError> {
 #[derive(Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Diagnostics {
-    /// The application version.
     pub version: String,
-    /// The protocol version this build speaks.
     pub protocol_version: u16,
-    /// The TCP port this instance listens on.
     pub tcp_port: u16,
-    /// The device identifier, which is what another instance would dial.
+    /// What another instance would dial.
     pub device_id: String,
-    /// The platform, as reported by the OS plugin.
     pub platform: String,
 }
 
-/// Diagnostics for the About section.
 #[tauri::command]
 pub fn diagnostics(state: State<'_, Arc<AppState>>) -> Diagnostics {
     let core = state.core.lock().ok();
@@ -416,8 +352,6 @@ pub fn diagnostics(state: State<'_, Arc<AppState>>) -> Diagnostics {
     }
 }
 
-/// The directory the application logs to, and everything the settings screen says about it.
-///
 /// # Errors
 ///
 /// [`ApiError::Internal`] if logging has not been initialised, which would mean the settings
@@ -427,8 +361,6 @@ pub fn logs_info() -> Result<LogsInfo, ApiError> {
     Ok(logs()?.info())
 }
 
-/// Opens the log directory in the platform's file manager.
-///
 /// # Errors
 ///
 /// [`ApiError::Internal`] if no file manager could be started.
@@ -441,11 +373,6 @@ pub fn open_logs_folder() -> Result<(), ApiError> {
         })
 }
 
-/// Deletes every log file and reports how many bytes that freed.
-///
-/// The directory belongs to the user, so emptying it is a normal operation rather than a
-/// debugging last resort; today's file is recreated by the next record.
-///
 /// # Errors
 ///
 /// [`ApiError::Internal`] if logging has not been initialised.
@@ -459,8 +386,6 @@ pub fn clear_logs() -> Result<u64, ApiError> {
     Ok(freed)
 }
 
-/// Records a message from the web view in the same daily file as everything else.
-///
 /// The front end has no filesystem access and its console is invisible in a packaged build, so
 /// this is how a component error reaches a file the user can send us.
 ///
@@ -486,7 +411,6 @@ pub fn log_frontend(
     Ok(())
 }
 
-/// The process-wide log directory.
 fn logs() -> Result<&'static std::sync::Arc<logging::Logs>, ApiError> {
     logging::logs().ok_or_else(|| ApiError::Internal {
         message: "the log directory is not available".to_owned(),

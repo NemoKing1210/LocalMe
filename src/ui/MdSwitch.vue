@@ -1,22 +1,13 @@
 <script setup lang="ts">
-/**
- * A Material 3 switch, with its label and supporting text.
- *
- * Only the label and the track are clickable, not the whole settings row: a row that also holds
- * a button would otherwise make the switch impossible to hit without triggering the other
- * control.
- */
+// Only the label and the track are clickable, not the whole row: a row that also holds a button
+// would otherwise make the switch impossible to hit without triggering the other control.
 import { useId } from 'vue';
 
 withDefaults(
   defineProps<{
-    /** Whether the switch is on. */
     modelValue: boolean;
-    /** The label. */
     label: string;
-    /** A sentence explaining the consequence of the setting. */
     supportingText?: string;
-    /** Whether the switch is unavailable. */
     disabled?: boolean;
   }>(),
   { disabled: false },

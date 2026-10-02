@@ -1,20 +1,10 @@
 <script setup lang="ts">
-/**
- * A Material 3 dialog.
- *
- * Built on the native `<dialog>` element and `showModal()`, which brings focus trapping, the
- * top layer, `Escape` to close and inertness of the page behind — all of which a hand-rolled
- * overlay gets subtly wrong. The component only owns the shape and the styling.
- */
 import { onBeforeUnmount, ref, useId, watch } from 'vue';
 
 const props = withDefaults(
   defineProps<{
-    /** Whether the dialog is showing. */
     open: boolean;
-    /** The headline. */
     headline: string;
-    /** A wider variant, for a list or a form inside. */
     wide?: boolean;
   }>(),
   { wide: false },
@@ -38,8 +28,6 @@ watch(
   },
 );
 
-// `<dialog>` closes itself on Escape; the parent still has to be told, or its state would
-// disagree with what is on screen.
 function onClose(): void {
   emit('close');
 }
@@ -90,8 +78,7 @@ onBeforeUnmount(() => {
   background: color-mix(in srgb, var(--md-sys-color-scrim) 32%, transparent);
 }
 
-/* The motion durations collapse to zero under `prefers-reduced-motion` (see tokens.css), so the
-   dialog simply appears for a user who asked for that. */
+/* Durations collapse to zero under `prefers-reduced-motion` (tokens.css), so the dialog appears. */
 .md-dialog[open]::backdrop {
   animation: md-dialog-scrim var(--md-sys-motion-duration-medium2)
     var(--md-sys-motion-easing-standard);

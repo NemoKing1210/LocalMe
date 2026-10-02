@@ -1,18 +1,7 @@
 <script setup lang="ts">
-/**
- * A Material 3 snackbar.
- *
- * Positioned in the bottom-start corner rather than centred: it must not cover the conversation
- * it is talking about, and it must not move as the text grows. It animates in with the
- * emphasized deceleration curve, which is the M3 expressive motion for something entering the
- * screen, and the reduced-motion media query in the token sheet collapses that to nothing.
- */
 defineProps<{
-  /** Whether the snackbar is showing. */
   open: boolean;
-  /** The text. */
   text: string;
-  /** `error` uses the error roles. */
   tone?: 'neutral' | 'error';
 }>();
 

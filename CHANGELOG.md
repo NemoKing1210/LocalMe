@@ -5,6 +5,37 @@ All notable changes to LocalMe are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.3] - 2026-10-01
+
+### Changed
+
+- The contributor guide now asks for comments only where the code does not explain itself, instead
+  of one on every change
+- Comments across the codebase were trimmed to that rule: narrative, redundant and obvious
+  comments are gone, and only notes about a real constraint, invariant or tradeoff remain
+
+## [0.5.2] - 2026-10-01
+
+### Changed
+
+- The per-person overflow menu in the people list is now shown only while the row is hovered or
+  focused, instead of a button on every row; with the button gone its width is returned to the
+  name and the preview, which no longer ellipsise early
+- The same menu opens on a right-click anywhere in a row, and on the keyboard's context-menu key,
+  not only from the dots
+
+### Fixed
+
+- Opening the overflow menu no longer scrolls the people list or grows its scroll area: the menu
+  is painted fixed and out of the list's flow, and the focused item does not drag the list to it
+
+## [0.5.1] - 2026-10-01
+
+### Changed
+
+- A text field with no hint, error or counter no longer leaves an empty row under the input, so
+  the people search sits flush against the list
+
 ## [0.5.0] - 2026-10-01
 
 ### Added

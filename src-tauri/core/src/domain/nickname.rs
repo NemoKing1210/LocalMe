@@ -1,8 +1,7 @@
 //! Nickname validation.
 //!
-//! A nickname is *not* an identity — it is not unique and may change at any time. The only
-//! reason it is a newtype is that an invalid nickname must not be able to reach the wire or
-//! the database, and the only constructor is [`Nickname::parse`].
+//! A nickname is not an identity: it is not unique, may change at any time, and is only a
+//! newtype so an invalid value cannot reach the wire or the database.
 
 use std::fmt;
 
@@ -12,22 +11,17 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use crate::error::DomainError;
 use crate::protocol::limits::MAX_NICKNAME_CHARS;
 
-/// A validated, trimmed display name of 1..=32 characters.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Nickname(String);
 
 impl Nickname {
-    /// Trims surrounding whitespace and validates the result.
-    ///
-    /// Characters are counted as `char`s, not bytes, so a nickname of 32 emoji is accepted
-    /// and a nickname of 33 ASCII letters is not.
+    /// Trims surrounding whitespace, then validates length by `char` count and rejects
+    /// control characters, which would corrupt window titles, tray tooltips and notifications.
     ///
     /// # Errors
     ///
     /// Returns [`DomainError::EmptyNickname`], [`DomainError::NicknameTooLong`] or
-    /// [`DomainError::NicknameControlChar`]. Control characters are rejected because a
-    /// nickname ends up in the window title, the tray tooltip and OS notifications, where
-    /// a stray newline or escape sequence is a rendering and log-integrity problem.
+    /// [`DomainError::NicknameControlChar`].
     pub fn parse(raw: &str) -> Result<Self, DomainError> {
         let trimmed = raw.trim();
         let len = trimmed.chars().count();
@@ -46,13 +40,11 @@ impl Nickname {
         Ok(Self(trimmed.to_owned()))
     }
 
-    /// The validated nickname without surrounding whitespace.
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
 
-    /// Whether a raw string would be accepted, for live form validation.
     #[must_use]
     pub fn is_valid(raw: &str) -> bool {
         Self::parse(raw).is_ok()

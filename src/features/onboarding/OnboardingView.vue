@@ -1,21 +1,7 @@
 <script setup lang="ts">
 /**
- * The first-run screen: pick a nickname, see the avatar it produces, start messaging.
- *
- * Three decisions are worth spelling out.
- *
- * The validation is a *transcription* of `Nickname::parse` in `localme-core`, not a second
- * rule: trim, then count code points (`Array.from`, not `.length`, so 32 emoji are 32
- * characters and not 64), then reject control characters. The submit button is gated on the
- * same function that produces the error message, so "enabled" and "no error" cannot disagree.
- *
- * The avatar is seeded with `"{deviceId}:{nickname}"` — exactly what the host announces to
- * every peer — so the preview is the avatar the rest of the network will draw, not a local
- * approximation of it.
- *
- * The error under the field stays hidden until the user has typed something: a form that
- * greets the first-run user with "Please enter a name" before they have touched it treats a
- * normal state as a mistake.
+ * Validation transcribes `Nickname::parse` in the core; the avatar seed is
+ * `"{deviceId}:{nickname}"`, as the host announces it.
  */
 import { hostname } from '@tauri-apps/plugin-os';
 import { computed, onMounted, ref } from 'vue';
@@ -40,17 +26,9 @@ const nickname = ref('');
 const deviceId = ref('');
 const touched = ref(false);
 const busy = ref(false);
-/** A rejection from the host, shown through the field rather than thrown. */
 const serverError = ref<string | null>(null);
 
-/**
- * The host's rule, restated.
- *
- * Returns the key of the message to show, or `null` when the value would be accepted.
- *
- * The length is counted in code points (`Array.from` iterates a string by code point, exactly
- * as Rust's `chars()` does), not in UTF-16 units, so 32 emoji are 32 characters and not 64.
- */
+// Length counted in code points (as Rust's `chars()`), so 32 emoji are 32 characters.
 function check(value: string): MessageKey | null {
   const trimmed = value.trim();
   const length = Array.from(trimmed).length;
@@ -70,12 +48,7 @@ const errorText = computed<string | undefined>(() => {
   return i18n.t(key, { max: NICKNAME_MAX });
 });
 
-/**
- * The field's error binding.
- *
- * Bound as an object because `exactOptionalPropertyTypes` forbids handing an optional prop an
- * explicit `undefined`; omitting the key is the only way to say "there is no error".
- */
+// Bound as an object: `exactOptionalPropertyTypes` forbids an explicit `undefined` prop.
 const errorBind = computed<{ errorText?: string }>(() => {
   const text = errorText.value;
   return text === undefined ? {} : { errorText: text };

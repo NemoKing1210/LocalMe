@@ -1,7 +1,6 @@
 //! Validated identifier newtypes.
 //!
-//! `DeviceId` is the primary key of everything: it is generated once, stored once, and
-//! never derived from hardware. See `docs/ARCHITECTURE.md` §4.
+//! `DeviceId` is generated once, stored once, and never derived from hardware.
 
 use std::fmt;
 use std::str::FromStr;
@@ -16,33 +15,27 @@ use crate::protocol::limits::MAX_AVATAR_SEED_CHARS;
 
 /// A stable, per-installation device identifier.
 ///
-/// Generated as a random UUID v4 on first launch and persisted in the `meta` table. MAC
-/// addresses, hostnames and IPs are all unstable — DHCP leases move, adapters change,
-/// MACs are randomised by default on modern operating systems — so none of them can serve
-/// as identity.
+/// Generated as a random UUID v4 on first launch and persisted in the `meta` table: MAC
+/// addresses, hostnames and IPs are all unstable and cannot serve as identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct DeviceId(Uuid);
 
 impl DeviceId {
-    /// Generates a fresh random identifier.
     #[must_use]
     pub fn generate() -> Self {
         Self(Uuid::new_v4())
     }
 
-    /// Wraps an already-validated UUID.
     #[must_use]
     pub const fn from_uuid(uuid: Uuid) -> Self {
         Self(uuid)
     }
 
-    /// The underlying UUID.
     #[must_use]
     pub const fn as_uuid(self) -> Uuid {
         self.0
     }
 
-    /// A short, human-readable form used for mDNS instance names and log lines.
     #[must_use]
     pub fn short(self) -> String {
         let mut out = String::with_capacity(20);
@@ -93,19 +86,16 @@ impl<'de> Deserialize<'de> for DeviceId {
 pub struct MessageId(Uuid);
 
 impl MessageId {
-    /// Generates a new time-ordered identifier.
     #[must_use]
     pub fn generate() -> Self {
         Self(Uuid::now_v7())
     }
 
-    /// Wraps an already-validated UUID.
     #[must_use]
     pub const fn from_uuid(uuid: Uuid) -> Self {
         Self(uuid)
     }
 
-    /// The underlying UUID.
     #[must_use]
     pub const fn as_uuid(self) -> Uuid {
         self.0
@@ -147,8 +137,7 @@ impl<'de> Deserialize<'de> for MessageId {
 /// The seed a peer's avatar is rendered from.
 ///
 /// Owned by the announcing device and transmitted verbatim, because two devices must render
-/// the same picture: anything derived locally (from an IP, from a localised nickname
-/// comparison) would drift between machines.
+/// the same picture: a locally derived seed would drift between machines.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AvatarSeed(String);
 
@@ -170,14 +159,11 @@ impl AvatarSeed {
         Ok(Self(value.to_owned()))
     }
 
-    /// The canonical seed for a device: derived from the stable device id and the current
-    /// nickname, so renaming a device is a visible avatar change for everyone.
     #[must_use]
     pub fn derive(device_id: DeviceId, nickname: &Nickname) -> Self {
         Self(format!("{device_id}:{nickname}"))
     }
 
-    /// The seed string handed to the avatar renderer.
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
@@ -251,7 +237,6 @@ mod tests {
         let short = id.short();
         assert_eq!(short.len(), 20);
         assert!(short.chars().all(|c| c.is_ascii_hexdigit()));
-        // The dashed UUID contains the same first twenty hex characters.
         let simple = id.as_uuid().simple().to_string();
         assert!(simple.starts_with(&short));
     }
@@ -273,7 +258,6 @@ mod tests {
         let nick = Nickname::parse("Аня").expect("nickname");
         let seed = AvatarSeed::derive(id, &nick);
         assert_eq!(seed.as_str(), "018f2b9c-0000-7000-8000-000000000000:Аня");
-        // 20 + 1 + 3 characters, comfortably inside the 64-character limit.
         assert!(seed.as_str().chars().count() <= MAX_AVATAR_SEED_CHARS);
     }
 }

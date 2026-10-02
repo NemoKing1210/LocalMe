@@ -1,14 +1,3 @@
-/**
- * Chat store tests.
- *
- * The store is small, but one of its jobs is a total order over messages, and an inverted
- * predicate there puts every new message at the top of the log while looking perfectly
- * reasonable in review. That is exactly the bug this file exists to keep out; it was found by
- * watching the running application, which is a slow way to find it.
- *
- * The host is mocked rather than started: what is under test is the store's own bookkeeping, and
- * a real host would make the assertions depend on SQLite and on timing.
- */
 import { createPinia, setActivePinia } from 'pinia';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -24,7 +13,6 @@ import { useChatStore } from './chat';
 const PEER = '018f2b9c-0000-7000-8000-0000000000aa';
 const OTHER = '018f2b9c-0000-7000-8000-0000000000bb';
 
-/** A stored message, with only the fields the ordering looks at being meaningful. */
 function message(id: string, sentAt: number, peer = PEER): Message {
   return {
     id,

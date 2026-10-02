@@ -1,14 +1,4 @@
 <script setup lang="ts">
-/**
- * The application root.
- *
- * It owns the facts that are about the process rather than about a page — whether the host
- * answered, whether the first-run screen is still owed, and the host calls that are about the
- * window instead of about data: the strings the tray and a notification are drawn with, and the
- * colour of the native frame — and then hands the window to the router. The pages themselves (a
- * conversation, settings) are route components, so nothing here decides which one is on screen;
- * that is the address.
- */
 import { MotionConfig } from 'motion-v';
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { RouterView } from 'vue-router';
@@ -35,7 +25,6 @@ const failure = ref(false);
 
 let disconnect: (() => void) | null = null;
 
-/** Whether the first-run screen should be showing. */
 const needsOnboarding = computed(() => !settings.onboarded);
 
 onMounted(async () => {
@@ -131,7 +120,6 @@ watch(
 <style scoped>
 .app {
   display: grid;
-  /* One row, exactly as tall as the container; the page inside decides how to fill it. */
   grid-template-rows: 1fr;
   height: 100%;
   background: var(--md-sys-color-surface);
@@ -167,8 +155,6 @@ watch(
   }
 }
 
-/* The first-run screen and the window proper are one page each, so the swap between them is a
-   cross-fade with no travel: there is no direction to suggest. */
 .app-swap-enter-active,
 .app-swap-leave-active {
   transition: opacity var(--md-sys-motion-duration-medium2) var(--md-sys-motion-easing-standard);

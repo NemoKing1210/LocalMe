@@ -1,10 +1,3 @@
-/**
- * The peer list: everything the user list and the composer need to know about other devices.
- *
- * The list arrives fully arranged from the host — unread and online first, then most recent
- * activity — because the ordering rule belongs with the data it orders. This store only filters
- * it by the search box, using the same matching rule the host applies, and holds the selection.
- */
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 
@@ -50,7 +43,6 @@ export const usePeerStore = defineStore('peers', () => {
     selectedId.value = deviceId;
   }
 
-  /** Loads the list on demand, for the paths that do not start with a bootstrap payload. */
   async function load(): Promise<void> {
     replace(await ipc.listPeers());
   }

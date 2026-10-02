@@ -1,15 +1,3 @@
-/**
- * Theme state and application.
- *
- * The theme is a small piece of global state with three inputs — the chosen mode, the chosen
- * accent, and the operating system's own preferences — and one output: the CSS custom
- * properties on `:root`. It lives in a module rather than a Pinia store because the settings
- * store *feeds* it (it is the persisted source of the mode and accent) and a store depending
- * on itself would be circular; here the dependency runs one way.
- *
- * Everything is event-driven. `matchMedia` listeners fire on change; there is no polling and
- * no timer.
- */
 import { computed, readonly, ref, watch, type ComputedRef, type Ref } from 'vue';
 
 import {
@@ -33,7 +21,6 @@ const mode = ref<ThemeMode>('system');
 const accent = ref<string>(DEFAULT_ACCENT);
 const systemPrefersDark = ref(false);
 const reducedMotion = ref(false);
-/** Whether a frame has been painted already, i.e. whether a change has something to fade from. */
 let hasPainted = false;
 
 const effectiveTheme: ComputedRef<EffectiveTheme> = computed(() => {
@@ -41,7 +28,6 @@ const effectiveTheme: ComputedRef<EffectiveTheme> = computed(() => {
   return mode.value;
 });
 
-/** Palettes are pure functions of (accent, isDark); two entries is the whole cache. */
 const paletteCache = new Map<string, ColorScheme>();
 
 function schemeFor(source: string, isDark: boolean): ColorScheme {
@@ -53,7 +39,6 @@ function schemeFor(source: string, isDark: boolean): ColorScheme {
   return built;
 }
 
-/** The palette the current inputs resolve to: one value, cached, for anything outside the DOM. */
 const scheme: ComputedRef<ColorScheme> = computed(() =>
   schemeFor(accent.value, effectiveTheme.value === 'dark'),
 );
@@ -67,10 +52,6 @@ function paint(): void {
     applyColorScheme(root, scheme.value);
   };
 
-  // Changing the theme or the accent repaints every surface in the window at once. The View
-  // Transitions API cross-fades the two states, which is what it is for; it is a no-op on an
-  // engine without it, and the first paint is not a transition because there is nothing to
-  // cross-fade from.
   const canTransition = hasPainted && !reducedMotion.value && 'startViewTransition' in document;
   if (canTransition) {
     document.startViewTransition(apply);
@@ -88,7 +69,6 @@ function watchMedia(query: string, target: Ref<boolean>): void {
   });
 }
 
-/** Installs the media-query listeners and paints the first frame. */
 export function initTheme(): void {
   watchMedia(DARK_QUERY, systemPrefersDark);
   watchMedia(REDUCED_MOTION_QUERY, reducedMotion);
@@ -100,32 +80,21 @@ export function setThemeMode(next: ThemeMode): void {
   mode.value = next;
 }
 
-/** Sets the accent colour, falling back to the default for anything unparseable. */
 export function setAccentColor(next: string): void {
   accent.value = normalizeHex(next);
 }
 
-/** The composition-API view of the theme. */
 export interface UseTheme {
-  /** The user's choice: system, light or dark. */
   readonly mode: Readonly<Ref<ThemeMode>>;
-  /** The mode actually in effect, after the system preference is applied. */
   readonly effective: ComputedRef<EffectiveTheme>;
-  /** The accent colour the palette is generated from. */
   readonly accent: Readonly<Ref<string>>;
-  /** The palette currently painted, for the places that need a resolved colour. */
   readonly scheme: ComputedRef<ColorScheme>;
-  /** Curated accents offered in settings. */
   readonly presets: readonly { readonly id: string; readonly hex: string }[];
-  /** Whether the operating system asks for reduced motion. */
   readonly reducedMotion: Readonly<Ref<boolean>>;
-  /** Sets the theme mode; persisting it is the settings store's job. */
   readonly setMode: (mode: ThemeMode) => void;
-  /** Sets the accent colour; persisting it is the settings store's job. */
   readonly setAccent: (hex: string) => void;
 }
 
-/** The composition-API view of the theme. */
 export function useTheme(): UseTheme {
   return {
     mode: readonly(mode),

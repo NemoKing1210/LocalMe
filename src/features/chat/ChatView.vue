@@ -1,15 +1,4 @@
 <script setup lang="ts">
-/**
- * The conversation page.
- *
- * The address is the state: `/chat/<device id>` opens that conversation and `/chat` is the
- * placeholder, so this component owns neither the selection nor the way back — it reads the
- * route, and navigating is what changes what is on screen. The peer itself still comes from the
- * store, because the store is where the host's view of the peer lives.
- *
- * What is left here is the header — which has to say something true about presence, and presence
- * is three facts, not one — and the two host calls the pane can fail on.
- */
 import { computed, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 
@@ -39,7 +28,6 @@ const now = useNow();
 
 const wide = useMediaQuery(TWO_PANE_QUERY);
 
-/** The conversation named by the address, if it names one. */
 const peerId = computed<string | null>(() => {
   const id = route.params['deviceId'];
   return typeof id === 'string' && id.length > 0 ? id : null;
@@ -47,15 +35,8 @@ const peerId = computed<string | null>(() => {
 
 const peer = computed(() => (peerId.value === null ? null : (peers.get(peerId.value) ?? null)));
 
-/** Whether a way back to the list is needed, which a one-pane window is. */
 const showBack = computed<boolean>(() => !wide.value);
 
-/**
- * Presence, as one line.
- *
- * Online is the only state worth reporting positively; off it is the last time we saw them in
- * our own clock, or the fact that we never have.
- */
 const subtitle = computed<string>(() => {
   const current = peer.value;
   if (current === null) return '';
@@ -64,9 +45,8 @@ const subtitle = computed<string>(() => {
   return i18n.t('users.lastSeen', { relative: i18n.relative(current.lastSeenMs, now.value) });
 });
 
-// Opening a conversation is two things at once: load its history, and tell the host which chat
-// is on screen — that is the difference between "you are already reading this" and "raise a
-// notification". One watcher, so the two cannot disagree.
+// One watcher for both: `setActiveChat` tells the host which chat is on screen, which must not
+// disagree with the history load.
 watch(
   peerId,
   (deviceId) => {
@@ -76,9 +56,6 @@ watch(
   { immediate: true },
 );
 
-// A conversation that no longer exists — forgotten, or removed while the window was in the
-// tray — sends the user back to the list rather than leaving the placeholder on screen with a
-// device id in the address bar.
 watch(peer, (current) => {
   if (peerId.value !== null && current === null) void router.replace({ name: ROUTE.chat });
 });

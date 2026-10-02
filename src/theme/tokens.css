@@ -1,27 +1,4 @@
-/*
- * Material 3 design tokens.
- *
- * Everything visual in this application is expressed through these custom properties, so a
- * component stylesheet never contains a raw colour, size or duration. Three groups live here:
- *
- *  1. Colour *fallbacks* — the M3 baseline palette, matching `DEFAULT_ACCENT`. The real
- *     values are computed at runtime from the chosen accent and written onto `:root` (see
- *     `useTheme.ts`); these are what the first paint uses before that runs, and what the
- *     application renders with if the palette generator were ever unavailable.
- *  2. Typography, shape, elevation, motion and state-layer tokens — static facts of the
- *     spec, not derived from anything.
- *  3. A few structural variables of this application: the width at which the layout becomes
- *     two panes, and the row heights the virtualised lists measure against.
- *
- * Font family: the system UI stack rather than a downloaded webfont. Typography is the one
- * part of M3 that cannot be expressed with custom properties alone (the spec's font is
- * Roboto, which would be a second network-and-bundle cost for a desktop application that
- * already has a native-looking UI font), so the platform's own UI font is used and the
- * metric tokens below reproduce the M3 scale with it.
- */
-
 :root {
-  /* ---- Colour fallbacks: M3 baseline light ---- */
   --md-sys-color-primary: #6750a4;
   --md-sys-color-on-primary: #ffffff;
   --md-sys-color-primary-container: #eaddff;
@@ -71,7 +48,6 @@
 
   color-scheme: light;
 
-  /* ---- Typography ---- */
   --md-sys-typescale-font-family:
     system-ui, -apple-system, 'Segoe UI Variable Text', 'Segoe UI', Roboto, 'Helvetica Neue',
     'Noto Sans', 'Liberation Sans', sans-serif;
@@ -153,7 +129,6 @@
   --md-sys-typescale-label-small-weight: 500;
   --md-sys-typescale-label-small-tracking: 0.03125rem;
 
-  /* ---- Shape ---- */
   --md-sys-shape-corner-none: 0;
   --md-sys-shape-corner-extra-small: 4px;
   --md-sys-shape-corner-small: 8px;
@@ -162,7 +137,6 @@
   --md-sys-shape-corner-extra-large: 28px;
   --md-sys-shape-corner-full: 9999px;
 
-  /* ---- Elevation (M3 shadow levels, plus the surface tint that accompanies them) ---- */
   --md-sys-elevation-level0: none;
   --md-sys-elevation-level1: 0 1px 2px 0 rgb(0 0 0 / 30%), 0 1px 3px 1px rgb(0 0 0 / 15%);
   --md-sys-elevation-level2: 0 1px 2px 0 rgb(0 0 0 / 30%), 0 2px 6px 2px rgb(0 0 0 / 15%);
@@ -170,14 +144,12 @@
   --md-sys-elevation-level4: 0 6px 10px 4px rgb(0 0 0 / 15%), 0 2px 3px 0 rgb(0 0 0 / 30%);
   --md-sys-elevation-level5: 0 8px 12px 6px rgb(0 0 0 / 15%), 0 4px 4px 0 rgb(0 0 0 / 30%);
 
-  /* ---- State layers ---- */
   --md-sys-state-hover-opacity: 0.08;
   --md-sys-state-focus-opacity: 0.1;
   --md-sys-state-pressed-opacity: 0.1;
   --md-sys-state-dragged-opacity: 0.16;
   --md-sys-state-disabled-opacity: 0.38;
 
-  /* ---- Motion ---- */
   --md-sys-motion-duration-short1: 50ms;
   --md-sys-motion-duration-short2: 100ms;
   --md-sys-motion-duration-short3: 150ms;
@@ -191,7 +163,6 @@
   --md-sys-motion-duration-long3: 550ms;
   --md-sys-motion-duration-long4: 600ms;
 
-  /* The emphasized set is Material 3 Expressive's; the standard set is the classic one. */
   --md-sys-motion-easing-linear: cubic-bezier(0, 0, 1, 1);
   --md-sys-motion-easing-standard: cubic-bezier(0.2, 0, 0, 1);
   --md-sys-motion-easing-standard-accelerate: cubic-bezier(0.3, 0, 1, 1);
@@ -200,7 +171,6 @@
   --md-sys-motion-easing-emphasized-accelerate: cubic-bezier(0.3, 0, 0.8, 0.15);
   --md-sys-motion-easing-emphasized-decelerate: cubic-bezier(0.05, 0.7, 0.1, 1);
 
-  /* ---- Application structure ---- */
   /* Below this width the layout shows one pane at a time instead of list + chat. */
   --localme-breakpoint-two-pane: 720px;
   --localme-list-width: 320px;
@@ -210,7 +180,6 @@
 }
 
 :root[data-theme='dark'] {
-  /* ---- Colour fallbacks: M3 baseline dark ---- */
   --md-sys-color-primary: #d0bcff;
   --md-sys-color-on-primary: #381e72;
   --md-sys-color-primary-container: #4f378b;
@@ -261,14 +230,6 @@
   color-scheme: dark;
 }
 
-/*
- * Reduced motion.
- *
- * Zeroing the durations rather than the transitions keeps every state change correct — a
- * component that animates in still ends up in its final state — while removing the motion.
- * `App.vue` reads the same preference through `matchMedia`, so components can use their own
- * checks where a zero duration would be wrong (a progress spinner, for instance).
- */
 @media (prefers-reduced-motion: reduce) {
   :root {
     --md-sys-motion-duration-short1: 0ms;

@@ -1,62 +1,40 @@
-//! The error shape crossing the IPC boundary.
-//!
-//! Tauri serialises a command's `Err` value into the rejection the front end receives, so
-//! this type *is* part of the public API. It is a tagged enum rather than a string because
-//! the front end needs to react differently to "this peer is offline" (disable the composer,
-//! explain why) and to "storage failed" (offer to report it) — and because a message the
-//! user can act on has to be written per code, in their language, not by the Rust layer.
+//! The error shape crossing the IPC boundary: a tagged enum, serialised into the rejection the
+//! front end receives, so the variant tags are part of the front end's API.
 
 use localme_core::CoreError;
 use serde::Serialize;
 
-/// A failure returned from an IPC command.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ApiError {
-    /// The caller supplied something invalid: a nickname, a message body, an identifier.
     InvalidInput {
-        /// Which field was rejected.
         field: String,
-        /// Human-readable detail, in English, for logs and developer tooling.
         message: String,
     },
-    /// No peer with that device id is known to this installation.
     UnknownPeer {
-        /// The identifier that was not found.
         device_id: String,
     },
-    /// The peer exists but cannot be written to right now.
     PeerOffline {
-        /// The identifier of the unreachable peer.
         device_id: String,
     },
-    /// The local database refused an operation.
     Storage {
-        /// Underlying detail.
         message: String,
     },
-    /// Discovery could not start or was interrupted.
     Discovery {
-        /// Underlying detail.
         message: String,
     },
-    /// A network operation failed.
     Network {
-        /// Underlying detail.
         message: String,
     },
-    /// The application is shutting down and cannot accept new work.
     ShuttingDown,
-    /// A bug or an unexpected environment condition. The front end shows a generic message
-    /// and offers the log location; the detail is for the log, not for the user.
+    /// A bug or unexpected environment condition; the front end shows a generic message, so the
+    /// detail is for the log, not the user.
     Internal {
-        /// Underlying detail.
         message: String,
     },
 }
 
 impl ApiError {
-    /// Builds an input error for a named field.
     pub fn invalid_input(field: impl Into<String>, message: impl std::fmt::Display) -> Self {
         Self::InvalidInput {
             field: field.into(),
@@ -136,8 +114,7 @@ mod tests {
 
     #[test]
     fn rejections_serialise_with_a_kind_tag() {
-        // This is the exact shape the front end receives as a command rejection, so the
-        // front end can switch on `kind` rather than parse a message string.
+        // The wire shape the front end receives as a rejection; it switches on `kind`.
         let error = ApiError::PeerOffline {
             device_id: "abc".to_owned(),
         };

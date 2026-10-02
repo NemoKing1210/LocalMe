@@ -1,10 +1,7 @@
 //! The listening socket.
 //!
-//! Binding is deliberately forgiving. A fixed port is what makes the Windows firewall prompt
-//! a one-time event with a stable rule, so it is tried first; if it is taken — another
-//! instance that failed to be caught by the single-instance guard, a stale process — an
-//! ephemeral port is used instead and advertised through discovery, so a port conflict
-//! degrades to "still works" rather than "does not start".
+//! A fixed port makes the firewall prompt a one-time event with a stable rule, so it is
+//! tried first; if it is taken, an ephemeral port is used and advertised through discovery.
 
 use std::net::SocketAddr;
 
@@ -12,12 +9,10 @@ use tokio::net::{TcpListener, TcpStream};
 
 use crate::error::TransportError;
 
-/// A bound listening socket.
 #[derive(Debug)]
 pub struct Listener {
     inner: TcpListener,
     port: u16,
-    /// Whether we had to fall back to an ephemeral port.
     ephemeral: bool,
 }
 
@@ -26,8 +21,7 @@ impl Listener {
     ///
     /// # Errors
     ///
-    /// Returns [`TransportError::Io`] only if even an ephemeral bind fails, which means the
-    /// machine has no usable IP stack for this application.
+    /// [`TransportError::Io`] only if even the ephemeral bind fails.
     pub async fn bind(preferred_port: u16) -> Result<Self, TransportError> {
         match TcpListener::bind(("0.0.0.0", preferred_port)).await {
             Ok(inner) => {
@@ -65,7 +59,6 @@ impl Listener {
         self.port
     }
 
-    /// Whether the preferred port was unavailable.
     #[must_use]
     pub fn is_ephemeral(&self) -> bool {
         self.ephemeral
@@ -75,9 +68,8 @@ impl Listener {
     ///
     /// # Errors
     ///
-    /// Returns [`TransportError::Io`] if the accept call itself fails. Per-connection errors
-    /// are the connection task's problem, not the accept loop's: one bad client must not stop
-    /// the listener.
+    /// [`TransportError::Io`] if the accept call itself fails. Per-connection errors are the
+    /// connection task's problem: one bad client must not stop the listener.
     pub async fn accept(&self) -> Result<(TcpStream, SocketAddr), TransportError> {
         let (stream, address) = self.inner.accept().await?;
         Ok((stream, address))

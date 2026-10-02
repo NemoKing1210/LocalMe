@@ -1,15 +1,4 @@
 <script setup lang="ts">
-/**
- * The settings screen.
- *
- * One screen, six groups of cards, and one rule: the host owns every value. Nothing here keeps
- * a copy of a setting, so a rejected write leaves the screen showing what is actually stored
- * rather than what was attempted — which is why the profile nickname is the one field with a
- * local error of its own, and why the settings store is written through rather than assigned.
- *
- * The two lists on this screen (known devices, diagnostics) are the only state the view loads
- * itself, because neither is part of the settings document.
- */
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 
@@ -80,13 +69,8 @@ const themeOptions = computed<
   { value: 'dark', label: i18n.t('settings.themeDark'), icon: 'moon' },
 ]);
 
-/**
- * The nickname field's error, bound as a whole prop object.
- *
- * `MdTextField` declares `errorText` without `| undefined`, and this project compiles with
- * `exactOptionalPropertyTypes`, so a possibly-undefined value is a type error even though "no
- * error" is exactly what it means.
- */
+// `exactOptionalPropertyTypes`: a possibly-undefined value is a type error for a prop declared
+// without `| undefined`.
 const nicknameFieldProps = computed(() => {
   const error = nicknameError.value;
   return error === undefined ? {} : { errorText: error };
@@ -101,12 +85,7 @@ const versionLine = computed<string | null>(() => {
   return info === null ? null : i18n.t('settings.aboutVersion', { version: info.version });
 });
 
-/**
- * The diagnostics block, labelled with the field names the host uses.
- *
- * They are not translated on purpose: this is the block a user copies into a bug report to
- * match what the Rust side logs, and a translated field name would not match anything.
- */
+// Labels are the host's field names, not translated: they must match what the Rust side logs.
 const diagnosticsRows = computed<readonly { readonly label: string; readonly value: string }[]>(
   () => {
     const info = diagnostics.value;
@@ -130,7 +109,6 @@ const logRetentionOptions = computed<readonly { readonly value: string; readonly
   () => LOG_RETENTION_PRESETS.map((days) => ({ value: `${days}`, label: i18n.days(days) })),
 );
 
-/** The line under the folder path: how many files there are and how much room they take. */
 const logSummary = computed<string>(() => {
   const info = logs.value;
   if (info === null) return '';
@@ -157,17 +135,13 @@ function isActiveAccent(hex: string): boolean {
   return hex.toLowerCase() === settings.accent.toLowerCase();
 }
 
-/** Leaves the page the way it was entered. */
 function close(): void {
-  // `back()` when the user arrived from inside the application, which restores the conversation
-  // they were reading; the chat page when the address was opened directly, where going back
-  // would leave the window on nothing.
+  // `back()` only when the user arrived from inside the app; a directly-opened address replaces.
   const previous = router.options.history.state['back'];
   if (typeof previous === 'string' && previous.length > 0) router.back();
   else void router.replace({ name: ROUTE.chat });
 }
 
-/** Sends one change to the host and reports the failure in the language of the interface. */
 async function persist(patch: (current: Settings) => Settings): Promise<void> {
   try {
     await settings.save(patch);
@@ -206,12 +180,7 @@ async function loadDiagnostics(): Promise<void> {
   }
 }
 
-/**
- * Reads the log directory.
- *
- * The host is the only side that knows the path and the sizes, so this is reloaded after every
- * change that can move them — opening the group, and deleting the files.
- */
+// The host owns the path and sizes, so this is reloaded after any change that can move them.
 async function loadLogs(): Promise<void> {
   try {
     logs.value = await ipc.logsInfo();
@@ -249,7 +218,6 @@ async function openLogFolder(): Promise<void> {
   }
 }
 
-/** Deletes the files, then re-reads the directory so the summary cannot claim they are there. */
 async function clearLogs(): Promise<void> {
   confirmClearLogs.value = false;
   try {
@@ -262,7 +230,7 @@ async function clearLogs(): Promise<void> {
   }
 }
 
-/** Commits the nickname; the host validates it, and its refusal is shown on the field. */
+// The host validates the nickname; its refusal is shown on the field.
 async function commitNickname(): Promise<void> {
   const value = nickname.value.trim();
   const current = profile.value;
@@ -280,7 +248,6 @@ async function commitNickname(): Promise<void> {
   }
 }
 
-/** Lets a forgotten device back into the list. */
 async function restoreDevice(deviceId: string): Promise<void> {
   try {
     await ipc.restorePeer(deviceId);
@@ -291,13 +258,11 @@ async function restoreDevice(deviceId: string): Promise<void> {
   }
 }
 
-/** Deletes every stored message, after the confirmation dialog has said so twice. */
 async function clearHistory(): Promise<void> {
   confirmClear.value = false;
   try {
     const count = await ipc.clearHistory();
-    // The rows are gone from the database, so the open conversation has to be reloaded from it:
-    // leaving the deleted messages on screen would say the opposite of what just happened.
+    // Reload the open conversation: the rows are gone from the database.
     await chat.open(peers.selectedId);
     ui.notify('settings.historyCleared', { count });
     await loadDevices();
@@ -366,7 +331,6 @@ function setCloseToTray(value: boolean): void {
   void persist((current) => ({ ...current, system: { ...current.system, closeToTray: value } }));
 }
 
-/** What a known-device row says under the name: whether it is known, and when we last saw it. */
 function deviceSupporting(device: KnownDevice): string {
   const status = device.forgotten
     ? i18n.t('settings.deviceForgotten')
@@ -788,7 +752,6 @@ onMounted(() => {
   min-width: 0;
 }
 
-/* Field/value rows: the device id, and the diagnostics block. */
 .settings__pairs {
   display: grid;
   grid-template-columns: minmax(0, auto) minmax(0, 1fr);
@@ -860,7 +823,6 @@ onMounted(() => {
   flex-wrap: wrap;
 }
 
-/* The one destructive action on the screen, and the only place the error role is a button. */
 .settings__card :deep(.settings__clear) {
   color: var(--md-sys-color-error);
 }

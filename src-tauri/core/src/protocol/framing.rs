@@ -6,19 +6,12 @@
 //! └────────────────┴───────────────────────────────┘
 //! ```
 //!
-//! [`FrameDecoder`] is a small explicit state machine rather than a combinator: the two
-//! properties that matter here — never allocating for a length a peer merely claimed, and
-//! reporting a malformed length instead of stalling — are both statements about how the
-//! buffer is allowed to grow, and they are easier to verify when the buffer logic is visible.
+//! [`FrameDecoder`] never allocates for a length a peer merely claimed, and reports a malformed
+//! length instead of stalling.
 
 use crate::error::ProtocolError;
 use crate::protocol::limits::{LENGTH_PREFIX_BYTES, MAX_FRAME_BYTES};
 
-/// Prefixes a payload with its big-endian length.
-///
-/// The payload must be a frame body returned by [`crate::protocol::encode`], which has
-/// already checked the size; the assertion is repeated here for direct callers.
-///
 /// # Errors
 ///
 /// Returns [`ProtocolError::FrameSize`] for an empty or oversized payload.
@@ -41,43 +34,34 @@ pub fn encode_frame(payload: &[u8]) -> Result<Vec<u8>, ProtocolError> {
 
 /// Incremental decoder: feed it bytes, pull whole frames out.
 ///
-/// The buffer never holds more than one frame plus a partial prefix:
-///
-/// * a declared length outside `1..=MAX_FRAME_BYTES` fails immediately, so a four-byte
-///   header can never make us reserve gigabytes;
-/// * the buffer is only extended by bytes actually received;
-/// * a partial frame stays in the buffer across calls.
+/// The buffer never holds more than one frame plus a partial prefix, and a partial frame stays
+/// in the buffer across calls.
 #[derive(Debug, Default)]
 pub struct FrameDecoder {
     buffer: Vec<u8>,
 }
 
 impl FrameDecoder {
-    /// A decoder with an empty buffer.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Number of bytes buffered for the frame currently being assembled.
     #[must_use]
     pub fn buffered(&self) -> usize {
         self.buffer.len()
     }
 
-    /// Appends freshly received bytes.
-    ///
     /// # Errors
     ///
-    /// Returns [`ProtocolError::FrameSize`] if the declared length of the frame at the head
-    /// of the buffer is invalid, or if the buffer somehow exceeds what a valid frame plus
-    /// its prefix could occupy.
+    /// Returns [`ProtocolError::FrameSize`] if the declared length of the frame at the head of
+    /// the buffer is invalid, or if the buffer exceeds what a valid frame plus its prefix could
+    /// occupy.
     pub fn push(&mut self, bytes: &[u8]) -> Result<(), ProtocolError> {
         self.buffer.extend_from_slice(bytes);
 
-        // Validate the claimed length as soon as the prefix is complete: this is the point
-        // where a hostile peer would otherwise make us wait for a frame that can never be
-        // legal.
+        // Validate the claimed length as soon as the prefix is complete: this is where a
+        // hostile peer would otherwise make us wait for a frame that can never be legal.
         if let Some(prefix) = self.buffer.get(..LENGTH_PREFIX_BYTES) {
             let declared =
                 u32::from_be_bytes(prefix.try_into().map_err(|_| ProtocolError::FrameSize {
@@ -101,8 +85,6 @@ impl FrameDecoder {
         Ok(())
     }
 
-    /// Removes and returns the next complete frame body, if one is buffered.
-    ///
     /// # Errors
     ///
     /// Returns [`ProtocolError::FrameSize`] if the buffer's declared length became invalid,

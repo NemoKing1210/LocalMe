@@ -1,13 +1,5 @@
 //! Composite discovery: one event stream out of several sources.
-//!
-//! The sources are independent — each one owns its own I/O and pushes into its own channel —
-//! and a forwarding task merges them. Merging means two things:
-//!
-//! * a device seen by more than one source is reported once, and again only when the
-//!   addresses it can be dialled at actually change, so a peer that both mDNS and the beacon
-//!   find does not appear twice;
-//! * a device is reported lost only when the last source that had it says so, so losing the
-//!   mDNS answer for a peer that the beacon still hears is not a disconnection.
+//! A peer is reported once per distinct address set and lost only when the last source that had it says so.
 
 use std::collections::{BTreeSet, HashMap};
 use std::io;
@@ -20,33 +12,22 @@ use crate::domain::ids::DeviceId;
 use crate::error::DiscoveryError;
 use crate::ports::discovery::{DiscoveredPeer, Discovery, DiscoveryEvent};
 
-/// Capacity of the channel each source is fed through.
-///
-/// Small on purpose: an aggregator only has to absorb a burst of announcements, and back
-/// pressure on a source is better than unbounded memory.
+/// Small on purpose: back pressure on a source beats unbounded memory.
 const FEED_CAPACITY: usize = 64;
 
-/// Discovery over several sources at once.
-///
-/// Sources are started in order; a source that fails to start is logged and skipped, because
-/// a working mechanism is worth more than an all-or-nothing start.
+/// A source that fails to start is skipped rather than disabling the composite.
 pub struct CompositeDiscovery {
-    /// The sources, in the order they are started.
     sources: Vec<Box<dyn Discovery>>,
-    /// Our own device id, filtered here as a last line of defence before the session.
+    /// Own device id, filtered here as a last line of defence before the session.
     own_device_id: DeviceId,
-    /// The running tasks, or `None` when stopped.
     running: Mutex<Option<Running>>,
 }
 
-/// A started composite: the tasks that merge the sources.
 struct Running {
-    /// The per-source tagging tasks and the aggregator task.
     tasks: Vec<JoinHandle<()>>,
 }
 
 impl CompositeDiscovery {
-    /// Creates a composite over the given sources.
     #[must_use]
     pub fn new(sources: Vec<Box<dyn Discovery>>, own_device_id: DeviceId) -> Self {
         Self {
@@ -56,7 +37,7 @@ impl CompositeDiscovery {
         }
     }
 
-    /// Stops every source and the forwarding tasks. Safe to call more than once.
+    /// Safe to call more than once.
     fn shutdown(&self) {
         for source in &self.sources {
             source.stop();
@@ -83,9 +64,7 @@ impl Discovery for CompositeDiscovery {
             ))
         })?;
 
-        // Each source gets its own channel, because an event has to be attributed to the
-        // source that produced it for the de-duplication below; the tagging task forwards it
-        // onto one shared channel with that index attached.
+        // Each source needs its own channel so events can be attributed to their source for de-duplication.
         let (tagged, mut merged) = mpsc::channel::<(usize, DiscoveryEvent)>(FEED_CAPACITY);
         let mut tasks = Vec::with_capacity(self.sources.len() + 1);
 
@@ -140,35 +119,25 @@ impl Drop for CompositeDiscovery {
     }
 }
 
-/// A peer some sources have reported, and which of them still do.
 #[derive(Debug)]
 struct Tracked {
-    /// What the sources have to say about the peer; refreshed when the addresses change.
     peer: DiscoveredPeer,
-    /// The indices of the sources that currently have this peer.
     sources: BTreeSet<usize>,
 }
 
-/// Merges events from several sources into the stream one session should see.
-///
-/// This is the whole de-duplication policy, kept apart from the tasks that feed it so it can
-/// be reasoned about and tested on its own.
+/// Merges events from several sources into one de-duplicated stream.
 #[derive(Debug, Default)]
 struct Aggregator {
-    /// Every device currently believed to be present.
     live: HashMap<DeviceId, Tracked>,
 }
 
 impl Aggregator {
-    /// Applies one event from `source`, returning the event to forward, if any.
     fn apply(&mut self, source: usize, event: DiscoveryEvent) -> Option<DiscoveryEvent> {
         match event {
             DiscoveryEvent::Found(peer) => match self.live.get_mut(&peer.device_id) {
                 Some(tracked) => {
                     tracked.sources.insert(source);
                     if tracked.peer.addresses == peer.addresses {
-                        // A repeat from a source we already know, or the same peer seen by
-                        // another one: the session already has this peer this way.
                         None
                     } else {
                         tracked.peer = peer.clone();

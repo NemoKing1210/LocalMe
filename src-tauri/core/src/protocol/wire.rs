@@ -1,13 +1,8 @@
 //! Raw wire shapes.
 //!
-//! Everything here uses plain JSON-friendly types (`String`, `u16`, `u64`) so that the
-//! schema is exactly what the documentation describes, and so that malformed input fails in
-//! one predictable place. These types are never exposed outside [`super`]: the only way to
-//! obtain a [`Frame`](super::Frame) is [`WireFrame::into_frame`], which validates every
-//! field.
-//!
-//! Keeping a separate wire shape is what lets the envelope evolve (a field renamed in v2,
-//! a codec that is not JSON) without the domain types noticing.
+//! Plain JSON-friendly types so malformed input fails in one predictable place. Never exposed
+//! outside [`super`]: the only way to obtain a [`Frame`](super::Frame) is
+//! [`WireFrame::into_frame`], which validates every field.
 
 use serde::{Deserialize, Serialize};
 
@@ -23,76 +18,49 @@ use crate::protocol::{ErrorCode, Frame, GoodbyeReason};
 /// Serialised flat, so a heartbeat is exactly `{"v":1,"t":"heartbeat","seq":7}`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct WireFrame {
-    /// Protocol version.
     pub v: u16,
-    /// Tagged payload.
     #[serde(flatten)]
     pub payload: WirePayload,
 }
 
-/// The tagged payload.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "t", rename_all = "snake_case")]
 pub(super) enum WirePayload {
-    /// Opening frame from the dialer.
     Hello(WireHandshake),
-    /// The acceptor's reply.
     Welcome(WireHandshake),
-    /// Liveness probe.
     Heartbeat {
-        /// Counter.
         seq: u64,
     },
-    /// A chat message.
     Chat {
-        /// Message identifier.
         id: String,
-        /// Message text.
         body: String,
     },
-    /// Delivery confirmation.
     ChatAck {
-        /// Message identifier.
         id: String,
     },
-    /// Profile change.
     Profile {
-        /// New nickname.
         nickname: String,
-        /// New avatar seed.
         avatar_seed: String,
     },
-    /// Graceful close.
     Goodbye {
-        /// Reason string.
         reason: String,
     },
-    /// Protocol error.
     Error {
-        /// Machine-readable code.
         code: String,
-        /// Human-readable detail.
         message: String,
     },
 }
 
-/// Identity exchange.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct WireHandshake {
-    /// Stable device id.
     pub device_id: String,
-    /// Display name.
     pub nickname: String,
-    /// Avatar seed.
     pub avatar_seed: String,
-    /// Listening TCP port.
     pub listen_port: u16,
-    /// Protocol version.
     pub protocol_version: u16,
 }
 
 impl WireFrame {
-    /// Projects a validated frame onto its wire shape.
     pub(super) fn from_frame(frame: &Frame) -> Self {
         let payload = match frame {
             Frame::Hello(handshake) => WirePayload::Hello(WireHandshake::from_handshake(handshake)),
@@ -126,8 +94,6 @@ impl WireFrame {
         }
     }
 
-    /// Validates the wire shape into a frame.
-    ///
     /// # Errors
     ///
     /// Returns [`ProtocolError::Domain`] for structurally valid but semantically invalid

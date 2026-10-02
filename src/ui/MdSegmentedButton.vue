@@ -1,29 +1,15 @@
 <script setup lang="ts">
-/**
- * A Material 3 segmented button: one outlined pill split into single-select segments.
- *
- * Selection follows focus, which is what the M3 spec asks of a single-select segmented button
- * and what a tiny group of mutually exclusive options should do: arrowing right both moves the
- * focus and changes the choice, so a keyboard user needs one gesture per option rather than
- * two. That is the opposite of the radio-group behaviour elsewhere in this design system, and
- * the reason is the medium — a segmented button is a compact inline switch, not a form field.
- *
- * The segmented control is a single outlined shape, so the segments themselves are unrounded
- * and the container clips them with `overflow: hidden`. Drawing a pill per segment would leave
- * a visible seam down the middle where two arcs meet.
- *
- * The role is `radiogroup` rather than `tablist`: nothing here is a panel to switch between,
- * and a `tablist` promises a `tabpanel` that does not exist.
- */
+// Selection follows focus, as the M3 spec asks of a single-select segmented button — the opposite
+// of the radio-group behaviour elsewhere in this design system.
+//
+// The segments are unrounded and the container clips them, so two arcs do not meet in a seam.
 import { ref } from 'vue';
 
 import MdIcon from './MdIcon.vue';
 import type { IconName } from './icons';
 
 const props = defineProps<{
-  /** The `value` of the selected option. */
   modelValue: string;
-  /** The segments, in order. */
   options: readonly {
     readonly value: string;
     readonly label: string;
@@ -35,7 +21,6 @@ const emit = defineEmits<{ 'update:modelValue': [value: string] }>();
 
 const group = ref<HTMLElement | null>(null);
 
-/** Moves the roving tab stop with the selection. */
 function focusSegment(value: string): void {
   const segments = group.value?.querySelectorAll<HTMLButtonElement>('[role="radio"]');
   if (!segments) return;

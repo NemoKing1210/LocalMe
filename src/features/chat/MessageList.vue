@@ -1,18 +1,4 @@
 <script setup lang="ts">
-/**
- * The message log.
- *
- * The virtualiser owns measurement and the translate transforms; everything else in this file
- * is the scroll policy, which is the part a chat log needs and a generic list does not:
- *
- *  * the log follows the tail, but only while the reader is already near it. A message that
- *    arrives while they are reading history must not drag the page out from under them;
- *  * "load earlier messages" sits above the log, and a page loaded there must not move the
- *    reader: a prepend shifts every position below it, so the offset is corrected once the list
- *    has grown rather than when it was asked for;
- *  * the day heading is drawn above the first message of its day and pinned to the top of the
- *    viewport while that day is on screen, from the same measurements the rows are placed with.
- */
 import { computed, nextTick, onMounted, ref, watch, type ComponentPublicInstance } from 'vue';
 import { useVirtualizer } from '@tanstack/vue-virtual';
 
@@ -26,7 +12,6 @@ import MessageBubble from './MessageBubble.vue';
 import MessageSkeleton from './MessageSkeleton.vue';
 
 defineProps<{
-  /** The conversation on screen. */
   peer: Peer;
 }>();
 
@@ -36,16 +21,13 @@ const chat = useChatStore();
 const i18n = useI18n();
 const now = useNow();
 
-/** One row of the log: a message, and where it sits among the days. */
 interface LogRow {
   readonly message: Message;
   /** Index into `days`. */
   readonly day: number;
-  /** Whether this message opens its day and therefore carries its heading. */
   readonly startsDay: boolean;
 }
 
-/** One local calendar day of messages. */
 interface LogDay {
   readonly first: number;
   readonly sentAt: number;
@@ -63,15 +45,9 @@ const OVERSCAN = 8;
 const scrollElement = ref<HTMLDivElement | null>(null);
 /** The scroll offset, tracked natively: the virtualiser only notifies when its window moves. */
 const scrollTop = ref(0);
-/** Whether the log is following the tail, which is what the "jump to latest" button negates. */
 const following = ref(true);
 
-/**
- * Timestamp first, identifier second.
- *
- * This is the total order the conversation is stored in and the one the rest of the application
- * speaks about it in, so the log is rendered in it whatever order the messages arrived in.
- */
+// Timestamp then id: the total order the conversation is stored in.
 function byTime(left: Message, right: Message): number {
   return left.sentAt === right.sentAt
     ? left.id.localeCompare(right.id)
@@ -114,19 +90,16 @@ const virtualizer = useVirtualizer(
 const virtualItems = computed(() => virtualizer.value.getVirtualItems());
 const totalSize = computed(() => virtualizer.value.getTotalSize());
 
-/** The rendered rows paired with their data, so the template never indexes twice. */
 const visible = computed(() =>
   virtualItems.value.map((item) => ({ item, row: rows.value[item.index] })),
 );
 
-/** Where each rendered row starts, by index: the day heading is positioned from these. */
 const rowStarts = computed<ReadonlyMap<number, number>>(() => {
   const starts = new Map<number, number>();
   for (const item of virtualItems.value) starts.set(item.index, item.start);
   return starts;
 });
 
-/** The day of the topmost row that is not hidden behind the top strip. */
 const activeDay = computed<LogDay | null>(() => {
   const top = scrollTop.value + TOP_STRIP_PX;
   for (const item of virtualItems.value) {
@@ -140,7 +113,7 @@ const dayHeading = computed<string | null>(() => {
   return day === null ? null : i18n.dayHeading(day.sentAt, now.value);
 });
 
-/** The heading sits above its day's first message until that scrolls past, then it pins. */
+// Pins to the top once the day's first message scrolls past.
 const dayOffset = computed(() => {
   const day = activeDay.value;
   if (day === null) return 0;
@@ -156,26 +129,16 @@ function measureRow(element: Element | ComponentPublicInstance | null): void {
 /** Where the reader was when they asked for an earlier page. */
 let prependMark: { readonly top: number; readonly height: number } | null = null;
 
-/**
- * Puts the end of the log at the bottom of the viewport.
- *
- * Written as "as far as the content goes" rather than as a computed offset: the tail of the
- * list is exactly the part whose height is still an estimate, so its offset is only knowable
- * from the browser. The call is idempotent, which is what makes it safe to repeat.
- */
+// "As far as the content goes" rather than a computed offset: the tail's height is still an
+// estimate. Idempotent, so it is safe to repeat.
 function pinToEnd(): void {
   const element = scrollElement.value;
   if (element === null) return;
   element.scrollTop = element.scrollHeight;
 }
 
-/**
- * Keeps the reader on the message they were reading after a page is prepended above it.
- *
- * A prepend shifts every offset below it, and the correction can only be made once the DOM has
- * grown: written before that, it is clamped to the old scroll range and the view jumps to the
- * newly loaded page instead of staying put.
- */
+// A prepend shifts every offset below it; the correction must wait for the DOM to grow, or it
+// is clamped to the old scroll range and the view jumps to the new page.
 function restoreAfterPrepend(): void {
   const mark = prependMark;
   prependMark = null;
@@ -187,20 +150,14 @@ function restoreAfterPrepend(): void {
   });
 }
 
-/** Asks for the page above, remembering where the reader was first. */
 function loadOlder(): void {
   const element = scrollElement.value;
   prependMark = element === null ? null : { top: element.scrollTop, height: element.scrollHeight };
   emit('loadOlder');
 }
 
-/**
- * Whether the log sits close enough to its end that a change to it should keep it there.
- *
- * Measured on the element rather than from the list's own idea of its height: the two are one
- * render apart while a message is being laid out, and the element is what the reader sees —
- * and what the "step to the end" below leaves exactly at zero.
- */
+// Measured on the element, not the list's own height: the two are one render apart while a
+// message is being laid out.
 function atEnd(element: HTMLDivElement): boolean {
   return element.scrollHeight - element.scrollTop - element.clientHeight <= FOLLOW_THRESHOLD_PX;
 }
@@ -212,23 +169,18 @@ function onScroll(): void {
   following.value = atEnd(element);
 }
 
-/** Re-engages the tail and goes there; the whole point of the button that calls it. */
 function jumpToLatest(): void {
   following.value = true;
   pinToEnd();
 }
 
-/** The oldest loaded message, which is how a page loaded at the top is recognised. */
 let oldestId: string | null = null;
 
 watch(
   () => chat.messages,
   (next) => {
-    /*
-     * Where the reader is is read here, before the list has grown to fit the new messages: a
-     * new message must follow the tail only if the tail was in view when it arrived, and a
-     * scroll event that has not been delivered yet would answer that question too late.
-     */
+    // Read before the list grows: a pending scroll event would answer "was the tail in view?"
+    // too late.
     const element = scrollElement.value;
     if (element !== null) following.value = atEnd(element);
 
@@ -237,24 +189,18 @@ watch(
     oldestId = old;
 
     if (next.length === 0) {
-      // The conversation was closed or replaced: the next one starts at its tail.
       following.value = true;
       prependMark = null;
       return;
     }
-    // A page that arrived above the reader is the one change that must not move them; a
-    // message that arrives below them is handled by following the tail.
+    // A page prepended above must not move the reader; an arriving message is handled by
+    // following the tail.
     if (moved) restoreAfterPrepend();
   },
 );
 
-/*
- * Following the tail is a reaction to the list's height, not to the arrival of a message.
- * Every row that is measured moves the end of the log, so a single scroll when a message
- * arrives lands short of the bottom — and doing this per change is also what keeps the tail in
- * view while the first page is still settling. Nothing happens once the reader has scrolled
- * away, which is the whole point of the flag.
- */
+// Follows the tail on every height change, not per message: each measured row moves the end, so
+// a single scroll on arrival lands short of the bottom.
 watch(
   totalSize,
   () => {

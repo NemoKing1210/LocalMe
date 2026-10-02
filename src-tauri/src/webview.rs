@@ -1,16 +1,8 @@
-//! The one piece of WebView policy that the page cannot express.
-//!
-//! WebView2 ships Microsoft Edge's *general* autofill switched on, and general autofill is not a
-//! form feature: it is the browser offering saved names, addresses and phone numbers for any text
-//! field it thinks it recognises. There is no attribute, header or CSP directive that turns it
-//! off, so focusing the search box of a local-network messenger could surface a "saved info"
-//! dropdown with details that have nothing to do with this application. The documented switch is
-//! WebView2's own settings object, which is what this module reaches for. (Password and payment
-//! autofill are already off in WebView2 by default.)
-//!
-//! It runs once, from `setup`, where the window declared in `tauri.conf.json` already exists.
+//! WebView2's saved-info autofill has no attribute, header or CSP switch, so it is turned off
+//! through the settings object; otherwise a local-network messenger's text fields could offer
+//! saved names, addresses and phone numbers. It runs once, from `setup`.
 
-/// Turns off the web view's saved-info autofill for the main window.
+/// Turns off saved-info autofill for the main window's web view.
 #[cfg(windows)]
 pub fn disable_saved_info<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     use tauri::Manager;
@@ -48,7 +40,6 @@ pub fn disable_saved_info<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     }
 }
 
-/// Nothing to do away from Windows: WebView2 is the only engine used here that has a saved-info
-/// autofill to disable.
+/// Not needed away from Windows: WebView2 is the only engine with saved-info autofill.
 #[cfg(not(windows))]
 pub fn disable_saved_info<R: tauri::Runtime>(_app: &tauri::AppHandle<R>) {}

@@ -1,11 +1,3 @@
-/**
- * Formatting tests.
- *
- * Everything here that a user can see is produced by `Intl`, so the tests are about the
- * *selection* logic around it — which unit is chosen, where the boundaries sit, and that a day
- * separator says "Today" only for today. Those are the parts written by hand, and they are the
- * parts that silently produce "0 minutes ago" or an off-by-one day when they are wrong.
- */
 import { describe, expect, it } from 'vitest';
 
 import { byteUnit, dayKey, formatClockTime, formatDayHeading, formatRelativeTime } from './format';
@@ -15,7 +7,6 @@ const MINUTE = 60 * SECOND;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
 
-/** A fixed "now" so the assertions do not depend on when the suite runs. */
 const NOW = new Date('2026-03-15T12:00:00Z').getTime();
 
 describe('formatRelativeTime', () => {
