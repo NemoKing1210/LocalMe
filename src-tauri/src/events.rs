@@ -16,6 +16,8 @@ const SNAPSHOT_EVENT: &str = "state_snapshot";
 
 const OPEN_CHAT_EVENT: &str = "open_chat";
 
+const OPEN_SETTINGS_EVENT: &str = "open_settings";
+
 pub fn spawn_forwarder<R: Runtime>(app: &AppHandle<R>) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -59,6 +61,18 @@ fn handle<R: Runtime>(app: &AppHandle<R>, state: &Arc<AppState>, event: CoreEven
         CoreEvent::Peers { peers } => {
             let unread: u32 = peers.iter().map(|peer| peer.unread).sum();
             state.unread.store(unread, Ordering::Relaxed);
+            // The tray is drawn outside the web view, so it keeps its own copy of the list and
+            // stays usable while the window is hidden.
+            state.set_peers(
+                peers
+                    .iter()
+                    .map(|peer| state::TrayPeer {
+                        device_id: peer.device_id,
+                        nickname: peer.nickname.as_str().to_owned(),
+                        unread: peer.unread,
+                    })
+                    .collect(),
+            );
             tray::refresh(app, state);
             window::refresh_title(app, unread);
         }
@@ -142,5 +156,13 @@ pub fn emit_snapshot<R: Runtime>(app: &AppHandle<R>) {
 pub fn emit_open_chat<R: Runtime>(app: &AppHandle<R>, peer: DeviceId) {
     if let Err(error) = app.emit(OPEN_CHAT_EVENT, peer.to_string()) {
         tracing::debug!(%error, "the open-chat request could not be delivered");
+    }
+}
+
+/// Raised by the tray's Settings item, after the window has been shown: the router owns which
+/// page is on screen, so the host asks for one rather than setting a flag.
+pub fn emit_open_settings<R: Runtime>(app: &AppHandle<R>) {
+    if let Err(error) = app.emit(OPEN_SETTINGS_EVENT, ()) {
+        tracing::debug!(%error, "the open-settings request could not be delivered");
     }
 }

@@ -641,8 +641,14 @@ variant the front end subscribes to.
   the window is hidden and the app keeps running. When the setting is off, close quits.
 * **Autostart** — `tauri-plugin-autostart`, launched with `--minimized` when "start minimised
   in tray" is enabled; the flag is parsed at startup to decide whether to show the window.
-* **Tray** — `TrayIconBuilder` with a menu (Open, Disable notifications, Quit) and a tooltip
-  carrying the unread count. The unread indication is the tooltip plus the window title
+* **Tray** — `TrayIconBuilder` with a menu rebuilt on every change: a status line with the unread
+  count, Open, a Conversations submenu (the recent conversations, each carrying its unread count,
+  plus "All conversations"), Mark all as read, checked switches for notifications, close-to-tray
+  and autostart, Settings, Open logs folder and Quit. The submenu opens the conversation it names
+  by raising the window and emitting `open_chat`; Settings does the same with `open_settings`, so
+  the router — not a host flag — decides the page. The host keeps a copy of the peer list (id,
+  nickname, unread) beside the settings document, which is what lets the menu be rebuilt while
+  the window is hidden. The unread indication is also the tooltip and the window title
   (`LocalMe (3)`), because per-platform tray *badges* (macOS `NSApplication.dockTile`, Windows
   overlay icons) are not exposed by Tauri 2 in a way that works identically on Linux. Left click
   raises the window; the menu is on the right button.

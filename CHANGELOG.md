@@ -5,6 +5,23 @@ All notable changes to LocalMe are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-10-02
+
+### Added
+
+- The tray menu is now a status view of the messenger: it shows the unread count and a
+  Conversations submenu listing the recent conversations that are waiting, and opens the one
+  you pick
+- The tray can mark every conversation as read, open the settings screen, and open the log
+  folder
+- Notifications, close-to-tray and start-with-the-system can be switched from the tray; each
+  shows a check mark for its current state and stays in sync with the settings screen
+
+### Changed
+
+- The tray's notification entry is now a checked "Notifications" switch instead of a text that
+  said "Pause notifications" or "Resume notifications"
+
 ## [0.7.2] - 2026-10-02
 
 ### Changed

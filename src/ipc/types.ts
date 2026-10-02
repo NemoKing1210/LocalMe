@@ -136,12 +136,18 @@ export interface LogsInfo {
 export interface UiLabels {
   appName: string;
   open: string;
-  mute: string;
-  unmute: string;
   quit: string;
   tooltipIdle: string;
   tooltipUnread: string;
   newMessage: string;
+  conversations: string;
+  allConversations: string;
+  markAllRead: string;
+  notifications: string;
+  closeToTray: string;
+  autostart: string;
+  settings: string;
+  openLogs: string;
 }
 
 export type ApiError =
@@ -175,6 +181,7 @@ export interface CoreEventMap {
   settings_changed: Settings;
   state_snapshot: { readonly peers: readonly Peer[]; readonly settings: Settings };
   open_chat: DeviceId;
+  open_settings: null;
   onboarding_complete: null;
 }
 

@@ -1,7 +1,7 @@
 {
   "name": "localme",
   "private": true,
-  "version": "0.7.2",
+  "version": "0.8.0",
   "type": "module",
   "description": "LocalMe — a zero-configuration messenger for the local network, built with Tauri 2, Rust and Vue 3.",
   "license": "MIT",

@@ -49,6 +49,10 @@ export async function connectCoreEvents(): Promise<() => void> {
       void router.replace({ name: ROUTE.chat, params: { deviceId } });
     }),
 
+    onCoreEvent('open_settings', () => {
+      void router.replace({ name: ROUTE.settings });
+    }),
+
     onCoreEvent('notice', (payload) => {
       if (payload.level === 'error') ui.fail('error.internal');
     }),

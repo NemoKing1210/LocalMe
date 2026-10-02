@@ -17,13 +17,19 @@ use tauri::Manager;
 pub struct UiLabels {
     pub app_name: String,
     pub open: String,
-    pub mute: String,
-    pub unmute: String,
     pub quit: String,
     pub tooltip_idle: String,
     /// `{count}` is replaced with the unread count.
     pub tooltip_unread: String,
     pub new_message: String,
+    pub conversations: String,
+    pub all_conversations: String,
+    pub mark_all_read: String,
+    pub notifications: String,
+    pub close_to_tray: String,
+    pub autostart: String,
+    pub settings: String,
+    pub open_logs: String,
 }
 
 impl Default for UiLabels {
@@ -32,12 +38,18 @@ impl Default for UiLabels {
         Self {
             app_name: "LocalMe".to_owned(),
             open: "Open LocalMe".to_owned(),
-            mute: "Pause notifications".to_owned(),
-            unmute: "Resume notifications".to_owned(),
             quit: "Quit LocalMe".to_owned(),
             tooltip_idle: "LocalMe — no unread messages".to_owned(),
             tooltip_unread: "LocalMe — {count} unread".to_owned(),
             new_message: "New message".to_owned(),
+            conversations: "Conversations".to_owned(),
+            all_conversations: "All conversations".to_owned(),
+            mark_all_read: "Mark all as read".to_owned(),
+            notifications: "Notifications".to_owned(),
+            close_to_tray: "Close to tray".to_owned(),
+            autostart: "Start with the system".to_owned(),
+            settings: "Settings…".to_owned(),
+            open_logs: "Open logs folder".to_owned(),
         }
     }
 }
@@ -61,11 +73,22 @@ impl UiLabels {
     }
 }
 
+/// One row of the tray's conversation list. Kept host-side so the menu can be rebuilt while the
+/// window is hidden, when no `state_snapshot` is being delivered to the interface.
+#[derive(Debug, Clone)]
+pub struct TrayPeer {
+    pub device_id: DeviceId,
+    pub nickname: String,
+    pub unread: u32,
+}
+
 /// Cached state so hot paths avoid the actors.
 #[derive(Debug)]
 pub struct Cached {
     /// The settings document as of the last change event.
     pub settings: Settings,
+    /// The conversation list as of the last `peers` event, newest activity first.
+    pub peers: Vec<TrayPeer>,
     /// Used to suppress a notification for the conversation already on screen.
     pub active_chat: Option<DeviceId>,
     /// The peer whose message produced the most recent notification.
@@ -104,6 +127,7 @@ impl AppState {
             core: Mutex::new(Some(core)),
             cached: RwLock::new(Cached {
                 settings,
+                peers: Vec::new(),
                 active_chat: None,
                 last_notified: None,
             }),
@@ -121,6 +145,20 @@ impl AppState {
             .read()
             .map(|cached| cached.settings.clone())
             .unwrap_or_default()
+    }
+
+    #[must_use]
+    pub fn peers_snapshot(&self) -> Vec<TrayPeer> {
+        self.cached
+            .read()
+            .map(|cached| cached.peers.clone())
+            .unwrap_or_default()
+    }
+
+    pub fn set_peers(&self, peers: Vec<TrayPeer>) {
+        if let Ok(mut cached) = self.cached.write() {
+            cached.peers = peers;
+        }
     }
 
     #[must_use]
