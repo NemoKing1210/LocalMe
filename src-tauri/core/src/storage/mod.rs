@@ -89,10 +89,20 @@ enum Request {
         status: MessageStatus,
         reply: Reply<()>,
     },
-    FailPendingMessages {
-        device_id: DeviceId,
-        reply: Reply<u32>,
+    MarkMessageDelivered {
+        id: MessageId,
+        delivered_at_ms: i64,
+        reply: Reply<()>,
     },
+    NextOutboxMessage {
+        device_id: DeviceId,
+        reply: Reply<Option<ChatMessage>>,
+    },
+    RequeuePendingMessages {
+        device_id: DeviceId,
+        reply: Reply<Vec<MessageId>>,
+    },
+    RequeueAllPending(Reply<u32>),
     HistoryPage {
         device_id: DeviceId,
         before: Option<HistoryCursor>,
@@ -289,8 +299,21 @@ fn dispatch(conn: &mut Connection, request: Request) {
         Request::SetMessageStatus { id, status, reply } => {
             let _ = reply.send(set_message_status(conn, id, status));
         }
-        Request::FailPendingMessages { device_id, reply } => {
-            let _ = reply.send(fail_pending_messages(conn, device_id));
+        Request::MarkMessageDelivered {
+            id,
+            delivered_at_ms,
+            reply,
+        } => {
+            let _ = reply.send(mark_message_delivered(conn, id, delivered_at_ms));
+        }
+        Request::NextOutboxMessage { device_id, reply } => {
+            let _ = reply.send(next_outbox_message(conn, device_id));
+        }
+        Request::RequeuePendingMessages { device_id, reply } => {
+            let _ = reply.send(requeue_pending_messages(conn, device_id));
+        }
+        Request::RequeueAllPending(reply) => {
+            let _ = reply.send(requeue_all_pending(conn));
         }
         Request::HistoryPage {
             device_id,
@@ -420,6 +443,11 @@ impl PeerRow {
     }
 }
 
+/// `messages` columns in the order [`MessageRow::read`] expects, shared by every query that
+/// builds a [`ChatMessage`] so a new column cannot be added to one and forgotten in another.
+const MESSAGE_COLUMNS: &str = "\
+  id, peer_id, outgoing, body, sent_at_ms, received_at_ms, delivered_at_ms, status, read";
+
 struct MessageRow {
     id: String,
     peer_id: String,
@@ -427,6 +455,7 @@ struct MessageRow {
     body: String,
     sent_at_ms: i64,
     received_at_ms: i64,
+    delivered_at_ms: Option<i64>,
     status: String,
     read: i64,
 }
@@ -440,8 +469,9 @@ impl MessageRow {
             body: row.get(3)?,
             sent_at_ms: row.get(4)?,
             received_at_ms: row.get(5)?,
-            status: row.get(6)?,
-            read: row.get(7)?,
+            delivered_at_ms: row.get(6)?,
+            status: row.get(7)?,
+            read: row.get(8)?,
         })
     }
 
@@ -458,6 +488,7 @@ impl MessageRow {
                 .map_err(|error| invalid_row(format!("message body: {error}")))?,
             sent_at: UnixMillis(self.sent_at_ms),
             received_at: UnixMillis(self.received_at_ms),
+            delivered_at: self.delivered_at_ms.map(UnixMillis),
             status: MessageStatus::from_db(&self.status)
                 .map_err(|error| invalid_row(format!("message status: {error}")))?,
             read: self.read != 0,
@@ -688,8 +719,8 @@ fn insert_message(conn: &mut Connection, message: &ChatMessage) -> Result<bool, 
     let tx = conn.transaction().map_err(sqlite_error)?;
     tx.execute(
         "INSERT OR IGNORE INTO messages \
-           (id, peer_id, outgoing, body, sent_at_ms, received_at_ms, status, read) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+           (id, peer_id, outgoing, body, sent_at_ms, received_at_ms, delivered_at_ms, status, read) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         params![
             message.id.to_string(),
             message.peer.to_string(),
@@ -697,6 +728,7 @@ fn insert_message(conn: &mut Connection, message: &ChatMessage) -> Result<bool, 
             message.body.as_str(),
             message.sent_at.as_i64(),
             message.received_at.as_i64(),
+            message.delivered_at.map(UnixMillis::as_i64),
             message.status.as_str(),
             i64::from(message.read)
         ],
@@ -728,12 +760,81 @@ fn set_message_status(
     Ok(())
 }
 
-fn fail_pending_messages(conn: &Connection, device_id: DeviceId) -> Result<u32, StorageError> {
+fn mark_message_delivered(
+    conn: &Connection,
+    id: MessageId,
+    delivered_at_ms: i64,
+) -> Result<(), StorageError> {
+    conn.execute(
+        "UPDATE messages SET status = 'delivered', delivered_at_ms = ?2 WHERE id = ?1",
+        params![id.to_string(), delivered_at_ms],
+    )
+    .map_err(sqlite_error)?;
+    Ok(())
+}
+
+/// The oldest message still waiting for its peer. `ORDER BY sent_at_ms, id` is the conversation
+/// order the interface draws, so the outbox is drained in exactly the order the messages appear.
+fn next_outbox_message(
+    conn: &Connection,
+    device_id: DeviceId,
+) -> Result<Option<ChatMessage>, StorageError> {
+    let row = conn
+        .query_row(
+            &format!(
+                "SELECT {MESSAGE_COLUMNS} FROM messages \
+                 WHERE peer_id = ?1 AND outgoing = 1 AND status = 'queued' \
+                 ORDER BY sent_at_ms, id LIMIT 1"
+            ),
+            params![device_id.to_string()],
+            MessageRow::read,
+        )
+        .optional()
+        .map_err(sqlite_error)?;
+    row.map(MessageRow::into_message).transpose()
+}
+
+/// The inverse of "written to a socket": everything in flight for a peer goes back to the
+/// outbox. The update and the read of the affected identifiers share one transaction so the
+/// session and the database cannot disagree about which rows are waiting.
+fn requeue_pending_messages(
+    conn: &mut Connection,
+    device_id: DeviceId,
+) -> Result<Vec<MessageId>, StorageError> {
+    let tx = conn.transaction().map_err(sqlite_error)?;
+    let ids = {
+        let mut stmt = tx
+            .prepare(
+                "SELECT id FROM messages \
+                 WHERE peer_id = ?1 AND outgoing = 1 AND status = 'sending'",
+            )
+            .map_err(sqlite_error)?;
+        let rows = stmt
+            .query_map(params![device_id.to_string()], |row| {
+                row.get::<_, String>(0)
+            })
+            .map_err(sqlite_error)?;
+        rows.collect::<rusqlite::Result<Vec<String>>>()
+            .map_err(sqlite_error)?
+    };
+    tx.execute(
+        "UPDATE messages SET status = 'queued' \
+         WHERE peer_id = ?1 AND outgoing = 1 AND status = 'sending'",
+        params![device_id.to_string()],
+    )
+    .map_err(sqlite_error)?;
+    tx.commit().map_err(sqlite_error)?;
+
+    ids.into_iter().map(|raw| parse_message_id(&raw)).collect()
+}
+
+/// Startup-recovery for a process that died between writing to a socket and reading the
+/// acknowledgement.
+fn requeue_all_pending(conn: &Connection) -> Result<u32, StorageError> {
     let changed = conn
         .execute(
-            "UPDATE messages SET status = 'failed' \
-             WHERE peer_id = ?1 AND outgoing = 1 AND status IN ('sending', 'sent')",
-            params![device_id.to_string()],
+            "UPDATE messages SET status = 'queued' WHERE outgoing = 1 AND status = 'sending'",
+            [],
         )
         .map_err(sqlite_error)?;
     Ok(u32::try_from(changed).unwrap_or(u32::MAX))
@@ -750,14 +851,13 @@ fn history_page(
     let cursor_id = before.map(|cursor| cursor.id.to_string());
 
     let mut stmt = conn
-        .prepare(
-            "SELECT id, peer_id, outgoing, body, sent_at_ms, received_at_ms, status, read \
-             FROM messages \
+        .prepare(&format!(
+            "SELECT {MESSAGE_COLUMNS} FROM messages \
              WHERE peer_id = ?1 \
                AND (?2 IS NULL OR sent_at_ms < ?2 OR (sent_at_ms = ?2 AND id < ?3)) \
              ORDER BY sent_at_ms DESC, id DESC \
-             LIMIT ?4",
-        )
+             LIMIT ?4"
+        ))
         .map_err(sqlite_error)?;
     let rows = stmt
         .query_map(
@@ -884,9 +984,37 @@ impl Store for SqliteStore {
             .await
     }
 
-    async fn fail_pending_messages(&self, device_id: DeviceId) -> Result<u32, StorageError> {
-        self.call(|reply| Request::FailPendingMessages { device_id, reply })
+    async fn mark_message_delivered(
+        &self,
+        id: MessageId,
+        delivered_at_ms: i64,
+    ) -> Result<(), StorageError> {
+        self.call(|reply| Request::MarkMessageDelivered {
+            id,
+            delivered_at_ms,
+            reply,
+        })
+        .await
+    }
+
+    async fn next_outbox_message(
+        &self,
+        device_id: DeviceId,
+    ) -> Result<Option<ChatMessage>, StorageError> {
+        self.call(|reply| Request::NextOutboxMessage { device_id, reply })
             .await
+    }
+
+    async fn requeue_pending_messages(
+        &self,
+        device_id: DeviceId,
+    ) -> Result<Vec<MessageId>, StorageError> {
+        self.call(|reply| Request::RequeuePendingMessages { device_id, reply })
+            .await
+    }
+
+    async fn requeue_all_pending(&self) -> Result<u32, StorageError> {
+        self.call(Request::RequeueAllPending).await
     }
 
     async fn history_page(
@@ -967,6 +1095,7 @@ mod tests {
             body: MessageBody::parse("incoming").expect("body"),
             sent_at: UnixMillis(sent_at_ms),
             received_at: UnixMillis(sent_at_ms),
+            delivered_at: None,
             status: MessageStatus::Received,
             read,
         }
@@ -980,17 +1109,19 @@ mod tests {
             body: MessageBody::parse("outgoing").expect("body"),
             sent_at: UnixMillis(sent_at_ms),
             received_at: UnixMillis(sent_at_ms),
+            delivered_at: None,
             status,
             read: true,
         }
     }
 
     #[tokio::test]
-    async fn fresh_store_reports_version_one_and_has_no_peers() {
+    async fn fresh_store_reports_the_current_version_and_has_no_peers() {
         let (_dir, store) = open_store();
         assert_eq!(
             store.meta_get("schema_version").await.unwrap().as_deref(),
-            Some("1")
+            Some(schema::SCHEMA_VERSION.to_string().as_str()),
+            "a fresh database is migrated to the current version"
         );
         assert!(store.peers().await.unwrap().is_empty());
         assert!(store.known_devices().await.unwrap().is_empty());
@@ -1196,45 +1327,157 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn message_status_updates_and_pending_failures() {
+    async fn the_outbox_drains_in_order_and_records_the_delivery_time() {
         let (_dir, store) = open_store();
         let peer = profile(6, "Frank");
         store.upsert_peer_seen(&peer, None, Some(1)).await.unwrap();
 
-        let settled = outgoing(peer.device_id, 1, MessageStatus::Sending);
-        store.insert_message(&settled).await.unwrap();
+        let first = outgoing(peer.device_id, 2, MessageStatus::Queued);
+        let second = outgoing(peer.device_id, 3, MessageStatus::Queued);
+        let delivered = outgoing(peer.device_id, 1, MessageStatus::Queued);
+        store.insert_message(&delivered).await.unwrap();
+        store.insert_message(&first).await.unwrap();
+        store.insert_message(&second).await.unwrap();
         store
-            .set_message_status(settled.id, MessageStatus::Delivered)
+            .insert_message(&incoming(peer.device_id, 4, true))
             .await
             .unwrap();
 
-        let pending_a = outgoing(peer.device_id, 2, MessageStatus::Sending);
-        let pending_b = outgoing(peer.device_id, 3, MessageStatus::Sent);
-        let delivered = outgoing(peer.device_id, 4, MessageStatus::Delivered);
-        let received = incoming(peer.device_id, 5, true);
-        store.insert_message(&pending_a).await.unwrap();
-        store.insert_message(&pending_b).await.unwrap();
-        store.insert_message(&delivered).await.unwrap();
-        store.insert_message(&received).await.unwrap();
+        // Oldest first, regardless of the order the rows were written in.
+        let next = store
+            .next_outbox_message(peer.device_id)
+            .await
+            .unwrap()
+            .expect("a queued message");
+        assert_eq!(next.id, delivered.id, "the oldest row is drained first");
 
+        store
+            .set_message_status(delivered.id, MessageStatus::Sending)
+            .await
+            .unwrap();
+        store
+            .mark_message_delivered(delivered.id, 5_000)
+            .await
+            .unwrap();
+
+        let next = store
+            .next_outbox_message(peer.device_id)
+            .await
+            .unwrap()
+            .expect("the next queued message");
+        assert_eq!(next.id, first.id, "a delivered row leaves the outbox");
+
+        // A connection that dies mid-send puts the in-flight row back, and only that row.
+        store
+            .set_message_status(first.id, MessageStatus::Sending)
+            .await
+            .unwrap();
         assert_eq!(
-            store.fail_pending_messages(peer.device_id).await.unwrap(),
-            2
+            store
+                .requeue_pending_messages(peer.device_id)
+                .await
+                .unwrap(),
+            vec![first.id]
+        );
+        assert_eq!(
+            store
+                .next_outbox_message(peer.device_id)
+                .await
+                .unwrap()
+                .map(|m| m.id),
+            Some(first.id)
         );
 
         let messages = store.history_page(peer.device_id, None, 50).await.unwrap();
-        let status = |id: MessageId| {
-            messages
-                .iter()
-                .find(|message| message.id == id)
-                .unwrap()
-                .status
-        };
+        let by_id = |id: MessageId| messages.iter().find(|m| m.id == id).unwrap();
+        let settled = by_id(delivered.id);
+        assert_eq!(settled.status, MessageStatus::Delivered);
+        assert_eq!(settled.delivered_at, Some(UnixMillis(5_000)));
+        assert_eq!(by_id(first.id).status, MessageStatus::Queued);
+        assert_eq!(by_id(second.id).status, MessageStatus::Queued);
+        assert_eq!(by_id(second.id).delivered_at, None);
+    }
+
+    #[tokio::test]
+    async fn a_version_one_database_is_upgraded_and_its_in_flight_messages_requeued() {
+        // The riskiest part of the outbox change is the migration: an installation that was
+        // running when the feature shipped has rows in the old terminal statuses and no
+        // `delivered_at_ms` column at all.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("localme.db");
+        let peer = device(30);
+        let rows = [
+            (MessageId::generate(), "sending", 1_i64),
+            (MessageId::generate(), "sent", 2_i64),
+            (MessageId::generate(), "failed", 3_i64),
+            (MessageId::generate(), "delivered", 4_i64),
+        ];
+
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(schema::MIGRATION_1).unwrap();
+            conn.execute(
+                "INSERT INTO meta (key, value) VALUES ('schema_version', '1')",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO peers (device_id, nickname, avatar_seed, first_seen_ms) \
+                 VALUES (?1, 'Ann', 'seed', 1)",
+                params![peer.to_string()],
+            )
+            .unwrap();
+            for (id, status, sent_at) in rows {
+                conn.execute(
+                    "INSERT INTO messages \
+                       (id, peer_id, outgoing, body, sent_at_ms, received_at_ms, status, read) \
+                     VALUES (?1, ?2, 1, 'queued once', ?3, ?3, ?4, 1)",
+                    params![id.to_string(), peer.to_string(), sent_at, status],
+                )
+                .unwrap();
+            }
+        }
+
+        let store = SqliteStore::open(&path).unwrap();
+        assert_eq!(
+            store.meta_get("schema_version").await.unwrap().as_deref(),
+            Some(schema::SCHEMA_VERSION.to_string().as_str())
+        );
+
+        // `delivered` keeps its meaning; every unfinished row is waiting again.
+        let messages = store.history_page(peer, None, 50).await.unwrap();
+        let status = |id: MessageId| messages.iter().find(|m| m.id == id).unwrap().status;
+        assert_eq!(status(rows[3].0), MessageStatus::Delivered);
+        for row in &rows[..3] {
+            assert_eq!(status(row.0), MessageStatus::Queued, "{}", row.1);
+        }
+        assert_eq!(
+            store.next_outbox_message(peer).await.unwrap().map(|m| m.id),
+            Some(rows[0].0),
+            "the oldest unfinished row is the first to be retried"
+        );
+    }
+
+    #[tokio::test]
+    async fn startup_requeues_every_in_flight_message() {
+        let (_dir, store) = open_store();
+        let peer = profile(15, "Olga");
+        store.upsert_peer_seen(&peer, None, Some(1)).await.unwrap();
+
+        let in_flight = outgoing(peer.device_id, 1, MessageStatus::Sending);
+        let waiting = outgoing(peer.device_id, 2, MessageStatus::Queued);
+        let settled = outgoing(peer.device_id, 3, MessageStatus::Delivered);
+        store.insert_message(&in_flight).await.unwrap();
+        store.insert_message(&waiting).await.unwrap();
+        store.insert_message(&settled).await.unwrap();
+
+        assert_eq!(store.requeue_all_pending().await.unwrap(), 1);
+
+        let messages = store.history_page(peer.device_id, None, 50).await.unwrap();
+        let status = |id: MessageId| messages.iter().find(|m| m.id == id).unwrap().status;
+        assert_eq!(status(in_flight.id), MessageStatus::Queued);
+        assert_eq!(status(waiting.id), MessageStatus::Queued);
         assert_eq!(status(settled.id), MessageStatus::Delivered);
-        assert_eq!(status(pending_a.id), MessageStatus::Failed);
-        assert_eq!(status(pending_b.id), MessageStatus::Failed);
-        assert_eq!(status(delivered.id), MessageStatus::Delivered);
-        assert_eq!(status(received.id), MessageStatus::Received);
     }
 
     #[tokio::test]
@@ -1307,7 +1550,7 @@ mod tests {
             .await
             .unwrap();
         store
-            .insert_message(&outgoing(alice.device_id, 5_001, MessageStatus::Sent))
+            .insert_message(&outgoing(alice.device_id, 5_001, MessageStatus::Delivered))
             .await
             .unwrap();
         assert_eq!(
@@ -1458,7 +1701,7 @@ mod tests {
 
         assert_eq!(
             store.meta_get("schema_version").await.unwrap().as_deref(),
-            Some("1")
+            Some(schema::SCHEMA_VERSION.to_string().as_str())
         );
         store.meta_set("k", "v").await.unwrap();
         assert_eq!(store.meta_get("k").await.unwrap().as_deref(), Some("v"));
@@ -1478,7 +1721,7 @@ mod tests {
             .await
             .unwrap();
         store
-            .insert_message(&outgoing(peer.device_id, 3, MessageStatus::Sent))
+            .insert_message(&outgoing(peer.device_id, 3, MessageStatus::Delivered))
             .await
             .unwrap();
 

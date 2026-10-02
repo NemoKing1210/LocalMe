@@ -243,7 +243,7 @@ onMounted(() => {
           :data-index="entry.item.index"
           class="list__row"
           :class="{ 'list__row--day': entry.row?.startsDay === true }"
-          :style="{ transform: `translateY(${entry.item.start}px)` }"
+          :style="{ top: `${entry.item.start}px` }"
         >
           <MessageBubble v-if="entry.row" :message="entry.row.message" :show-status="true" />
         </div>
@@ -283,6 +283,13 @@ onMounted(() => {
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
+  /*
+   * The bubbles are absolutely positioned against `.list__content`, so a gutter put on the
+   * content itself would sit inside their containing block and change nothing; it has to be on
+   * the scroll box. Left and right match the composer's gutter, so a message lines up with the
+   * field under it instead of touching the edge.
+   */
+  padding-inline: 16px;
   /* The list positions itself from its own measurements; the browser's own anchoring would
      fight it, moving the view whenever a row above the fold changes height. */
   overflow-anchor: none;
@@ -330,6 +337,9 @@ onMounted(() => {
   color: var(--md-sys-color-on-surface-variant);
 }
 
+/* `top`, not `transform`, as in the people list: a transform would make every row its own
+   containing block, so the message's context menu — painted `fixed` — would be placed from the
+   row's origin instead of the window's. */
 .list__row {
   position: absolute;
   inset-inline: 0;

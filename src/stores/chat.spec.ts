@@ -21,6 +21,7 @@ function message(id: string, sentAt: number, peer = PEER): Message {
     body: `message ${id}`,
     sentAt,
     receivedAt: sentAt,
+    deliveredAt: null,
     status: 'received',
     read: true,
   };
@@ -101,7 +102,7 @@ describe('the chat store', () => {
     chat.update('a', { status: 'delivered' });
     expect(chat.messages[0]?.status).toBe('delivered');
 
-    chat.update('missing', { status: 'failed' });
+    chat.update('missing', { status: 'queued' });
     expect(chat.messages[0]?.status).toBe('delivered');
   });
 
@@ -116,15 +117,29 @@ describe('the chat store', () => {
     expect(chat.oldestCursor).toEqual({ sentAtMs: 1_000, id: 'a' });
   });
 
-  it('counts only messages that can still fail', async () => {
+  it('counts everything that has not been delivered yet', async () => {
     const chat = useChatStore();
     await chat.open(PEER);
 
-    chat.add({ ...message('a', 1_000), status: 'sending' });
-    chat.add({ ...message('b', 2_000), status: 'sent' });
-    chat.add({ ...message('c', 3_000), status: 'sending' });
+    chat.add({ ...message('a', 1_000), status: 'queued' });
+    chat.add({ ...message('b', 2_000), status: 'sending' });
+    chat.add({ ...message('c', 3_000), status: 'queued' });
+    chat.add({ ...message('d', 4_000), status: 'delivered' });
 
-    expect(chat.pendingCount).toBe(2);
+    expect(chat.pendingCount).toBe(3);
+  });
+
+  it('carries the delivery time of a message that waited in the outbox', async () => {
+    const chat = useChatStore();
+    await chat.open(PEER);
+
+    chat.add({ ...message('a', 1_000), direction: 'outgoing', status: 'queued' });
+    expect(chat.messages[0]?.deliveredAt).toBeNull();
+
+    // What the host sends when the acknowledgement arrives.
+    chat.update('a', { status: 'delivered', deliveredAt: 90_000 });
+    expect(chat.messages[0]?.status).toBe('delivered');
+    expect(chat.messages[0]?.deliveredAt).toBe(90_000);
   });
 
   it('clears only the conversation it is asked to clear', async () => {

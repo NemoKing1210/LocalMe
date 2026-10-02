@@ -31,7 +31,7 @@ export async function connectCoreEvents(): Promise<() => void> {
     }),
 
     onCoreEvent('message_status', (payload) => {
-      chat.update(payload.id, { status: payload.status });
+      chat.update(payload.id, { status: payload.status, deliveredAt: payload.deliveredAt });
     }),
 
     onCoreEvent('settings_changed', (payload) => {

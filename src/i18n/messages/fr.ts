@@ -64,15 +64,14 @@ export const fr: MessageCatalog = {
   'chat.emptyTitle': 'Choisis quelqu’un à qui parler',
   'chat.emptyBody': 'Sélectionne une personne dans la liste pour ouvrir la conversation.',
   'chat.composerPlaceholder': 'Message pour {name}',
-  'chat.composerOffline': 'Impossible d’envoyer des messages tant que {name} est hors ligne',
-  'chat.composerOfflineHint': '{name} est hors ligne. Tu pourras de nouveau écrire dès son retour.',
+  'chat.composerOfflineHint': '{name} est hors ligne. Les messages seront envoyés à son retour.',
   'chat.send': 'Envoyer',
   'chat.tooLong': 'Ce message dépasse {max} caractères.',
   'chat.composerHint': 'Enter envoie, Shift+Enter passe à la ligne',
+  'chat.statusQueued': 'En attente d’envoi',
   'chat.statusSending': 'Envoi…',
-  'chat.statusSent': 'Envoyé',
   'chat.statusDelivered': 'Distribué',
-  'chat.statusFailed': 'Non distribué',
+  'chat.deliveredAt': 'distribué {time}',
   'chat.loadOlder': 'Charger les messages précédents',
   'chat.dayToday': 'Aujourd’hui',
   'chat.dayYesterday': 'Hier',
@@ -80,6 +79,10 @@ export const fr: MessageCatalog = {
   'chat.messageList': 'Messages avec {name}',
   'chat.sending': 'Envoi de ton message',
   'chat.historyEnd': 'C’est le début de la conversation',
+  'chat.messageActions': 'Actions du message',
+  'chat.copyMessage': 'Copier le message',
+  'chat.copySelection': 'Copier la sélection',
+  'chat.copied': 'Copié dans le presse-papiers',
 
   'settings.title': 'Paramètres',
   'settings.close': 'Retour aux messages',
@@ -102,7 +105,6 @@ export const fr: MessageCatalog = {
   'settings.accentHelp': 'Change toute la palette, pas seulement un bouton.',
 
   'settings.language': 'Langue de l’interface',
-  'settings.languageHelp': 'S’applique immédiatement et est mémorisée.',
 
   'settings.notificationsEnabled': 'Afficher les notifications',
   'settings.notificationsEnabledHelp':
@@ -187,7 +189,6 @@ export const fr: MessageCatalog = {
   'error.network': 'Ce message n’a pas pu être distribué.',
   'error.internal': 'Une erreur est survenue. Les détails techniques se trouvent dans le journal.',
   'error.unknownPeer': 'Cette personne ne figure plus dans ta liste.',
-  'error.peerOffline': 'Cette personne est hors ligne pour le moment.',
   'error.shuttingDown': 'LocalMe est en cours de fermeture.',
   'error.databaseRecovered':
     'La base de données des messages était endommagée et inutilisable. Elle a été conservée sous {path} et une nouvelle base a été créée.',

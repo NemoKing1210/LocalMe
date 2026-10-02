@@ -6,6 +6,9 @@
 //!   new; this is the deduplication mechanism for a retransmitted frame.
 //! * `forget_peer` writes the row as forgotten rather than deleting it when history is kept,
 //!   so the settings screen can still list the device.
+//! * an outgoing row moves `queued` → `sending` → `delivered`; it is never dropped because a
+//!   socket failed, so `next_outbox_message` and `requeue_pending_messages` are the only ways a
+//!   waiting message changes state.
 
 use crate::domain::ids::{AvatarSeed, DeviceId, MessageId};
 use crate::domain::message::{ChatMessage, MessagePreview, MessageStatus};
@@ -140,12 +143,33 @@ pub trait Store: Send + Sync + 'static {
         status: MessageStatus,
     ) -> impl Future<Output = Result<(), StorageError>> + Send;
 
-    /// Called when a peer goes offline: a message queued for a socket that no longer exists
-    /// must not keep claiming it is on its way.
-    fn fail_pending_messages(
+    /// Marks an outgoing message delivered and records when, in one write: the interface prints
+    /// this as the second date of a message that waited.
+    fn mark_message_delivered(
+        &self,
+        id: MessageId,
+        delivered_at_ms: i64,
+    ) -> impl Future<Output = Result<(), StorageError>> + Send;
+
+    /// The oldest outgoing message still waiting for its peer, in send order. `None` means the
+    /// outbox for that conversation is empty.
+    fn next_outbox_message(
         &self,
         device_id: DeviceId,
-    ) -> impl Future<Output = Result<u32, StorageError>> + Send;
+    ) -> impl Future<Output = Result<Option<ChatMessage>, StorageError>> + Send;
+
+    /// Returns the messages that were written to a socket but never acknowledged to the outbox,
+    /// reporting their identifiers so the interface can redraw them. Called when a peer goes
+    /// offline: a message waiting for a socket that no longer exists must keep waiting rather
+    /// than be lost or claim to be on its way.
+    fn requeue_pending_messages(
+        &self,
+        device_id: DeviceId,
+    ) -> impl Future<Output = Result<Vec<MessageId>, StorageError>> + Send;
+
+    /// The same for every conversation, at startup: a process that died mid-send leaves rows in
+    /// `sending`, and they must be retried rather than stuck.
+    fn requeue_all_pending(&self) -> impl Future<Output = Result<u32, StorageError>> + Send;
 
     /// `before` is the cursor: only messages strictly older than it are returned.
     fn history_page(

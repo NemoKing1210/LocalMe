@@ -7,9 +7,9 @@ use rusqlite::{Connection, OptionalExtension, params};
 use super::sqlite_error;
 use crate::error::StorageError;
 
-pub(super) const SCHEMA_VERSION: u32 = 1;
+pub(super) const SCHEMA_VERSION: u32 = 2;
 
-const MIGRATION_1: &str = "
+pub(super) const MIGRATION_1: &str = "
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE peers (
   device_id    TEXT PRIMARY KEY,
@@ -34,6 +34,18 @@ CREATE TABLE messages (
 );
 CREATE INDEX messages_peer_time ON messages(peer_id, sent_at_ms DESC, id DESC);
 CREATE INDEX messages_unread    ON messages(peer_id) WHERE read = 0;
+";
+
+/// The outbox: messages that could not be handed to a socket yet keep their place in the
+/// conversation and are retried, so the statuses that used to mean "this attempt is over"
+/// (`sending`, `sent`, `failed`) become one durable `queued`. `delivered_at_ms` is the second
+/// date the interface shows for a message that waited.
+pub(super) const MIGRATION_2: &str = "
+ALTER TABLE messages ADD COLUMN delivered_at_ms INTEGER;
+UPDATE messages SET status = 'queued'
+  WHERE outgoing = 1 AND status IN ('sending', 'sent', 'failed');
+CREATE INDEX messages_outbox ON messages(peer_id, sent_at_ms, id)
+  WHERE outgoing = 1 AND status = 'queued';
 ";
 
 pub(super) fn migrate(conn: &mut Connection) -> Result<(), StorageError> {
@@ -83,6 +95,7 @@ fn current_version(conn: &Connection) -> Result<u32, StorageError> {
 fn apply_migration(conn: &mut Connection, version: u32) -> Result<(), StorageError> {
     let sql = match version {
         1 => MIGRATION_1,
+        2 => MIGRATION_2,
         other => {
             return Err(StorageError::Migration {
                 version: other,

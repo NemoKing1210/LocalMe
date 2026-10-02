@@ -64,16 +64,15 @@ export const de: MessageCatalog = {
   'chat.emptyTitle': 'Wähle jemanden zum Schreiben',
   'chat.emptyBody': 'Wähle eine Person aus der Liste, um die Unterhaltung zu öffnen.',
   'chat.composerPlaceholder': 'Nachricht an {name}',
-  'chat.composerOffline': '{name} ist offline – es können keine Nachrichten gesendet werden',
   'chat.composerOfflineHint':
-    '{name} ist offline. Du kannst wieder schreiben, sobald die Person online ist.',
+    '{name} ist offline. Nachrichten werden gesendet, sobald die Person zurück ist.',
   'chat.send': 'Senden',
   'chat.tooLong': 'Diese Nachricht ist länger als {max} Zeichen.',
   'chat.composerHint': 'Enter sendet, Shift+Enter beginnt eine neue Zeile',
+  'chat.statusQueued': 'Wartet auf Versand',
   'chat.statusSending': 'Wird gesendet…',
-  'chat.statusSent': 'Gesendet',
   'chat.statusDelivered': 'Zugestellt',
-  'chat.statusFailed': 'Nicht zugestellt',
+  'chat.deliveredAt': 'zugestellt {time}',
   'chat.loadOlder': 'Ältere Nachrichten laden',
   'chat.dayToday': 'Heute',
   'chat.dayYesterday': 'Gestern',
@@ -81,6 +80,10 @@ export const de: MessageCatalog = {
   'chat.messageList': 'Nachrichten mit {name}',
   'chat.sending': 'Deine Nachricht wird gesendet',
   'chat.historyEnd': 'Das ist der Anfang der Unterhaltung',
+  'chat.messageActions': 'Nachrichtenaktionen',
+  'chat.copyMessage': 'Nachricht kopieren',
+  'chat.copySelection': 'Auswahl kopieren',
+  'chat.copied': 'In die Zwischenablage kopiert',
 
   'settings.title': 'Einstellungen',
   'settings.close': 'Zurück zu den Nachrichten',
@@ -103,7 +106,6 @@ export const de: MessageCatalog = {
   'settings.accentHelp': 'Ändert die gesamte Farbpalette, nicht nur eine Schaltfläche.',
 
   'settings.language': 'Sprache der Oberfläche',
-  'settings.languageHelp': 'Wird sofort übernommen und gespeichert.',
 
   'settings.notificationsEnabled': 'Benachrichtigungen anzeigen',
   'settings.notificationsEnabledHelp':
@@ -184,7 +186,6 @@ export const de: MessageCatalog = {
   'error.network': 'Das konnte nicht zugestellt werden.',
   'error.internal': 'Etwas ist schiefgelaufen. Die technischen Details stehen im Protokoll.',
   'error.unknownPeer': 'Diese Person ist nicht mehr in deiner Liste.',
-  'error.peerOffline': 'Die Person ist gerade offline.',
   'error.shuttingDown': 'LocalMe wird beendet.',
   'error.databaseRecovered':
     'Die Nachrichtendatenbank war beschädigt und konnte nicht verwendet werden. Sie wurde als {path} aufbewahrt und eine neue Datenbank erstellt.',

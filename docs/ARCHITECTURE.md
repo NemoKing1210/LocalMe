@@ -8,10 +8,10 @@
 ## 1. Goals and non-goals
 
 **In scope.** Peer discovery on a LAN without configuration, 1:1 text chat, local history,
-presence, tray integration, native notifications, settings, three desktop platforms
-(Windows, macOS, Linux).
+presence, an outbox that delivers what was written while the peer was away, tray integration,
+native notifications, settings, three desktop platforms (Windows, macOS, Linux).
 
-**Out of scope.** File transfer, group chats, mobile, offline message delivery.
+**Out of scope.** File transfer, group chats, mobile.
 The protocol and storage layers are designed so these can be added additively
 (see §7.5 and §8.4), but no code for them exists.
 
@@ -268,29 +268,50 @@ rejected. Two instances on one machine are prevented outright by the single-inst
 (§9.4); two instances on *different* machines that happen to have the same id (a copied
 profile) are rejected by the same check, and the collision is surfaced in the log.
 
-### 5.4 Message delivery and deduplication
+### 5.4 Message delivery, the outbox and deduplication
 
 1. Sender assigns a `MessageId` (UUIDv7 → k-sortable, so storage order == time order).
-2. Sender persists the row `status = 'sending'`, queues the frame, UI shows *отправляется*.
-3. Recipient validates, deduplicates, persists, sends `chat_ack`, emits a UI event.
-4. Sender flips the row to `status = 'delivered'`, UI shows *доставлено*.
+2. Sender persists the row `status = 'queued'` — the send is durable before it is attempted —
+   and the UI shows *в очереди*.
+3. The session drains the outbox for that conversation, oldest first: each row goes to
+   `status = 'sending'` as its frame is handed to the socket, and the UI shows *отправляется*.
+   A peer that is offline is not an error: the rows simply keep waiting.
+4. Recipient validates, deduplicates, persists, sends `chat_ack`, emits a UI event.
+5. Sender flips the row to `status = 'delivered'` and writes `delivered_at_ms`, the local clock
+   at which the acknowledgement arrived; the UI shows *доставлено* and, when the message had to
+   wait, the second date as well.
+
+**The outbox is the queue, and it is SQLite.** Nothing is held in memory waiting for a peer:
+`next_outbox_message` reads the oldest `queued` row of the conversation and a connection that
+ends puts every `sending` row back to `queued` (`requeue_pending_messages`), so a message
+survives a disconnect, a crash and a restart. Ordering is a property of the query
+(`ORDER BY sent_at_ms, id`), which is the same order the conversation is drawn in, so a backlog
+arrives in the order it was written even if it is written out over several connections.
+
+**The drain is paced, deliberately.** The recipient rate-limits what it accepts and closes the
+connection when the limit is exceeded (§5.5), so writing a backlog as fast as the socket allows
+would be refused and could never drain. Each peer carries a token bucket (`OUTBOX_BURST`,
+`OUTBOX_RATE_PER_SECOND`) sized so that *both* peers draining at once stay under the inbound
+limits — the budget is shared with the acknowledgements the other side sends back for its own
+backlog — and the drain also stops when the socket's own send queue is full. The session resumes
+it from the presence tick; a connected peer's first message goes out immediately, because the
+burst covers it.
 
 **One clock.** A `chat` frame carries no timestamp. The time a message is stored under, and
 displayed with, is the *local* clock: for an outgoing message the moment it was queued, for an
-incoming one the moment it arrived. On a LAN those differ by a round trip, and using one clock
-for both directions removes an entire class of bug — a peer whose clock is an hour fast cannot
-reorder its own messages into the middle of the conversation, and "12:03" always means 12:03
-on this machine. `received_at_ms` is written alongside as the tie-break for messages that share
-a millisecond, and `sent_at_ms` is ordered with the `id` so the sort is total.
+incoming one the moment it arrived, and for an outgoing one that waited, the moment it was
+acknowledged. On a LAN the first and last differ by a round trip when nothing went wrong, and
+using one clock for every direction removes an entire class of bug — a peer whose clock is an
+hour fast cannot reorder its own messages into the middle of the conversation, and "12:03"
+always means 12:03 on this machine. `received_at_ms` is written alongside as the tie-break for
+messages that share a millisecond, and `sent_at_ms` is ordered with the `id` so the sort is
+total.
 
 Deduplication happens in storage: `messages.id` is the primary key and the insert is
 `INSERT OR IGNORE`, so a retransmitted frame is a no-op and the unread counter is incremented
 only when the row was genuinely new. A duplicate still receives `chat_ack` — the sender must
-never be left waiting because *it* retried.
-
-Delivery is best-effort with no retransmission beyond the live connection: out-of-scope
-offline delivery means a frame that could not be written to a live socket is marked
-`status = 'failed'` and the UI says so. There is no queue that pretends otherwise.
+never be left waiting because *it* retried. This is also what makes the outbox safe to retry:
+a frame that was written and then repeated after a reconnect is absorbed by the recipient.
 
 ### 5.5 Hostile-input defences
 
@@ -416,14 +437,22 @@ CREATE TABLE messages (
   peer_id      TEXT NOT NULL REFERENCES peers(device_id) ON DELETE CASCADE,
   outgoing     INTEGER NOT NULL,          -- 1 = we sent it
   body         TEXT NOT NULL,
-  sent_at_ms   INTEGER NOT NULL,          -- sender's clock (display only)
+  sent_at_ms   INTEGER NOT NULL,          -- our clock: when it was written
   received_at_ms INTEGER NOT NULL,        -- our clock (ordering fallback)
-  status       TEXT NOT NULL,             -- sending|sent|delivered|received|failed
+  delivered_at_ms INTEGER,                -- our clock: when an acknowledgement arrived
+  status       TEXT NOT NULL,             -- queued|sending|delivered|received
   read         INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX messages_peer_time ON messages(peer_id, sent_at_ms DESC, id DESC);
 CREATE INDEX messages_unread    ON messages(peer_id) WHERE read = 0;
+CREATE INDEX messages_outbox    ON messages(peer_id, sent_at_ms, id)
+  WHERE outgoing = 1 AND status = 'queued';
 ```
+
+`messages.status` is the outbox state: every outgoing row is written as `queued` and only
+leaves that state when its frame is handed to a socket (`sending`) or acknowledged
+(`delivered`). `delivered_at_ms` is `NULL` until then, and is the second date the interface
+prints for a message that waited (§5.4).
 
 `peers` doubles as the *known/forgotten device* list required by the settings screen.
 `forgotten = 1` rows are excluded from the user list but always kept, which is what lets the
@@ -436,7 +465,10 @@ restore, for a device that is not on the network right now.
 
 `meta.schema_version` drives a forward-only migration list. Each migration runs inside a
 transaction and bumps the version. Version 0 (no tables) → 1 (schema above) is the initial
-migration, so a fresh database and an upgraded one take the same code path.
+migration, so a fresh database and an upgraded one take the same code path. Version 2 adds
+`messages.delivered_at_ms` and rewrites the retired terminal statuses (`sending`, `sent`,
+`failed`) to `queued`, which is what turns messages an older build gave up on into messages the
+outbox retries.
 
 ### 7.3 Corrupted database
 
@@ -474,7 +506,10 @@ Message search is not implemented (not requested) and therefore has no index.
 
 The only mutable network state in the process. It is an actor: a single task owning
 
-* `peers: HashMap<DeviceId, PeerEntry>` where `PeerEntry = { profile, addresses, presence: PresenceMachine, outbound: mpsc::Sender<Envelope> }`,
+* `peers: HashMap<DeviceId, PeerEntry>` where `PeerEntry = { profile, stored, addresses,
+  presence: PresenceMachine, link: Option<PeerLink>, dial, send_budget: TokenBucket,
+  outbox_pending }` — the token bucket is the outbox drain's pace and `outbox_pending` marks a
+  conversation that may still have rows waiting to be written out (§5.4),
 * the dial task registry (one in-flight dial per peer, `JoinHandle`),
 * the deduplication and rate-limiting state.
 
@@ -805,6 +840,11 @@ While a conversation's first page is being read, the log draws bubble-shaped pla
 `MessageSkeleton` arranging `MdSkeleton` blocks, one per shape, on the side the message will
 belong to — rather than a spinner in the middle of an empty pane. The placeholder carries the
 shape and the width of what is coming, so the log does not jump when the real rows replace it.
+
+A bubble's footer shows one time — when the message was written — and, only when the message
+actually had to wait in the outbox, a second one after an arrow: when it was delivered. The
+threshold is a round trip on a LAN, so an ordinary exchange still shows a single time and the
+second one appears where it carries information (§5.4).
 
 ### 10.4 i18n
 

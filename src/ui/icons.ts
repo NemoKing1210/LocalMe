@@ -137,6 +137,14 @@ export const ICONS: Record<string, readonly Shape[]> = {
     { kind: 'line', x1: 10.2, y1: 10.6, x2: 10.2, y2: 17.2 },
     { kind: 'line', x1: 13.8, y1: 10.6, x2: 13.8, y2: 17.2 },
   ],
+  // Two sheets, not a filled block: an outline stays readable at the 18px a menu row uses.
+  copy: [
+    { kind: 'rect', x: 8.8, y: 8.8, width: 12.4, height: 12.4, rx: 2.6 },
+    {
+      kind: 'path',
+      d: 'M15.6 5.2a2.6 2.6 0 0 0-2.6-2.4H5.4A2.6 2.6 0 0 0 2.8 5.4v7.8a2.6 2.6 0 0 0 2.6 2.6',
+    },
+  ],
   tune: tuneRows(),
   palette: [
     { kind: 'circle', cx: 12, cy: 12, r: 9 },

@@ -1,5 +1,6 @@
 //! Events the core emits for the host application to forward to the interface.
 
+use crate::domain::clock::UnixMillis;
 use crate::domain::ids::{AvatarSeed, DeviceId, MessageId};
 use crate::domain::message::{ChatMessage, MessageStatus};
 use crate::domain::nickname::Nickname;
@@ -26,6 +27,9 @@ pub enum CoreEvent {
         peer: DeviceId,
         id: MessageId,
         status: MessageStatus,
+        /// The second date the interface prints for a message that waited in the outbox; `None`
+        /// while it is queued or in flight.
+        delivered_at: Option<UnixMillis>,
     },
     OwnProfile {
         nickname: Nickname,
@@ -109,13 +113,25 @@ mod tests {
             peer,
             id,
             status: MessageStatus::Delivered,
+            delivered_at: Some(UnixMillis(1_790_000_000_002)),
         });
 
         assert_eq!(name, "message_status");
         assert_eq!(payload["peer"], json!(peer.to_string()));
         assert_eq!(payload["id"], json!(id.to_string()));
         assert_eq!(payload["status"], json!("delivered"));
-        assert_eq!(payload.as_object().map(serde_json::Map::len), Some(3));
+        assert_eq!(payload["deliveredAt"], json!(1_790_000_000_002_i64));
+        assert_eq!(payload.as_object().map(serde_json::Map::len), Some(4));
+
+        // A row that goes back to the outbox carries no delivery time to unset.
+        let (_, payload) = emitted(&CoreEvent::MessageStatus {
+            peer,
+            id,
+            status: MessageStatus::Queued,
+            delivered_at: None,
+        });
+        assert_eq!(payload["status"], json!("queued"));
+        assert_eq!(payload["deliveredAt"], json!(null));
     }
 
     #[test]
@@ -147,6 +163,7 @@ mod tests {
             body: MessageBody::parse("hallo").expect("valid body"),
             sent_at: UnixMillis(1_790_000_000_000),
             received_at: UnixMillis(1_790_000_000_001),
+            delivered_at: None,
             status: MessageStatus::Received,
             read: false,
         };
@@ -161,6 +178,7 @@ mod tests {
         assert_eq!(message["id"].as_str().map(str::len), Some(36));
         assert_eq!(message["sentAt"], json!(1_790_000_000_000_i64));
         assert_eq!(message["receivedAt"], json!(1_790_000_000_001_i64));
+        assert_eq!(message["deliveredAt"], json!(null));
         assert_eq!(message["direction"], json!("incoming"));
         assert_eq!(message["status"], json!("received"));
         assert_eq!(message["read"], json!(false));

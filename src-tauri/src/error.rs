@@ -14,9 +14,6 @@ pub enum ApiError {
     UnknownPeer {
         device_id: String,
     },
-    PeerOffline {
-        device_id: String,
-    },
     Storage {
         message: String,
     },
@@ -48,7 +45,6 @@ impl std::fmt::Display for ApiError {
         match self {
             Self::InvalidInput { field, message } => write!(f, "{field}: {message}"),
             Self::UnknownPeer { device_id } => write!(f, "unknown peer {device_id}"),
-            Self::PeerOffline { device_id } => write!(f, "peer {device_id} is offline"),
             Self::Storage { message } => write!(f, "storage: {message}"),
             Self::Discovery { message } => write!(f, "discovery: {message}"),
             Self::Network { message } => write!(f, "network: {message}"),
@@ -81,7 +77,6 @@ impl From<CoreError> for ApiError {
                 message: source.to_string(),
             },
             CoreError::UnknownPeer(device_id) => Self::UnknownPeer { device_id },
-            CoreError::PeerOffline(device_id) => Self::PeerOffline { device_id },
             CoreError::ShuttingDown => Self::ShuttingDown,
             CoreError::Task(message) => Self::Internal { message },
         }
@@ -115,11 +110,11 @@ mod tests {
     #[test]
     fn rejections_serialise_with_a_kind_tag() {
         // The wire shape the front end receives as a rejection; it switches on `kind`.
-        let error = ApiError::PeerOffline {
+        let error = ApiError::UnknownPeer {
             device_id: "abc".to_owned(),
         };
         let value = serde_json::to_value(&error).expect("serialises");
-        assert_eq!(value["kind"], "peer_offline");
+        assert_eq!(value["kind"], "unknown_peer");
         assert_eq!(value["device_id"], "abc");
     }
 
@@ -138,12 +133,6 @@ mod tests {
                     device_id: "d".to_owned(),
                 },
                 "unknown_peer",
-            ),
-            (
-                ApiError::PeerOffline {
-                    device_id: "d".to_owned(),
-                },
-                "peer_offline",
             ),
             (
                 ApiError::Storage {

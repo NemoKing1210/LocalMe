@@ -31,8 +31,9 @@
 ---
 
 Launch LocalMe on two computers that share a network and they find each other. Messages are stored
-locally on both ends, in SQLite, and the interface exists in English, Russian, Spanish, German,
-French, Portuguese and Chinese. Built with
+locally on both ends, in SQLite, and one written while the other person is away waits in an outbox
+and is sent, in order, as soon as they are back. The interface exists in English, Russian, Spanish,
+German, French, Portuguese and Chinese. Built with
 [Tauri 2](https://tauri.app) (Rust) and Vue 3. Architecture for contributors and coding agents:
 [AGENTS.md](AGENTS.md) and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
@@ -139,6 +140,13 @@ the other is closed by both ends — a rule both sides evaluate identically, so 
 survives. Message identifiers are UUID v7, which makes the primary key a time order and lets a
 retransmitted frame be absorbed by `INSERT OR IGNORE`; the acknowledgement is sent after that
 insert, which is what makes "delivered" mean durably stored rather than written to a socket.
+
+An outgoing message is written to the local outbox before it is attempted, which is what lets the
+composer accept a message while the other person is offline: the row stays `queued` and is written
+out, oldest first, once a connection exists. Draining is paced to stay under the recipient's inbound
+rate limit, and a connection that ends before the acknowledgement returns its in-flight rows to the
+outbox, so nothing is lost and the backlog survives a restart. A message that had to wait shows two
+dates — when it was written and when it was delivered — because both come from the same local clock.
 
 Discovery is DNS-SD over mDNS (`_localme._tcp.local.`), with a UDP beacon on port 47821 —
 broadcast and multicast — for networks that filter mDNS. Peers announced by both mechanisms are

@@ -31,10 +31,6 @@ export class CommandError extends Error {
     this.kind = detail.kind;
     this.detail = detail;
   }
-
-  get isOffline(): boolean {
-    return this.kind === 'peer_offline';
-  }
 }
 
 function describe(error: ApiError): string {
@@ -43,8 +39,6 @@ function describe(error: ApiError): string {
       return `${error.field}: ${error.message}`;
     case 'unknown_peer':
       return `unknown device ${error.deviceId}`;
-    case 'peer_offline':
-      return `device ${error.deviceId} is offline`;
     case 'storage':
       return `storage: ${error.message}`;
     case 'discovery':

@@ -13,7 +13,7 @@ use std::time::Instant;
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio::task::JoinHandle;
 
-use crate::domain::clock::Clock;
+use crate::domain::clock::{Clock, UnixMillis};
 use crate::domain::ids::{DeviceId, MessageId};
 use crate::domain::message::{ChatMessage, Direction, MessageBody, MessagePreview, MessageStatus};
 use crate::domain::nickname::Nickname;
@@ -24,9 +24,10 @@ use crate::ports::discovery::{DiscoveredPeer, DiscoveryEvent};
 use crate::ports::store::{HistoryCursor, KnownDevice, META_NICKNAME, Store, StoredPeer};
 use crate::protocol::limits::{
     COMMAND_CHANNEL_CAPACITY, DIAL_RETRY_DELAY, EVENT_CHANNEL_CAPACITY, HEARTBEAT_TIMEOUT,
-    MAX_PEERS, PRESENCE_TICK_INTERVAL, PROTOCOL_VERSION, SHUTDOWN_DRAIN_TIMEOUT,
+    MAX_PEERS, OUTBOX_BURST, OUTBOX_RATE_PER_SECOND, PRESENCE_TICK_INTERVAL, PROTOCOL_VERSION,
+    SHUTDOWN_DRAIN_TIMEOUT,
 };
-use crate::protocol::{Frame, GoodbyeReason};
+use crate::protocol::{Frame, GoodbyeReason, TokenBucket};
 use crate::transport::connection::{self, ConnectionContext};
 use crate::transport::{DisconnectReason, PeerLink, Role, TransportEvent, is_preferred};
 
@@ -162,14 +163,13 @@ impl SessionHandle {
             .await
     }
 
-    /// A message that was stored but could not be queued on the socket is *not* an error: it
-    /// comes back with [`MessageStatus::Failed`] so the interface can show the row and offer to
-    /// retry.
+    /// Stores the message and hands it to the peer if it is reachable. A peer that is offline
+    /// is not an error: the row stays in the outbox and is sent, in order, once the peer is back.
     ///
     /// # Errors
     ///
-    /// [`CoreError::UnknownPeer`] if the device is not in the list, [`CoreError::PeerOffline`]
-    /// if it is not reachable.
+    /// [`CoreError::UnknownPeer`] if the device is not in the list, [`CoreError::Storage`] if the
+    /// message could not be written down at all.
     pub async fn send_message(
         &self,
         peer: DeviceId,
@@ -261,6 +261,11 @@ struct PeerEntry {
     last_dial_attempt: Option<Instant>,
     /// Newest of `last_seen` and the last message, for the list ordering.
     last_activity_ms: Option<i64>,
+    /// The outbox drain's own budget, so a backlog does not outrun the recipient's rate limit.
+    send_budget: TokenBucket,
+    /// Set while this conversation may still have messages waiting to be written out. It keeps
+    /// the presence tick from querying the database for peers with nothing in their outbox.
+    outbox_pending: bool,
 }
 
 impl PeerEntry {
@@ -274,6 +279,8 @@ impl PeerEntry {
             link: None,
             dial: None,
             last_dial_attempt: None,
+            send_budget: TokenBucket::new(OUTBOX_BURST, OUTBOX_RATE_PER_SECOND, Instant::now()),
+            outbox_pending: false,
         }
     }
 
@@ -346,6 +353,7 @@ pub async fn spawn<C: Clock, S: Store>(
         active_dials: 0,
     };
     session.load_peers().await?;
+    session.requeue_in_flight().await;
 
     let handle = SessionHandle {
         commands: commands_tx,
@@ -594,6 +602,9 @@ impl<C: Clock, S: Store> Session<C, S> {
         });
     }
 
+    /// Writes the message down first, then tries to hand it to the peer. The order matters: a
+    /// message is never lost because the socket failed, and a peer that is offline is not an
+    /// error at all — the row waits in the outbox and is retried in order when it comes back.
     async fn send_message(
         &mut self,
         peer: DeviceId,
@@ -605,58 +616,129 @@ impl<C: Clock, S: Store> Session<C, S> {
         if !entry.stored.is_listed() {
             return Err(CoreError::UnknownPeer(peer.to_string()));
         }
-        let Some(link) = entry.link.clone() else {
-            return Err(CoreError::PeerOffline(peer.to_string()));
-        };
 
         let now = self.clock.wall();
-        let mut message = ChatMessage {
+        let message = ChatMessage {
             id: MessageId::generate(),
             peer,
             direction: Direction::Outgoing,
             body,
             sent_at: now,
             received_at: now,
-            status: MessageStatus::Sending,
+            delivered_at: None,
+            status: MessageStatus::Queued,
             read: true,
         };
 
         if let Err(error) = self.store.insert_message(&message).await {
             tracing::warn!(%error, "failed to store the outgoing message");
-            message.status = MessageStatus::Failed;
-            self.emit_message(peer, &message);
-            return Ok(message);
+            return Err(CoreError::Storage(error));
         }
 
         // This send is now the newest row in the conversation, so it is what the list shows.
         if let Some(entry) = self.peers.get_mut(&peer) {
             entry.stored.last_message = Some(MessagePreview::new(&message.body, message.direction));
+            entry.outbox_pending = true;
+            entry.note_activity(message.sent_at.as_i64());
         }
 
-        // A full queue means the peer has stopped reading: failing the send is better than
-        // waiting, because waiting would block every other peer behind it.
-        let queued = link.try_send(Frame::Chat {
-            id: message.id,
-            body: message.body.clone(),
-        });
-        let status = match queued {
-            Ok(()) => MessageStatus::Sent,
-            Err(error) => {
-                tracing::debug!(%peer, %error, "message could not be queued");
-                MessageStatus::Failed
+        // A connected peer is served right here; otherwise the row waits and the drain resumes
+        // on the presence tick. The messages handed off now are reported back so the row the
+        // interface receives matches the state the socket actually put it in.
+        let handed_off = self.pump_outbox(peer).await;
+        let message = if handed_off.contains(&message.id) {
+            ChatMessage {
+                status: MessageStatus::Sending,
+                ..message
             }
+        } else {
+            message
         };
-        message.status = status;
-        if let Err(error) = self.store.set_message_status(message.id, status).await {
-            tracing::warn!(%error, "failed to record the message status");
-        }
 
-        if status == MessageStatus::Sent {
-            self.note_activity(peer, message.sent_at.as_i64());
-        }
         self.emit_message(peer, &message);
         self.emit_peers();
         Ok(message)
+    }
+
+    /// Hands the oldest waiting messages to the peer's socket, oldest first, and reports the
+    /// identifiers it handed off.
+    ///
+    /// The loop is paced by a token bucket rather than by the socket, because the recipient
+    /// rate-limits what it accepts and closes the connection when the budget is exceeded: an
+    /// outbox written out as fast as the socket allows would be refused by the peer and could
+    /// never drain. It also stops as soon as the socket's own queue is full, and the presence
+    /// tick resumes it.
+    async fn pump_outbox(&mut self, peer: DeviceId) -> Vec<MessageId> {
+        let mut handed_off = Vec::new();
+        loop {
+            let (link, allowed) = {
+                let Some(entry) = self.peers.get_mut(&peer) else {
+                    return handed_off;
+                };
+                if !entry.outbox_pending {
+                    return handed_off;
+                }
+                let Some(link) = entry.link.clone() else {
+                    // Offline: the rows keep their place until the next connection.
+                    return handed_off;
+                };
+                let allowed = entry.send_budget.try_acquire(Instant::now());
+                (link, allowed)
+            };
+            if !allowed {
+                return handed_off;
+            }
+
+            let message = match self.store.next_outbox_message(peer).await {
+                Ok(Some(message)) => message,
+                Ok(None) => {
+                    if let Some(entry) = self.peers.get_mut(&peer) {
+                        entry.outbox_pending = false;
+                    }
+                    return handed_off;
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "failed to read the outbox");
+                    return handed_off;
+                }
+            };
+
+            // A full queue or a closed socket leaves the row queued; stopping here is what keeps
+            // the conversation in order, because the next attempt starts from the same oldest
+            // row.
+            if let Err(error) = link.try_send(Frame::Chat {
+                id: message.id,
+                body: message.body.clone(),
+            }) {
+                tracing::debug!(%peer, %error, "an outbox message could not be queued");
+                return handed_off;
+            }
+
+            // The row is only marked in flight once the frame is on its way; if that write
+            // fails, the row still reads as queued and a retry would duplicate it, so this is
+            // the one place where giving up is safer than repeating.
+            if let Err(error) = self
+                .store
+                .set_message_status(message.id, MessageStatus::Sending)
+                .await
+            {
+                tracing::warn!(%error, "failed to record a message as in flight");
+                return handed_off;
+            }
+            self.emit_status(peer, message.id, MessageStatus::Sending, None);
+            handed_off.push(message.id);
+        }
+    }
+
+    /// A process that stopped between writing a frame and reading its acknowledgement leaves
+    /// rows marked in flight; they have to be retried rather than stuck behind a socket that no
+    /// longer exists.
+    async fn requeue_in_flight(&mut self) {
+        match self.store.requeue_all_pending().await {
+            Ok(0) => {}
+            Ok(count) => tracing::info!(count, "returned in-flight messages to the outbox"),
+            Err(error) => tracing::warn!(%error, "failed to recover in-flight messages"),
+        }
     }
 
     async fn restore(&mut self, peer: DeviceId) {
@@ -779,6 +861,13 @@ impl<C: Clock, S: Store> Session<C, S> {
             tracing::info!(%peer, role = role.as_str(), %address, "peer is online");
         }
         self.emit_peers();
+
+        // The peer may have been away while messages piled up: mark the conversation for the
+        // drain and hand over what fits in this burst.
+        if let Some(entry) = self.peers.get_mut(&peer) {
+            entry.outbox_pending = true;
+        }
+        let _ = self.pump_outbox(peer).await;
     }
 
     async fn on_frame(&mut self, peer: DeviceId, frame: Frame) {
@@ -786,19 +875,18 @@ impl<C: Clock, S: Store> Session<C, S> {
             Frame::Chat { id, body } => self.on_chat(peer, id, body).await,
 
             Frame::ChatAck { id } => {
+                // The sender's own clock, read now, is the second date it prints: the moment it
+                // learned the message had been stored on the other side.
+                let delivered_at = self.clock.wall();
                 if let Err(error) = self
                     .store
-                    .set_message_status(id, MessageStatus::Delivered)
+                    .mark_message_delivered(id, delivered_at.as_i64())
                     .await
                 {
-                    tracing::warn!(%error, "failed to mark a message delivered");
+                    tracing::warn!(%error, "failed to record a delivery");
                     return;
                 }
-                let _ = self.events.send(CoreEvent::MessageStatus {
-                    peer,
-                    id,
-                    status: MessageStatus::Delivered,
-                });
+                self.emit_status(peer, id, MessageStatus::Delivered, Some(delivered_at));
             }
 
             Frame::Profile {
@@ -849,6 +937,7 @@ impl<C: Clock, S: Store> Session<C, S> {
             // directions keeps a conversation ordered even when a peer's clock is wrong.
             sent_at: now,
             received_at: now,
+            delivered_at: None,
             status: MessageStatus::Received,
             read: false,
         };
@@ -902,13 +991,24 @@ impl<C: Clock, S: Store> Session<C, S> {
         if let Err(error) = self.store.touch_peer_seen(peer, now).await {
             tracing::warn!(%error, "failed to record the last seen time");
         }
-        // A message that never reached a socket must stop claiming it is on its way.
-        match self.store.fail_pending_messages(peer).await {
-            Ok(failed) if failed > 0 => {
-                tracing::debug!(%peer, failed, "marked undeliverable messages as failed");
+        // A message written to the socket but never acknowledged goes back to the outbox: it
+        // keeps its position in the conversation and is retried on the next connection, which is
+        // the whole point of sending to a peer that is not there.
+        match self.store.requeue_pending_messages(peer).await {
+            Ok(ids) => {
+                if !ids.is_empty() {
+                    tracing::debug!(%peer, count = ids.len(), "messages are waiting to be retried");
+                    if let Some(entry) = self.peers.get_mut(&peer) {
+                        entry.outbox_pending = true;
+                    }
+                    for id in ids {
+                        self.emit_status(peer, id, MessageStatus::Queued, None);
+                    }
+                }
             }
-            Ok(_) => {}
-            Err(error) => tracing::warn!(%error, "failed to mark pending messages"),
+            Err(error) => {
+                tracing::warn!(%error, "failed to return in-flight messages to the outbox")
+            }
         }
 
         self.emit_peers();
@@ -1034,6 +1134,18 @@ impl<C: Clock, S: Store> Session<C, S> {
                 self.maybe_dial(peer);
             }
         }
+
+        // The outbox is drained a little per tick, so a peer that has just come back receives a
+        // backlog in order and without tripping the recipient's rate limit.
+        let waiting: Vec<DeviceId> = self
+            .peers
+            .iter()
+            .filter(|(_, entry)| entry.outbox_pending && entry.link.is_some())
+            .map(|(device_id, _)| *device_id)
+            .collect();
+        for peer in waiting {
+            let _ = self.pump_outbox(peer).await;
+        }
     }
 
     fn maybe_dial(&mut self, peer: DeviceId) {
@@ -1125,6 +1237,21 @@ impl<C: Clock, S: Store> Session<C, S> {
         });
     }
 
+    fn emit_status(
+        &self,
+        peer: DeviceId,
+        id: MessageId,
+        status: MessageStatus,
+        delivered_at: Option<UnixMillis>,
+    ) {
+        let _ = self.events.send(CoreEvent::MessageStatus {
+            peer,
+            id,
+            status,
+            delivered_at,
+        });
+    }
+
     fn emit_peers(&self) {
         let _ = self.events.send(CoreEvent::Peers {
             peers: self.arranged_peers(),
@@ -1133,12 +1260,6 @@ impl<C: Clock, S: Store> Session<C, S> {
 
     fn notice(&self, level: NoticeLevel, message: String) {
         let _ = self.events.send(CoreEvent::Notice { level, message });
-    }
-
-    fn note_activity(&mut self, peer: DeviceId, at_ms: i64) {
-        if let Some(entry) = self.peers.get_mut(&peer) {
-            entry.note_activity(at_ms);
-        }
     }
 
     async fn shutdown(&mut self) {

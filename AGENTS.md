@@ -16,11 +16,12 @@ Typical user loop:
 1. First launch: pick a nickname and an avatar (onboarding).
 2. The core discovers peers over mDNS/DNS-SD, with a UDP beacon as a fallback.
 3. Pick a peer, type a message; the recipient persists it and acknowledges, and the sender shows
-   _delivered_.
+   _delivered_. Writing to a peer that is away queues the message and sends it, in order, when the
+   peer is back.
 4. History, presence, unread counts and settings persist across restarts.
 
 UI languages: English, Russian, Spanish, German, French, Portuguese and Chinese. Identifier:
-`dev.localme.desktop`. Version: `0.5.3`. Changelog: [CHANGELOG.md](CHANGELOG.md). Design notes:
+`dev.localme.desktop`. Version: `0.7.2`. Changelog: [CHANGELOG.md](CHANGELOG.md). Design notes:
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Stack (accurate)
@@ -153,14 +154,19 @@ normalises it, and `isOffline` distinguishes "the peer is not reachable" from re
 ### Message pipeline
 
 1. The composer calls `sendMessage`; `commands.rs` validates and calls the session.
-2. The session persists the row `status = 'sending'`, then queues the frame on the peer's
-   connection and emits a `message` event.
+2. The session persists the row `status = 'queued'` — the send is durable before it is attempted —
+   and emits a `message` event. It then drains that conversation's outbox, oldest first, moving each
+   row to `sending` as its frame is handed to the socket.
 3. The recipient validates, deduplicates (`INSERT OR IGNORE` on the UUIDv7 primary key),
    persists, sends `chat_ack`, and increments unread only if the row was new.
-4. The sender flips the row to `delivered` on `chat_ack` and emits `message_status`.
+4. The sender flips the row to `delivered` and records `delivered_at` on `chat_ack`, and emits
+   `message_status`.
 
-Delivery is best-effort with no retransmission beyond the live connection; a frame that cannot be
-written to a live socket becomes `status = 'failed'`.
+A peer that is offline is not an error: the rows wait in SQLite and are written out, in order, when
+it is back. The drain is paced (see `OUTBOX_BURST` / `OUTBOX_RATE_PER_SECOND`) so it stays under the
+recipient's inbound rate limit, and a disconnect returns every in-flight row to `queued`
+(`requeue_pending_messages`); startup does the same for the whole database. The interface shows a
+second date — when the message was delivered — for a message that had to wait.
 
 ### The hidden-window rule
 
@@ -282,7 +288,8 @@ check:versions` must pass.
 ## Change checklist
 
 - Discovery, dial and reconnect paths
-- Message send, delivery acknowledgement and deduplication
+- Message send, the outbox (queued → sending → delivered), delivery acknowledgement, deduplication
+  and the requeue on disconnect
 - Presence transitions, including the simultaneous-connect tie-break
 - Persistence across restart (peers, history, settings, window bounds)
 - Tray close, native notification, single-instance focus

@@ -64,16 +64,14 @@ export const pt: MessageCatalog = {
   'chat.emptyTitle': 'Escolhe alguém para conversar',
   'chat.emptyBody': 'Escolhe uma pessoa da lista para abrir a conversa.',
   'chat.composerPlaceholder': 'Mensagem para {name}',
-  'chat.composerOffline': 'Não é possível enviar mensagens enquanto {name} estiver desligado',
-  'chat.composerOfflineHint':
-    '{name} está desligado. Podes voltar a escrever quando estiver de volta.',
+  'chat.composerOfflineHint': '{name} está desligado. As mensagens serão enviadas quando voltar.',
   'chat.send': 'Enviar',
   'chat.tooLong': 'Essa mensagem tem mais de {max} caracteres.',
   'chat.composerHint': 'Enter envia, Shift+Enter muda de linha',
+  'chat.statusQueued': 'A aguardar envio',
   'chat.statusSending': 'A enviar…',
-  'chat.statusSent': 'Enviada',
   'chat.statusDelivered': 'Entregue',
-  'chat.statusFailed': 'Não entregue',
+  'chat.deliveredAt': 'entregue {time}',
   'chat.loadOlder': 'Carregar mensagens anteriores',
   'chat.dayToday': 'Hoje',
   'chat.dayYesterday': 'Ontem',
@@ -81,6 +79,10 @@ export const pt: MessageCatalog = {
   'chat.messageList': 'Mensagens com {name}',
   'chat.sending': 'A enviar a tua mensagem',
   'chat.historyEnd': 'Este é o início da conversa',
+  'chat.messageActions': 'Ações da mensagem',
+  'chat.copyMessage': 'Copiar mensagem',
+  'chat.copySelection': 'Copiar seleção',
+  'chat.copied': 'Copiado para a área de transferência',
 
   'settings.title': 'Definições',
   'settings.close': 'Voltar às mensagens',
@@ -103,7 +105,6 @@ export const pt: MessageCatalog = {
   'settings.accentHelp': 'Muda toda a paleta, não apenas um botão.',
 
   'settings.language': 'Idioma da interface',
-  'settings.languageHelp': 'Aplica-se imediatamente e fica memorizado.',
 
   'settings.notificationsEnabled': 'Mostrar notificações',
   'settings.notificationsEnabledHelp':
@@ -187,7 +188,6 @@ export const pt: MessageCatalog = {
   'error.network': 'Não foi possível entregar.',
   'error.internal': 'Algo correu mal. Os detalhes técnicos estão no registo.',
   'error.unknownPeer': 'Essa pessoa já não está na tua lista.',
-  'error.peerOffline': 'Não está em linha neste momento.',
   'error.shuttingDown': 'O LocalMe está a encerrar.',
   'error.databaseRecovered':
     'A base de dados de mensagens estava danificada e não pôde ser usada. Foi guardada como {path} e foi criada uma nova base de dados.',

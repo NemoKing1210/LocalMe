@@ -5,6 +5,63 @@ All notable changes to LocalMe are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.2] - 2026-10-02
+
+### Changed
+
+- The Language section in the settings no longer shows the note that the change applies immediately
+
+## [0.7.1] - 2026-10-02
+
+### Changed
+
+- The Russian interface now calls the action that removes a person from the list "Удалить" instead of "Забыть"
+
+## [0.7.0] - 2026-10-02
+
+### Added
+
+- Message text can be selected: a drag that starts anywhere in a bubble — its padding included —
+  now selects the words, and Ctrl+C copies them as before
+- Right-clicking a message opens a menu with "Copy message", or "Copy selection" when part of that
+  message is already selected; a snackbar confirms the copy
+
+## [0.6.1] - 2026-10-02
+
+### Changed
+
+- The notice that the other person is away is now a tonal banner with an icon above the message
+  field, instead of a line of grey text
+
+### Fixed
+
+- Messages no longer sit against the edge of the window: the conversation keeps the same side
+  gutter as the message field
+
+## [0.6.0] - 2026-10-02
+
+### Added
+
+- Messages can be written to a person who is offline: they wait in an outbox and are sent, in the
+  order they were written, as soon as the person is back, and they survive a restart
+- A message that had to wait shows two times — when it was written and when it was delivered
+- The delivery status of an outgoing message is now visible while it waits ("Waiting to send") and
+  its delivery time is recorded when the acknowledgement arrives
+
+### Changed
+
+- Sending no longer fails when the other person is offline; the composer stays usable and the row
+  waits instead of being refused
+- Delivery is retried across reconnects rather than given up on: a connection that ends before the
+  acknowledgement returns its in-flight messages to the outbox
+- The outbox is drained at a pace the recipient's rate limit accepts, so a large backlog arrives
+  instead of tripping the limit and being cut off
+
+### Removed
+
+- The `failed` and `sent` message states: an outgoing message is queued, in flight or delivered,
+  and messages left in the old states by an earlier version are retried by the upgrade
+
 ## [0.5.3] - 2026-10-01
 
 ### Changed

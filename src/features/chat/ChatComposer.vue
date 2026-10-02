@@ -4,9 +4,11 @@
  * mirrors the host's `MAX_BODY_CHARS`, which `send_message` enforces.
  */
 import { computed, nextTick, onMounted, ref } from 'vue';
+import { AnimatePresence, motion } from 'motion-v';
 
 import { useI18n } from '@/i18n';
 import type { Peer } from '@/ipc';
+import MdIcon from '@/ui/MdIcon.vue';
 import MdIconButton from '@/ui/MdIconButton.vue';
 
 const props = defineProps<{
@@ -31,17 +33,12 @@ const maxHeight = ref(200);
 const online = computed(() => props.peer.online);
 const tooLong = computed(() => draft.value.length > MAX_BODY_CHARS);
 const showCounter = computed(() => draft.value.length > MAX_BODY_CHARS * COUNTER_AT);
-const canSend = computed(
-  () => online.value && !props.sending && !tooLong.value && draft.value.trim().length > 0,
-);
+// Sending to a peer that is away is allowed: the message waits in the outbox and goes out when
+// they are back, so the composer is only gated by length and by an in-flight command.
+const canSend = computed(() => !props.sending && !tooLong.value && draft.value.trim().length > 0);
 
-const invitation = computed(() =>
-  i18n.t('chat.composerPlaceholder', { name: props.peer.nickname }),
-);
 const placeholder = computed(() =>
-  online.value
-    ? i18n.t('chat.composerPlaceholder', { name: props.peer.nickname })
-    : i18n.t('chat.composerOffline', { name: props.peer.nickname }),
+  i18n.t('chat.composerPlaceholder', { name: props.peer.nickname }),
 );
 
 function resize(): void {
@@ -84,9 +81,19 @@ onMounted(() => {
 
 <template>
   <footer class="composer">
-    <p v-if="!online" class="md-typescale-label-small composer__offline">
-      {{ i18n.t('chat.composerOfflineHint', { name: peer.nickname }) }}
-    </p>
+    <AnimatePresence>
+      <motion.p
+        v-if="!online"
+        class="md-typescale-label-large composer__offline"
+        :initial="{ opacity: 0, y: 6 }"
+        :animate="{ opacity: 1, y: 0 }"
+        :exit="{ opacity: 0, y: 6 }"
+        :transition="{ duration: 0.16, ease: [0.2, 0, 0, 1] }"
+      >
+        <MdIcon name="offline" :size="18" />
+        <span>{{ i18n.t('chat.composerOfflineHint', { name: peer.nickname }) }}</span>
+      </motion.p>
+    </AnimatePresence>
 
     <div class="composer__row">
       <textarea
@@ -95,8 +102,7 @@ onMounted(() => {
         class="md-typescale-body-medium composer__input"
         rows="1"
         :placeholder="placeholder"
-        :aria-label="invitation"
-        :disabled="!online"
+        :aria-label="placeholder"
         @input="resize"
         @keydown="onKeydown"
       />
@@ -131,8 +137,20 @@ onMounted(() => {
   background: var(--md-sys-color-surface);
 }
 
+/*
+ * A tonal banner rather than a line of grey text: the peer being away changes what sending
+ * means, and the composer is where that has to be read. The container colour is the same tonal
+ * surface the app's other secondary actions use, so it stands out from the field without
+ * shouting like an error.
+ */
 .composer__offline {
-  color: var(--md-sys-color-on-surface-variant);
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 12px;
+  border-radius: var(--md-sys-shape-corner-medium);
+  background: var(--md-sys-color-secondary-container);
+  color: var(--md-sys-color-on-secondary-container);
 }
 
 .composer__row {

@@ -94,11 +94,13 @@ pub async fn history(
     Ok(state.session.history(peer, cursor, limit).await?)
 }
 
+/// Stores the message and hands it to the peer when it is reachable; a peer that is away is not
+/// an error, because the message waits in the outbox and is sent, in order, once it returns.
+///
 /// # Errors
 ///
-/// [`ApiError::InvalidInput`] if the body is empty or too long,
-/// [`ApiError::PeerOffline`] if the recipient is not reachable. A message that was stored but
-/// could not be queued comes back with status `failed` rather than as an error.
+/// [`ApiError::InvalidInput`] if the body is empty or too long, [`ApiError::UnknownPeer`] if the
+/// device is no longer in the list, [`ApiError::Storage`] if the message could not be stored.
 #[tauri::command]
 pub async fn send_message(
     state: State<'_, Arc<AppState>>,

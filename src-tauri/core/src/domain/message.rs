@@ -47,26 +47,25 @@ impl Direction {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum MessageStatus {
-    /// Written to the outbound queue, not yet acknowledged.
+    /// Stored in the outbox, not yet written to a socket: the peer is offline or its send queue
+    /// is full. The session retries it, in order, until it is delivered.
+    Queued,
+    /// Written to a live socket, not yet acknowledged. A connection that ends before the
+    /// acknowledgement returns the row to `Queued`.
     Sending,
-    /// Handed to a live socket; distinct from `Delivered` only for diagnostics.
-    Sent,
     /// The recipient acknowledged it after committing it to its own database.
     Delivered,
     Received,
-    /// The peer went offline (or its queue overflowed) before acknowledging.
-    Failed,
 }
 
 impl MessageStatus {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::Queued => "queued",
             Self::Sending => "sending",
-            Self::Sent => "sent",
             Self::Delivered => "delivered",
             Self::Received => "received",
-            Self::Failed => "failed",
         }
     }
 
@@ -76,11 +75,10 @@ impl MessageStatus {
     /// if the database was written by a future version.
     pub fn from_db(value: &str) -> Result<Self, DomainError> {
         match value {
+            "queued" => Ok(Self::Queued),
             "sending" => Ok(Self::Sending),
-            "sent" => Ok(Self::Sent),
             "delivered" => Ok(Self::Delivered),
             "received" => Ok(Self::Received),
-            "failed" => Ok(Self::Failed),
             other => Err(DomainError::InvalidId {
                 kind: "message status",
                 value: other.chars().take(16).collect(),
@@ -199,6 +197,10 @@ pub struct ChatMessage {
     pub sent_at: UnixMillis,
     /// Receiver's wall clock, used to order messages whose `sent_at` is untrustworthy.
     pub received_at: UnixMillis,
+    /// When the recipient acknowledged an outgoing message, on this machine's clock; `None`
+    /// until then and for every incoming row. It is the second date the interface prints for a
+    /// message that waited in the outbox.
+    pub delivered_at: Option<UnixMillis>,
     pub status: MessageStatus,
     /// Incoming messages only.
     pub read: bool,
@@ -293,11 +295,10 @@ mod tests {
     #[test]
     fn status_and_direction_round_trip_through_storage_forms() {
         for status in [
+            MessageStatus::Queued,
             MessageStatus::Sending,
-            MessageStatus::Sent,
             MessageStatus::Delivered,
             MessageStatus::Received,
-            MessageStatus::Failed,
         ] {
             assert_eq!(
                 MessageStatus::from_db(status.as_str()).expect("parses"),

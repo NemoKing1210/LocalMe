@@ -115,8 +115,6 @@ pub enum CoreError {
     Transport(#[from] TransportError),
     #[error("unknown device {0}")]
     UnknownPeer(String),
-    #[error("device {0} is offline")]
-    PeerOffline(String),
     #[error("the application is shutting down")]
     ShuttingDown,
     #[error("background task failed: {0}")]

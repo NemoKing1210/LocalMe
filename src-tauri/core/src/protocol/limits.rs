@@ -36,6 +36,20 @@ pub const RATE_LIMIT_PER_SECOND: f64 = 20.0;
 
 pub const RATE_LIMIT_BURST: f64 = 40.0;
 
+/// How many outbox messages may leave in one burst when a peer comes back online.
+///
+/// The drain must stay under the *recipient's* inbound limiter (`RATE_LIMIT_BURST` /
+/// `RATE_LIMIT_PER_SECOND`), which counts our `chat` frames and whose denial closes the
+/// connection — a backlog that ignores it would never drain, because every attempt would trip
+/// the limit, drop the link and start over. The budget is shared with the acknowledgements the
+/// peer sends back for *its* backlog, so the drain is paced for two conversations' worth of
+/// traffic: `2 × OUTBOX_RATE_PER_SECOND < RATE_LIMIT_PER_SECOND` and
+/// `2 × OUTBOX_BURST < RATE_LIMIT_BURST`.
+pub const OUTBOX_BURST: f64 = 12.0;
+
+/// Sustained rate of the outbox drain; see [`OUTBOX_BURST`].
+pub const OUTBOX_RATE_PER_SECOND: f64 = 6.0;
+
 pub const MAX_PEERS: usize = 128;
 
 /// Bounded on purpose: a peer that stops reading its socket must not grow our memory, so after
@@ -73,3 +87,12 @@ pub const SHUTDOWN_JOIN_TIMEOUT: Duration = Duration::from_secs(1);
 pub const HISTORY_PAGE_SIZE: u32 = 50;
 
 pub const PRESENCE_TICK_INTERVAL: Duration = Duration::from_secs(2);
+
+// Two peers draining at once must stay under each side's inbound limiter (§5.4): the first denied
+// frame closes the connection, so a pace above the limit is a backlog that can never be delivered.
+// Asserted at compile time, so raising either rate past the budget fails the build.
+const _: () = {
+    assert!(2.0 * OUTBOX_RATE_PER_SECOND < RATE_LIMIT_PER_SECOND);
+    assert!(2.0 * OUTBOX_BURST < RATE_LIMIT_BURST);
+    assert!(OUTBOX_BURST >= 1.0);
+};

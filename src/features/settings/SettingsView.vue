@@ -445,9 +445,6 @@ onMounted(() => {
             :options="localeOptions"
             @update:model-value="setLocale"
           />
-          <p class="md-typescale-body-small settings__help">
-            {{ i18n.t('settings.languageHelp') }}
-          </p>
         </div>
       </section>
 

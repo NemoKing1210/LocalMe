@@ -1,6 +1,6 @@
 [package]
 name = "localme"
-version = "0.5.3"
+version = "0.7.2"
 edition = "2024"
 rust-version = "1.85"
 description = "LocalMe — a zero-configuration messenger for the local network"

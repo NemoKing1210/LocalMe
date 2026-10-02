@@ -6,7 +6,7 @@ export type UnixMillis = number;
 
 export type MessageDirection = 'incoming' | 'outgoing';
 
-export type MessageStatus = 'sending' | 'sent' | 'delivered' | 'received' | 'failed';
+export type MessageStatus = 'queued' | 'sending' | 'delivered' | 'received';
 
 export interface Profile {
   readonly deviceId: DeviceId;
@@ -38,6 +38,12 @@ export interface Message {
   readonly body: string;
   readonly sentAt: UnixMillis;
   readonly receivedAt: UnixMillis;
+  /**
+   * When the recipient acknowledged an outgoing message, on this machine's clock; `null` while
+   * it is queued or in flight, and always `null` for an incoming message. It is the second date
+   * a message that waited in the outbox shows.
+   */
+  readonly deliveredAt: UnixMillis | null;
   readonly status: MessageStatus;
   readonly read: boolean;
 }
@@ -141,7 +147,6 @@ export interface UiLabels {
 export type ApiError =
   | { readonly kind: 'invalid_input'; readonly field: string; readonly message: string }
   | { readonly kind: 'unknown_peer'; readonly deviceId: string }
-  | { readonly kind: 'peer_offline'; readonly deviceId: string }
   | { readonly kind: 'storage'; readonly message: string }
   | { readonly kind: 'discovery'; readonly message: string }
   | { readonly kind: 'network'; readonly message: string }
@@ -162,6 +167,7 @@ export interface CoreEventMap {
     readonly peer: DeviceId;
     readonly id: MessageId;
     readonly status: MessageStatus;
+    readonly deliveredAt: UnixMillis | null;
   };
   own_profile: { readonly nickname: string; readonly avatarSeed: string };
   notice: { readonly level: NoticeLevel; readonly message: string };

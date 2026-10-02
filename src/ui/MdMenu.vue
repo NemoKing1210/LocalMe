@@ -7,15 +7,23 @@ import MdIcon from './MdIcon.vue';
 import MdIconButton from './MdIconButton.vue';
 import type { IconName } from './icons';
 
-const props = defineProps<{
-  items: readonly {
-    readonly id: string;
-    readonly label: string;
-    readonly icon?: IconName;
-    readonly danger?: boolean;
-  }[];
-  label: string;
-}>();
+const props = withDefaults(
+  defineProps<{
+    items: readonly {
+      readonly id: string;
+      readonly label: string;
+      readonly icon?: IconName;
+      readonly danger?: boolean;
+    }[];
+    label: string;
+    /**
+     * A menu without a trigger is a context menu: it is opened by a gesture elsewhere and placed
+     * at the point `show()` was given, so `root` contributes nothing to the layout.
+     */
+    trigger?: boolean;
+  }>(),
+  { trigger: true },
+);
 
 const emit = defineEmits<{ select: [id: string] }>();
 
@@ -27,6 +35,9 @@ const activeIndex = ref(0);
 // Fixed positioning keeps the menu out of the list's scrollable area; the surface is measured
 // before it is shown and stays `visibility: hidden` until then so it never paints in the wrong place.
 const coords = ref<{ left: number; top: number } | null>(null);
+
+/** A context menu opens where the pointer is, not under a trigger that does not exist. */
+const point = ref<{ readonly x: number; readonly y: number } | null>(null);
 
 const surfaceStyle = computed(() =>
   coords.value === null
@@ -51,13 +62,26 @@ function focusItem(index: number): void {
 }
 
 function place(): void {
-  const trigger = root.value?.querySelector<HTMLElement>('.md-menu__trigger');
   const surfaceElement = surface.value;
-  if (trigger === null || trigger === undefined || surfaceElement === null) return;
+  if (surfaceElement === null) return;
 
-  const rect = trigger.getBoundingClientRect();
   const width = surfaceElement.offsetWidth;
   const height = surfaceElement.offsetHeight;
+
+  const at = point.value;
+  if (at !== null) {
+    // Below and to the right of the cursor, pulled back inside the window when it would overflow.
+    coords.value = {
+      left: Math.min(Math.max(EDGE, at.x), Math.max(EDGE, window.innerWidth - width - EDGE)),
+      top: Math.min(Math.max(EDGE, at.y), Math.max(EDGE, window.innerHeight - height - EDGE)),
+    };
+    return;
+  }
+
+  const trigger = root.value?.querySelector<HTMLElement>('.md-menu__trigger');
+  if (trigger === null || trigger === undefined) return;
+
+  const rect = trigger.getBoundingClientRect();
 
   let top = rect.bottom + GAP;
   if (top + height > window.innerHeight - EDGE && rect.top - GAP - height >= EDGE) {
@@ -69,15 +93,21 @@ function place(): void {
   coords.value = { left, top };
 }
 
-function show(): void {
+function show(at?: { readonly x: number; readonly y: number }): void {
   if (props.items.length === 0) return;
+  point.value = at ?? null;
   open.value = true;
   activeIndex.value = 0;
   coords.value = null;
   // The surface is not in the DOM until this render has flushed, so it cannot be measured before then.
   void nextTick(() => {
     place();
-    focusItem(0);
+    // The coordinates only reach the surface on the render after this one, and a `visibility:
+    // hidden` element cannot take focus, so the first item is focused once the menu is painted —
+    // without it a context menu, which has no trigger to fall back on, ignores the keyboard.
+    void nextTick(() => {
+      focusItem(0);
+    });
   });
 }
 
@@ -173,8 +203,15 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div ref="root" class="md-menu" @keydown="onKeydown" @focusout="onFocusOut">
+  <div
+    ref="root"
+    class="md-menu"
+    :class="{ 'md-menu--bare': !trigger }"
+    @keydown="onKeydown"
+    @focusout="onFocusOut"
+  >
     <MdIconButton
+      v-if="trigger"
       class="md-menu__trigger"
       icon="more-vertical"
       :label="label"
@@ -211,6 +248,11 @@ onBeforeUnmount(() => {
 <style scoped>
 .md-menu {
   display: inline-flex;
+}
+
+/* A context menu has no trigger to size itself from; it must not take part in the layout. */
+.md-menu--bare {
+  display: contents;
 }
 
 /* Painted `fixed` and placed from script (see `place`), so it is not part of the list's scroll area. */

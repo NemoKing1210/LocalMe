@@ -51,11 +51,29 @@ impl Instance {
 
     /// Announces another instance to this one, exactly as a discovery adapter would.
     async fn discover(&self, peer: &Instance, nickname: &str) {
+        self.announce(
+            peer.device_id(),
+            peer.core.profile.avatar_seed.clone(),
+            peer.loopback_address(),
+            nickname,
+        )
+        .await;
+    }
+
+    /// The same, for an instance that is not held in an [`Instance`] — a restarted core, whose
+    /// port and identity are read from the core itself.
+    async fn announce(
+        &self,
+        device_id: DeviceId,
+        avatar_seed: localme_core::domain::ids::AvatarSeed,
+        address: SocketAddr,
+        nickname: &str,
+    ) {
         let announcement = DiscoveredPeer {
-            device_id: peer.device_id(),
+            device_id,
             nickname: Nickname::parse(nickname).expect("valid nickname"),
-            avatar_seed: peer.core.profile.avatar_seed.clone(),
-            addresses: vec![peer.loopback_address()],
+            avatar_seed,
+            addresses: vec![address],
         };
         self.core
             .discovery_feed()
@@ -155,13 +173,12 @@ async fn two_instances_connect_and_exchange_messages() {
         .send_message(boris.device_id(), body("привет, Борис"))
         .await
         .expect("message is accepted");
-    assert!(
-        matches!(
-            sent.status,
-            MessageStatus::Sending | MessageStatus::Sent | MessageStatus::Delivered
-        ),
-        "unexpected status {:?}",
-        sent.status
+    // A connected peer is served immediately, so the row the caller receives is already in
+    // flight rather than waiting.
+    assert_eq!(
+        sent.status,
+        MessageStatus::Sending,
+        "a message to an online peer is handed to its socket before the command returns"
     );
 
     let delivered = sent.id;
@@ -295,18 +312,278 @@ async fn a_peer_that_quits_goes_offline_with_a_last_seen_time() {
         "the offline row must carry a last-seen time for the interface to render"
     );
 
-    // Writing to an offline peer is refused, which is what disables the composer.
-    let refused = anna
+    // Writing to an offline peer is accepted: the row waits in the outbox instead of being
+    // refused, which is what makes the conversation continue across a disconnect.
+    let waiting = anna
         .core
         .session
         .send_message(boris_id, body("are you there?"))
-        .await;
+        .await
+        .expect("a message to an offline peer is queued");
+    assert_eq!(waiting.status, MessageStatus::Queued);
+    assert_eq!(waiting.delivered_at, None);
+
     assert!(
-        refused.is_err(),
-        "a message to an offline peer must not be accepted"
+        anna.core
+            .session
+            .history(boris_id, None, 10)
+            .await
+            .expect("history")
+            .iter()
+            .any(|message| message.id == waiting.id && message.status == MessageStatus::Queued),
+        "the queued row must be visible in the conversation"
     );
 
     anna.core.shutdown().await;
+}
+
+#[tokio::test]
+async fn messages_written_while_the_peer_is_away_are_delivered_in_order_when_it_returns() {
+    let anna = Instance::start("anna").await;
+    let boris = Instance::start("boris").await;
+    anna.discover(&boris, "boris").await;
+
+    eventually("a connection", Duration::from_secs(10), || async {
+        anna.peer(boris.device_id())
+            .await
+            .is_some_and(|peer| peer.online)
+    })
+    .await;
+
+    let boris_id = boris.device_id();
+    let boris_seed = boris.core.profile.avatar_seed.clone();
+
+    // boris leaves, taking his socket with him.
+    boris.core.shutdown().await;
+    eventually("anna to notice", Duration::from_secs(5), || async {
+        anna.peer(boris_id).await.is_some_and(|peer| !peer.online)
+    })
+    .await;
+
+    // More than one burst, so the drain has to pace itself across several presence ticks and
+    // the ordering claim is not just "one write of the queue".
+    let bodies: Vec<String> = (0..20).map(|index| format!("message {index}")).collect();
+    for text in &bodies {
+        let queued = anna
+            .core
+            .session
+            .send_message(boris_id, body(text))
+            .await
+            .expect("a message to an offline peer is queued");
+        assert_eq!(queued.status, MessageStatus::Queued);
+        assert_eq!(queued.delivered_at, None, "nothing has been delivered yet");
+    }
+
+    // He comes back on the same data directory, so it is the same device with the same history.
+    let dir = boris._data_dir.path().to_path_buf();
+    let returning = Core::start(CoreConfig::without_discovery(
+        dir,
+        Nickname::parse("ignored").expect("valid nickname"),
+        0,
+        0,
+    ))
+    .await
+    .expect("boris restarts");
+    let address = SocketAddr::from(([127, 0, 0, 1], returning.port));
+    let deadline = Instant::now() + Duration::from_secs(40);
+    loop {
+        // Real discovery repeats an announcement for a peer that is present; the session ignores
+        // a redial made too soon after the previous attempt, so it is repeated here too.
+        anna.announce(boris_id, boris_seed.clone(), address, "boris")
+            .await;
+        let delivered = anna
+            .core
+            .session
+            .history(boris_id, None, 50)
+            .await
+            .expect("history")
+            .iter()
+            .filter(|message| message.status == MessageStatus::Delivered)
+            .count();
+        if delivered == bodies.len() {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out with {delivered} of {} delivered",
+            bodies.len()
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+
+    // Both dates are on every row now, and the delivery cannot precede the creation.
+    for message in anna
+        .core
+        .session
+        .history(boris_id, None, 50)
+        .await
+        .expect("history")
+    {
+        assert_eq!(message.status, MessageStatus::Delivered);
+        let delivered_at = message.delivered_at.expect("a delivery time");
+        assert!(
+            delivered_at >= message.sent_at,
+            "{delivered_at:?} is before {:?}",
+            message.sent_at
+        );
+    }
+
+    // And boris has them in the order anna wrote them, though they arrived in several bursts.
+    let mut arriving: Vec<String> = returning
+        .session
+        .history(anna.device_id(), None, 50)
+        .await
+        .expect("history")
+        .iter()
+        .map(|message| message.body.as_str().to_owned())
+        .collect();
+    arriving.reverse(); // the page is newest first
+    assert_eq!(arriving, bodies);
+
+    anna.core.shutdown().await;
+    returning.shutdown().await;
+}
+
+/// Both peers writing while away is the case the drain's pace is sized for: each side sends a
+/// backlog and, at the same time, acknowledges the other's, so the inbound limiter sees both
+/// streams. A pace that ignored that would trip the limit, drop the connection and never finish.
+#[tokio::test]
+async fn two_backlogs_drain_together_without_tripping_the_rate_limit() {
+    let anna = Instance::start("anna").await;
+    let boris = Instance::start("boris").await;
+    anna.discover(&boris, "boris").await;
+
+    eventually("a connection", Duration::from_secs(10), || async {
+        anna.peer(boris.device_id())
+            .await
+            .is_some_and(|peer| peer.online)
+    })
+    .await;
+
+    let anna_id = anna.device_id();
+    let boris_id = boris.device_id();
+    let boris_seed = boris.core.profile.avatar_seed.clone();
+    let anna_seed = anna.core.profile.avatar_seed.clone();
+    let anna_address = anna.loopback_address();
+
+    // anna writes while boris is away.
+    boris.core.shutdown().await;
+    eventually("anna to notice", Duration::from_secs(5), || async {
+        anna.peer(boris_id).await.is_some_and(|peer| !peer.online)
+    })
+    .await;
+
+    let count = 15;
+    let from_anna: Vec<String> = (0..count).map(|index| format!("anna {index}")).collect();
+    let from_boris: Vec<String> = (0..count).map(|index| format!("boris {index}")).collect();
+    for text in &from_anna {
+        anna.core
+            .session
+            .send_message(boris_id, body(text))
+            .await
+            .expect("queued");
+    }
+
+    // boris comes back and writes before anyone is announced, so his rows wait in his outbox.
+    let dir = boris._data_dir.path().to_path_buf();
+    let returning = Core::start(CoreConfig::without_discovery(
+        dir,
+        Nickname::parse("ignored").expect("valid nickname"),
+        0,
+        0,
+    ))
+    .await
+    .expect("boris restarts");
+    for text in &from_boris {
+        let queued = returning
+            .session
+            .send_message(anna_id, body(text))
+            .await
+            .expect("queued");
+        assert_eq!(
+            queued.status,
+            MessageStatus::Queued,
+            "anna is not reachable yet"
+        );
+    }
+
+    let address = SocketAddr::from(([127, 0, 0, 1], returning.port));
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let mut announced = false;
+    loop {
+        anna.announce(boris_id, boris_seed.clone(), address, "boris")
+            .await;
+        if !announced {
+            // Discovery announces in both directions; without this the doubly-offline case
+            // would connect only after anna's repeated announcement.
+            returning
+                .discovery_feed()
+                .send(DiscoveryEvent::Found(DiscoveredPeer {
+                    device_id: anna_id,
+                    nickname: Nickname::parse("anna").expect("valid nickname"),
+                    avatar_seed: anna_seed.clone(),
+                    addresses: vec![anna_address],
+                }))
+                .await
+                .expect("boris accepts the announcement");
+            announced = true;
+        }
+        let anna_done = anna
+            .core
+            .session
+            .history(boris_id, None, 50)
+            .await
+            .expect("history")
+            .iter()
+            .filter(|message| message.status == MessageStatus::Delivered)
+            .count();
+        let boris_done = returning
+            .session
+            .history(anna_id, None, 50)
+            .await
+            .expect("history")
+            .iter()
+            .filter(|message| message.status == MessageStatus::Delivered)
+            .count();
+        if anna_done == count && boris_done == count {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out with anna {anna_done}/{count} and boris {boris_done}/{count} delivered"
+        );
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+
+    // Neither side lost its order while both drains ran at once. Each conversation holds both
+    // directions; the claim is about what arrived, so the incoming rows are compared.
+    let mut received_by_boris: Vec<String> = returning
+        .session
+        .history(anna_id, None, 50)
+        .await
+        .expect("history")
+        .iter()
+        .filter(|message| message.direction == Direction::Incoming)
+        .map(|message| message.body.as_str().to_owned())
+        .collect();
+    received_by_boris.reverse();
+    assert_eq!(received_by_boris, from_anna);
+
+    let mut received_by_anna: Vec<String> = anna
+        .core
+        .session
+        .history(boris_id, None, 50)
+        .await
+        .expect("history")
+        .iter()
+        .filter(|message| message.direction == Direction::Incoming)
+        .map(|message| message.body.as_str().to_owned())
+        .collect();
+    received_by_anna.reverse();
+    assert_eq!(received_by_anna, from_boris);
+
+    anna.core.shutdown().await;
+    returning.shutdown().await;
 }
 
 #[tokio::test]

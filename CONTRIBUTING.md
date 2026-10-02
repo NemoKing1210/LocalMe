@@ -90,7 +90,7 @@ Exercise the path you touched, then the shared flows when the change is close to
 persistence:
 
 - Discovery, dial, reconnect and the simultaneous-connect tie-break
-- Send, delivery acknowledgement, deduplication and the failed path
+- Send, the outbox (queued → sending → delivered), deduplication and the requeue on disconnect
 - Presence transitions and the offline render
 - Persistence across restart (peers, history, settings, window bounds)
 - Tray close, native notification, single-instance focus

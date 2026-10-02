@@ -28,8 +28,12 @@ export const useChatStore = defineStore('chat', () => {
     return oldest ? { sentAtMs: oldest.sentAt, id: oldest.id } : null;
   });
 
+  /** Messages that have not been delivered yet: waiting in the outbox or on the wire. */
   const pendingCount = computed(
-    () => messages.value.filter((message) => message.status === 'sending').length,
+    () =>
+      messages.value.filter(
+        (message) => message.status === 'queued' || message.status === 'sending',
+      ).length,
   );
 
   async function open(next: DeviceId | null): Promise<void> {
@@ -88,7 +92,11 @@ export const useChatStore = defineStore('chat', () => {
     if (message.peer !== peerId.value) return;
     const existing = messages.value.find((known) => known.id === message.id);
     if (existing) {
-      update(message.id, { status: message.status, read: message.read });
+      update(message.id, {
+        status: message.status,
+        read: message.read,
+        deliveredAt: message.deliveredAt,
+      });
       return;
     }
     // Sorted on insert rather than on read: the list is rendered on every scroll, and a
