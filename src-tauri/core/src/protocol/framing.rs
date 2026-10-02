@@ -286,4 +286,29 @@ mod tests {
             Some(b"incomplete".to_vec())
         );
     }
+
+    #[test]
+    fn a_buffer_that_bypassed_push_is_still_refused() {
+        // `push` validates the length prefix, so these states are unreachable through the public
+        // API. The check in `next_frame` is belt-and-braces, and this pins that it refuses an
+        // impossible length rather than slicing a frame that cannot exist.
+        let mut zero = FrameDecoder {
+            buffer: vec![0, 0, 0, 0],
+        };
+        assert!(matches!(
+            zero.next_frame(),
+            Err(ProtocolError::FrameSize { len: 0, .. })
+        ));
+
+        let mut oversized = FrameDecoder {
+            buffer: u32::try_from(MAX_FRAME_BYTES + 1)
+                .expect("fits")
+                .to_be_bytes()
+                .to_vec(),
+        };
+        assert!(matches!(
+            oversized.next_frame(),
+            Err(ProtocolError::FrameSize { .. })
+        ));
+    }
 }

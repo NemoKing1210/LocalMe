@@ -199,4 +199,20 @@ mod tests {
         assert!(!bucket.try_acquire_n(4.0 * 1024.0 * 1024.0, at(base, 500)));
         assert_eq!(bucket.available(at(base, 500)), before);
     }
+
+    #[test]
+    fn a_non_positive_or_non_finite_cost_is_treated_as_one() {
+        let base = Instant::now();
+        let mut bucket = TokenBucket::new(2.0, 1.0, base);
+
+        // A nonsense amount must cost one token, not zero and not poison the bucket with NaN.
+        assert!(bucket.try_acquire_n(f64::NAN, base));
+        assert!(bucket.try_acquire_n(0.0, base));
+        assert!(
+            !bucket.try_acquire_n(-5.0, base),
+            "two tokens are now spent"
+        );
+        // A second of refill buys one token, which a nonsense positive cost still consumes.
+        assert!(bucket.try_acquire_n(f64::INFINITY, at(base, 1_000)));
+    }
 }

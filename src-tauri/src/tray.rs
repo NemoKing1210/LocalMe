@@ -368,4 +368,19 @@ mod tests {
             format!("{OPEN_PEER_PREFIX}{}", peer.device_id)
         );
     }
+
+    /// The rest of the tray needs an `AppHandle` to build a `Menu` or a `TrayIcon`, so it is
+    /// not reachable from a host unit test; only the pure helpers are exercised here.
+    #[tokio::test]
+    async fn the_unread_counter_mirrors_the_state() {
+        use crate::state::test_support;
+        use std::sync::atomic::Ordering;
+
+        let (state, _dir) = test_support::state().await;
+        assert_eq!(unread(&state), 0);
+        state.unread.store(5, Ordering::Relaxed);
+        assert_eq!(unread(&state), 5);
+        state.unread.store(0, Ordering::Relaxed);
+        assert_eq!(unread(&state), 0);
+    }
 }

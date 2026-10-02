@@ -542,4 +542,164 @@ mod tests {
         assert!(cut.ends_with('…'));
         assert_eq!(truncate("short"), "short");
     }
+
+    #[test]
+    fn every_level_has_its_own_filter() {
+        assert_eq!(LogLevel::Error.filter(), "localme=error,localme_core=error");
+        assert_eq!(LogLevel::Warn.filter(), "localme=warn,localme_core=warn");
+        assert_eq!(LogLevel::Info.filter(), "localme=info,localme_core=info");
+        assert_eq!(LogLevel::Debug.filter(), "localme=debug,localme_core=debug");
+    }
+
+    #[test]
+    fn a_level_is_parsed_from_its_lowercase_name() {
+        assert_eq!(
+            serde_json::from_str::<LogLevel>("\"debug\"").expect("parses"),
+            LogLevel::Debug
+        );
+        assert_eq!(
+            serde_json::from_str::<LogLevel>("\"warn\"").expect("parses"),
+            LogLevel::Warn
+        );
+        assert!(serde_json::from_str::<LogLevel>("\"trace\"").is_err());
+        assert_eq!(
+            serde_json::to_string(&LogLevel::Error).expect("serialises"),
+            "\"error\""
+        );
+    }
+
+    #[test]
+    fn a_retention_request_is_clamped_to_the_supported_range() {
+        assert_eq!(clamp_retention(0), MIN_LOG_RETENTION_DAYS);
+        assert_eq!(clamp_retention(1), 1);
+        assert_eq!(
+            clamp_retention(DEFAULT_LOG_RETENTION_DAYS),
+            DEFAULT_LOG_RETENTION_DAYS
+        );
+        assert_eq!(
+            clamp_retention(MAX_LOG_RETENTION_DAYS),
+            MAX_LOG_RETENTION_DAYS
+        );
+        assert_eq!(clamp_retention(u32::MAX), MAX_LOG_RETENTION_DAYS);
+    }
+
+    #[test]
+    fn a_new_directory_starts_with_the_default_retention() {
+        let (dir, logs) = temporary();
+        assert_eq!(logs.retention_days(), DEFAULT_LOG_RETENTION_DAYS);
+        assert_eq!(logs.directory(), dir.path().join(LOG_DIRECTORY));
+    }
+
+    #[test]
+    fn lowering_the_retention_prunes_at_once() {
+        let (_dir, logs) = temporary();
+        let today = days_since_epoch(SystemTime::now());
+        let old = logs.directory().join(file_name(today - 40));
+        fs::write(&old, b"old").expect("write");
+
+        logs.set_retention(7);
+        assert_eq!(logs.retention_days(), 7);
+        assert!(!old.exists());
+    }
+
+    #[test]
+    fn pruning_happens_once_a_day() {
+        let (_dir, logs) = temporary();
+        let today = days_since_epoch(SystemTime::now());
+        let old = logs.directory().join(file_name(today - 40));
+        logs.set_retention(7); // Sets the day marker.
+        fs::write(&old, b"old").expect("write");
+
+        // The once-a-day guard makes a second prune on the same day a no-op...
+        logs.prune();
+        assert!(old.exists());
+
+        // ... and clearing the marker lets the next prune remove it.
+        *logs.last_prune.lock().expect("lock") = String::new();
+        logs.prune();
+        assert!(!old.exists());
+    }
+
+    #[test]
+    fn files_ignore_anything_that_is_not_a_daily_log() {
+        let (_dir, logs) = temporary();
+        let today = days_since_epoch(SystemTime::now());
+        fs::write(logs.directory().join(file_name(today)), b"x").expect("write");
+        fs::write(logs.directory().join("notes.txt"), b"x").expect("write");
+        fs::create_dir(logs.directory().join("archive")).expect("mkdir");
+
+        let files = logs.files();
+        assert_eq!(files.len(), 1, "{files:?}");
+        assert_eq!(files[0].name, file_name(today));
+    }
+
+    #[test]
+    fn clearing_counts_every_byte_it_frees_and_is_repeatable() {
+        let (_dir, logs) = temporary();
+        let today = days_since_epoch(SystemTime::now());
+        fs::write(logs.directory().join(file_name(today)), vec![b'a'; 10]).expect("write");
+        fs::write(logs.directory().join(file_name(today - 1)), vec![b'b'; 5]).expect("write");
+        fs::write(logs.directory().join("notes.txt"), b"kept").expect("write");
+
+        assert_eq!(logs.clear(), 15);
+        assert!(logs.files().is_empty());
+        // Anything that is not one of ours is left alone.
+        assert!(logs.directory().join("notes.txt").exists());
+        assert_eq!(logs.clear(), 0);
+    }
+
+    #[test]
+    fn the_day_number_counts_whole_utc_days() {
+        use std::time::Duration;
+        assert_eq!(days_since_epoch(UNIX_EPOCH), 0);
+        assert_eq!(
+            days_since_epoch(UNIX_EPOCH + Duration::from_secs(86_399)),
+            0
+        );
+        assert_eq!(
+            days_since_epoch(UNIX_EPOCH + Duration::from_secs(86_400)),
+            1
+        );
+    }
+
+    #[test]
+    fn a_negative_day_is_before_the_epoch() {
+        assert_eq!(date_key(-1), "1969-12-31");
+        assert_eq!(file_name(-1), "localme.1969-12-31.log");
+    }
+
+    #[test]
+    fn the_opener_names_the_platforms_file_manager() {
+        let command = opener(Path::new("/tmp/logs"));
+        #[cfg(target_os = "windows")]
+        assert_eq!(command.get_program().to_string_lossy().as_ref(), "explorer");
+        #[cfg(target_os = "macos")]
+        assert_eq!(command.get_program().to_string_lossy().as_ref(), "open");
+        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+        assert_eq!(command.get_program().to_string_lossy().as_ref(), "xdg-open");
+        assert!(
+            command
+                .get_args()
+                .any(|arg| arg.to_string_lossy().as_ref() == "/tmp/logs")
+        );
+    }
+
+    /// `init` installs the process-global subscriber and reload handle, so this is the one test
+    /// that touches `LOGS`/`LEVEL`; it exercises the documented "apply without a restart" path.
+    #[test]
+    fn applying_settings_changes_the_retention_without_a_restart() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let returned = init(dir.path());
+        assert_eq!(returned, dir.path().join(LOG_DIRECTORY));
+        assert!(logs().is_some(), "logging was initialised");
+
+        apply(&LoggingSettings {
+            level: LogLevel::Debug,
+            retention_days: 3,
+        });
+        assert_eq!(logs().expect("initialised").retention_days(), 3);
+
+        // Reloading to another level must not panic; `RUST_LOG`, when set, wins by design.
+        set_level(LogLevel::Warn);
+    }
 }

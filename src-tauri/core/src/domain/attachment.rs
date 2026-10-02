@@ -525,4 +525,125 @@ mod tests {
         );
         assert!(meta.validate().is_err());
     }
+
+    #[test]
+    fn attachment_kind_labels_and_parsing_round_trip() {
+        assert_eq!(AttachmentKind::Image.as_str(), "image");
+        assert_eq!(AttachmentKind::File.as_str(), "file");
+        assert_eq!(
+            AttachmentKind::from_db("image").expect("image"),
+            AttachmentKind::Image
+        );
+        assert_eq!(
+            AttachmentKind::from_db("file").expect("file"),
+            AttachmentKind::File
+        );
+        assert!(AttachmentKind::from_db("movie").is_err());
+    }
+
+    #[test]
+    fn a_long_name_with_a_huge_extension_is_truncated_without_it() {
+        // An extension over 16 characters is not worth keeping, so the whole name is simply cut.
+        let raw = format!("{}.{}", "a".repeat(400), "e".repeat(20));
+        let name = FileName::sanitise(&raw);
+        assert_eq!(name.as_str().chars().count(), MAX_FILE_NAME_CHARS);
+        assert!(name.as_str().chars().all(|c| c == 'a'));
+
+        // A long name with no dot at all takes the same branch with no extension to keep.
+        let plain = FileName::sanitise(&"b".repeat(MAX_FILE_NAME_CHARS * 2));
+        assert_eq!(plain.as_str().chars().count(), MAX_FILE_NAME_CHARS);
+    }
+
+    #[test]
+    fn a_file_name_is_a_string_on_the_wire_and_in_the_interface() {
+        let name = FileName::sanitise("report.pdf");
+        assert_eq!(name.to_string(), "report.pdf");
+        let json = serde_json::to_string(&name).expect("serialise");
+        assert_eq!(json, "\"report.pdf\"");
+        let back: FileName = serde_json::from_str(&json).expect("deserialise");
+        assert_eq!(back, name);
+
+        // Deserialising also sanitises, so a hostile wire value stays a safe path component.
+        let hostile: FileName = serde_json::from_str(r#""..\\escape""#).expect("deserialise");
+        assert_eq!(hostile.as_str(), "escape");
+
+        let parsed: FileName = "photo.png".parse().expect("infallible");
+        assert_eq!(parsed, FileName::sanitise("photo.png"));
+    }
+
+    #[test]
+    fn a_digest_exposes_its_bytes_and_round_trips_through_serde() {
+        let digest = Sha256::of(b"hello");
+        assert_eq!(digest.as_bytes().len(), 32);
+        assert_eq!(Sha256::from_bytes(*digest.as_bytes()), digest);
+        assert_eq!(digest.to_string(), digest.to_hex());
+
+        let json = serde_json::to_string(&digest).expect("serialise");
+        assert_eq!(json, format!("\"{}\"", digest.to_hex()));
+        let back: Sha256 = serde_json::from_str(&json).expect("deserialise");
+        assert_eq!(back, digest);
+        assert!(serde_json::from_str::<Sha256>("\"nope\"").is_err());
+    }
+
+    #[test]
+    fn attachment_states_round_trip_through_their_db_names() {
+        for state in [
+            AttachmentState::Queued,
+            AttachmentState::Sending,
+            AttachmentState::Receiving,
+            AttachmentState::Complete,
+            AttachmentState::Cancelled,
+            AttachmentState::Failed,
+        ] {
+            assert_eq!(
+                AttachmentState::from_db(state.as_str()).expect("parses"),
+                state
+            );
+        }
+        assert!(AttachmentState::from_db("teleporting").is_err());
+    }
+
+    #[test]
+    fn only_the_in_flight_states_are_in_flight() {
+        assert!(AttachmentState::Queued.is_in_flight());
+        assert!(AttachmentState::Sending.is_in_flight());
+        assert!(AttachmentState::Receiving.is_in_flight());
+        assert!(!AttachmentState::Complete.is_in_flight());
+        assert!(!AttachmentState::Cancelled.is_in_flight());
+        assert!(!AttachmentState::Failed.is_in_flight());
+
+        assert!(AttachmentState::Complete.is_finished());
+        assert!(AttachmentState::Cancelled.is_finished());
+        assert!(AttachmentState::Failed.is_finished());
+        assert!(!AttachmentState::Queued.is_finished());
+    }
+
+    #[test]
+    fn an_offer_at_the_size_cap_is_accepted() {
+        let meta = AttachmentMeta::new(
+            AttachmentId::generate(),
+            FileName::sanitise("big.iso"),
+            MAX_ATTACHMENT_BYTES,
+        );
+        assert!(meta.validate().is_ok());
+    }
+
+    #[test]
+    fn an_empty_attachment_is_one_hundred_percent_done() {
+        let attachment = Attachment {
+            id: AttachmentId::generate(),
+            message_id: MessageId::generate(),
+            peer: DeviceId::generate(),
+            direction: Direction::Outgoing,
+            name: FileName::sanitise("empty"),
+            size: 0,
+            kind: AttachmentKind::File,
+            state: AttachmentState::Complete,
+            transferred: 0,
+            sha256: None,
+            created_at: UnixMillis(1),
+            path: None,
+        };
+        assert_eq!(attachment.percent(), 100);
+    }
 }

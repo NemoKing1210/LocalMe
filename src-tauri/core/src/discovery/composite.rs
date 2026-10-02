@@ -172,6 +172,9 @@ impl Aggregator {
 #[cfg(test)]
 mod tests {
     use std::net::SocketAddr;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::time::Duration;
 
     use crate::domain::ids::AvatarSeed;
     use crate::domain::nickname::Nickname;
@@ -287,5 +290,231 @@ mod tests {
             None,
             "an unrelated source cannot make a peer disappear"
         );
+    }
+
+    #[test]
+    fn the_most_recent_address_set_wins_across_sources() {
+        let mut aggregator = Aggregator::default();
+        let device_id = DeviceId::generate();
+        let stale = announced(device_id, &["192.168.1.20:47820"]);
+        let fresh = announced(device_id, &["192.168.1.21:47820"]);
+
+        assert_eq!(
+            aggregator.apply(0, DiscoveryEvent::Found(stale.clone())),
+            Some(DiscoveryEvent::Found(stale))
+        );
+        assert_eq!(
+            aggregator.apply(1, DiscoveryEvent::Found(fresh.clone())),
+            Some(DiscoveryEvent::Found(fresh)),
+            "a newer address set replaces the tracked one and is reported again"
+        );
+    }
+
+    /// A discovery source whose start can be made to fail. It records the sink it is given so
+    /// the test can feed events through it.
+    #[derive(Default)]
+    struct MockSource {
+        starts: AtomicUsize,
+        stops: AtomicUsize,
+        fail: AtomicBool,
+        sink: Mutex<Option<mpsc::Sender<DiscoveryEvent>>>,
+    }
+
+    impl MockSource {
+        fn new(fail: bool) -> Self {
+            Self {
+                fail: AtomicBool::new(fail),
+                ..Self::default()
+            }
+        }
+
+        /// The sink the composite handed this source, so the test can push events through it.
+        fn feed(&self) -> mpsc::Sender<DiscoveryEvent> {
+            self.sink
+                .lock()
+                .expect("the mock sink lock")
+                .clone()
+                .expect("the source was started")
+        }
+    }
+
+    impl Discovery for Arc<MockSource> {
+        fn start(&self, sink: mpsc::Sender<DiscoveryEvent>) -> Result<(), DiscoveryError> {
+            self.starts.fetch_add(1, Ordering::SeqCst);
+            if self.fail.load(Ordering::SeqCst) {
+                return Err(DiscoveryError::Beacon(io::Error::other(
+                    "this source refuses to start",
+                )));
+            }
+            *self.sink.lock().expect("the mock sink lock") = Some(sink);
+            Ok(())
+        }
+
+        fn stop(&self) {
+            self.stops.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    fn sources(first: &Arc<MockSource>, second: &Arc<MockSource>) -> Vec<Box<dyn Discovery>> {
+        vec![Box::new(Arc::clone(first)), Box::new(Arc::clone(second))]
+    }
+
+    async fn next_event(events: &mut mpsc::Receiver<DiscoveryEvent>) -> DiscoveryEvent {
+        tokio::time::timeout(Duration::from_secs(5), events.recv())
+            .await
+            .expect("an event arrived before the timeout")
+            .expect("the composite sink stayed open")
+    }
+
+    #[test]
+    fn the_composite_needs_a_tokio_runtime_to_start() {
+        let composite = CompositeDiscovery::new(Vec::new(), DeviceId::generate());
+        let (sink, _events) = mpsc::channel(1);
+
+        let error = Discovery::start(&composite, sink).expect_err("there is no runtime here");
+
+        assert!(matches!(error, DiscoveryError::Beacon(_)));
+    }
+
+    #[test]
+    fn shutdown_fans_out_to_every_source() {
+        let first = Arc::new(MockSource::new(false));
+        let second = Arc::new(MockSource::new(false));
+        let composite = CompositeDiscovery::new(sources(&first, &second), DeviceId::generate());
+
+        Discovery::stop(&composite);
+        assert_eq!(first.stops.load(Ordering::SeqCst), 1);
+        assert_eq!(second.stops.load(Ordering::SeqCst), 1);
+
+        // Dropping stops them again, and repeated shutdown stays safe.
+        drop(composite);
+        assert_eq!(first.stops.load(Ordering::SeqCst), 2);
+        assert_eq!(second.stops.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn a_source_that_fails_to_start_is_skipped_without_disabling_the_others() {
+        let bad = Arc::new(MockSource::new(true));
+        let good = Arc::new(MockSource::new(false));
+        let composite = CompositeDiscovery::new(sources(&bad, &good), DeviceId::generate());
+        let (sink, mut events) = mpsc::channel(4);
+
+        Discovery::start(&composite, sink).expect("the composite starts regardless of one source");
+        // A second start while running is a no-op, not an error.
+        Discovery::start(&composite, mpsc::channel(1).0).expect("a second start is a no-op");
+
+        assert_eq!(bad.starts.load(Ordering::SeqCst), 1);
+        assert_eq!(good.starts.load(Ordering::SeqCst), 1);
+        assert!(
+            bad.sink.lock().expect("the mock sink lock").is_none(),
+            "the source that failed was never handed a sink"
+        );
+
+        let peer = announced(DeviceId::generate(), &["192.168.1.40:47820"]);
+        good.feed()
+            .send(DiscoveryEvent::Found(peer.clone()))
+            .await
+            .expect("feed the surviving source");
+        assert_eq!(next_event(&mut events).await, DiscoveryEvent::Found(peer));
+
+        Discovery::stop(&composite);
+        assert_eq!(bad.stops.load(Ordering::SeqCst), 1);
+        assert_eq!(good.stops.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn events_are_deduplicated_across_sources_and_our_own_id_is_filtered() {
+        let own = DeviceId::generate();
+        let first = Arc::new(MockSource::new(false));
+        let second = Arc::new(MockSource::new(false));
+        let composite = CompositeDiscovery::new(sources(&first, &second), own);
+        let (sink, mut events) = mpsc::channel(4);
+        Discovery::start(&composite, sink).expect("the composite starts");
+
+        let peer = announced(DeviceId::generate(), &["192.168.1.20:47820"]);
+        first
+            .feed()
+            .send(DiscoveryEvent::Found(peer.clone()))
+            .await
+            .expect("feed the first source");
+        assert_eq!(
+            next_event(&mut events).await,
+            DiscoveryEvent::Found(peer.clone())
+        );
+
+        // The second source seeing the same peer the same way is not news; the sentinel that
+        // follows it proves the repeat was processed and discarded.
+        let sentinel = announced(DeviceId::generate(), &["192.168.1.30:47820"]);
+        second
+            .feed()
+            .send(DiscoveryEvent::Found(peer.clone()))
+            .await
+            .expect("feed the second source");
+        second
+            .feed()
+            .send(DiscoveryEvent::Found(sentinel.clone()))
+            .await
+            .expect("feed the sentinel");
+        assert_eq!(
+            next_event(&mut events).await,
+            DiscoveryEvent::Found(sentinel)
+        );
+
+        // Our own announcement is dropped at the composite boundary, never forwarded.
+        let own_peer = announced(own, &["192.168.1.99:47820"]);
+        let sentinel2 = announced(DeviceId::generate(), &["192.168.1.31:47820"]);
+        first
+            .feed()
+            .send(DiscoveryEvent::Found(own_peer))
+            .await
+            .expect("feed our own announcement");
+        first
+            .feed()
+            .send(DiscoveryEvent::Found(sentinel2.clone()))
+            .await
+            .expect("feed the sentinel");
+        assert_eq!(
+            next_event(&mut events).await,
+            DiscoveryEvent::Found(sentinel2),
+            "our own device id must never reach the session"
+        );
+
+        // One source dropping the peer is not the loss: the other still sees it.
+        let sentinel3 = announced(DeviceId::generate(), &["192.168.1.32:47820"]);
+        first
+            .feed()
+            .send(DiscoveryEvent::Lost {
+                device_id: peer.device_id,
+            })
+            .await
+            .expect("feed a loss from the first source");
+        first
+            .feed()
+            .send(DiscoveryEvent::Found(sentinel3.clone()))
+            .await
+            .expect("feed the sentinel");
+        assert_eq!(
+            next_event(&mut events).await,
+            DiscoveryEvent::Found(sentinel3)
+        );
+
+        // The last source dropping it is the loss.
+        second
+            .feed()
+            .send(DiscoveryEvent::Lost {
+                device_id: peer.device_id,
+            })
+            .await
+            .expect("feed a loss from the second source");
+        assert_eq!(
+            next_event(&mut events).await,
+            DiscoveryEvent::Lost {
+                device_id: peer.device_id
+            }
+        );
+
+        Discovery::stop(&composite);
+        assert_eq!(first.stops.load(Ordering::SeqCst), 1);
+        assert_eq!(second.stops.load(Ordering::SeqCst), 1);
     }
 }

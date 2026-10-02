@@ -404,4 +404,112 @@ mod tests {
             Some("holiday.jpg")
         );
     }
+
+    #[test]
+    fn hashing_an_empty_file_is_the_empty_digest() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = write_source(dir.path(), b"");
+        assert_eq!(hash_file(&path).expect("hash"), Sha256::of(b""));
+    }
+
+    #[test]
+    fn hashing_handles_exact_chunk_boundaries() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        for size in [FILE_CHUNK_BYTES, FILE_CHUNK_BYTES + 1] {
+            let bytes: Vec<u8> = (0..size).map(|index| (index % 253) as u8).collect();
+            let path = write_source(dir.path(), &bytes);
+            assert_eq!(
+                hash_file(&path).expect("hash"),
+                Sha256::of(&bytes),
+                "size {size}"
+            );
+        }
+    }
+
+    #[test]
+    fn hashing_a_file_that_is_not_there_is_an_io_error() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        assert!(hash_file(&dir.path().join("missing.bin")).is_err());
+    }
+
+    #[test]
+    fn a_source_that_vanishes_before_the_read_is_an_io_error() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = write_source(dir.path(), b"abc");
+        let mut transfer =
+            OutgoingTransfer::new(attachment(AttachmentState::Sending, 3, 0), path.clone());
+        std::fs::remove_file(&path).expect("remove");
+        assert!(
+            transfer.read_chunk().is_err(),
+            "a vanished source must be an error, not a silent empty chunk"
+        );
+    }
+
+    #[test]
+    fn an_outgoing_transfer_reports_completion_and_waits_for_its_digest() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = write_source(dir.path(), b"abc");
+        let mut transfer = OutgoingTransfer::new(attachment(AttachmentState::Sending, 3, 0), path);
+
+        // No digest yet: the sender must not start streaming.
+        assert!(!transfer.wants_chunk());
+        assert!(!transfer.is_complete());
+
+        transfer.attachment.sha256 = Some(Sha256::of(b"abc"));
+        assert!(transfer.wants_chunk());
+        let _ = transfer.read_chunk().expect("read");
+        assert!(transfer.is_complete(), "all bytes are out");
+        assert_eq!(transfer.read_chunk().expect("read"), None);
+
+        // Once the last chunk has been followed by `file_done`, nothing more is wanted.
+        transfer.finished = true;
+        assert!(!transfer.wants_chunk());
+    }
+
+    #[test]
+    fn attachment_directories_are_named_after_the_identifier() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let id = AttachmentId::generate();
+        let directory = attachment_directory(dir.path(), id);
+        assert_eq!(directory, dir.path().join(id.to_string()));
+
+        // A hostile name is sanitised before it ever becomes a path component, so the stored
+        // path stays inside the attachment's own directory.
+        let hostile = FileName::sanitise("../../escape.txt");
+        let stored = stored_path(dir.path(), id, &hostile);
+        assert!(
+            stored.starts_with(&directory),
+            "{stored:?} left {directory:?}"
+        );
+        assert_eq!(stored.parent(), Some(directory.as_path()));
+        assert!(!hostile.as_str().contains(['/', '\\']));
+    }
+
+    #[test]
+    fn an_incoming_transfer_reports_its_id_and_refuses_writes_after_release() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let mut transfer =
+            IncomingTransfer::open(&attachment(AttachmentState::Receiving, 3, 0), dir.path())
+                .expect("open");
+        assert_eq!(transfer.id(), transfer.attachment.id);
+
+        transfer.release();
+        let error = transfer
+            .append(0, b"xyz")
+            .expect_err("the handle is closed");
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn discarding_a_transfer_whose_part_file_is_already_gone_is_quiet() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let mut transfer =
+            IncomingTransfer::open(&attachment(AttachmentState::Receiving, 3, 0), dir.path())
+                .expect("open");
+        transfer.release();
+        std::fs::remove_file(&transfer.part).expect("remove");
+        transfer.discard();
+        assert_eq!(transfer.received, 0);
+        assert_eq!(transfer.acked, 0);
+    }
 }

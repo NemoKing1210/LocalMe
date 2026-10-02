@@ -30,7 +30,8 @@ LocalMe/
 ├─ AGENTS.md  CLAUDE.md          # agent/contributor map and Claude Code brief
 ├─ CONTRIBUTING.md  CHANGELOG.md  LICENSE
 ├─ scripts/                      # version bump, changelog extract, release tag
-├─ src/                          # Vue 3 front end (see §10)
+├─ src/                          # Vue 3 front end (see §10), `*.spec.ts` beside each module
+│  └─ test/                      # shared test harness (see §10.7)
 ├─ src-tauri/                    # Cargo workspace root
 │  ├─ Cargo.toml                 # package `localme` (Tauri host) + workspace definition
 │  ├─ tauri.conf.json            # Tauri 2 configuration
@@ -1098,6 +1099,53 @@ Where motion is used, and why:
 Motion is the largest single contributor to the main bundle, which now sits just above the
 deliberately low `chunkSizeWarningLimit` in `vite.config.ts`; the build reports it rather than
 hiding it, and the two pages are lazy chunks that a user who never opens them never downloads.
+
+### 10.7 Tests
+
+The interface is covered by Vitest: a spec sits next to the module it tests as
+`<module>.spec.ts`, and `npm run test` runs the lot. Pure logic — stores, formatters, the
+palette, the IPC wrapper — runs in the default `node` environment; a spec that mounts a
+component or reads the DOM declares `// @vitest-environment happy-dom` on its first line, so
+the suite pays for a DOM only where one is needed.
+
+The shared harness lives in `src/test/`:
+
+* `mount.ts` — `mountView()` mounts with one Pinia, a memory router carrying the real route
+  names, and the i18n plugin, which is what the application does; `createTestRouter()` is the
+  route table with the lazy pages replaced by an empty component;
+* `factories.ts` — builders for the DTOs the host sends, so a test states only the fields its
+  subject reads;
+* `matchMedia.ts` — a controllable `window.matchMedia`: a test that depends on the two-pane
+  breakpoint or the dark scheme sets it explicitly instead of inheriting whatever the headless
+  DOM reports;
+* `setup.ts` — installs the DOM stubs a headless engine lacks (observers, `Element.animate`,
+  scrolling), unmounts whatever a test mounted, and resets the shared module state
+  (media queries, locale) between tests.
+
+Two rules keep the suite honest and fast:
+
+* **The IPC boundary is mocked.** A store or component test mocks `@/ipc`, so no test reaches a
+  Tauri command. The wrapper itself — argument mapping, error normalisation, event unwrapping —
+  is tested against mocked `@tauri-apps/api` modules.
+* **The virtualisers are the one stubbed consumer.** `@tanstack/vue-virtual` measures real
+  layout, which a headless DOM does not have, so the two virtualised lists stub
+  `useVirtualizer` and keep the component's own ordering, paging and rendering logic under
+  test.
+
+Coverage is measured with `@vitest/coverage-v8` and configured in `vite.config.ts`: every file
+under `src/` counts, not only the imported ones, and `npm run test:coverage` fails below the
+thresholds there — so a new module with no test is a build failure rather than an invisible
+gap. `npm run test:watch` reruns on change while working.
+
+On the Rust side `cargo llvm-cov --workspace --lib` is the same gate over the unit suites; CI
+enforces a floor on it. Note what that number is: `cargo test` builds the library targets with
+their inline `#[cfg(test)]` modules, so both production and test code are instrumented, and
+the figure is only meaningful against itself. The two-instance loopback suite is deliberately
+left out of the measurement — it binds sockets and waits on real heartbeats, which is slow and
+timing-sensitive under instrumentation — and is run by the `core` CI job instead. The Tauri
+mock runtime is deliberately not used (§9.2), so the host modules that need an `AppHandle`
+(`commands.rs`, `events.rs`, `lib.rs`, `tray.rs`, `webview.rs`) are covered by `args.rs`'s unit
+tests and by the core, not by unit tests of their own.
 
 ---
 

@@ -162,3 +162,59 @@ pub fn install_ready_gate<R: Runtime>(app: &AppHandle<R>) {
 pub fn should_stay_in_tray(state: &AppState) -> bool {
     state.settings_snapshot().system.close_to_tray
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::test_support;
+    use localme_core::services::{Settings, SystemSettings};
+
+    #[test]
+    fn the_window_constants_match_the_configuration() {
+        assert_eq!(MAIN_WINDOW, "main");
+        assert_eq!(READY_EVENT, "localme://ready");
+        assert_eq!(READY_FALLBACK, Duration::from_secs(15));
+    }
+
+    #[test]
+    fn revealing_is_reported_from_the_static() {
+        REVEALED.store(false, Ordering::Relaxed);
+        assert!(!is_revealed());
+        REVEALED.store(true, Ordering::Relaxed);
+        assert!(is_revealed());
+        REVEALED.store(false, Ordering::Relaxed);
+        assert!(!is_revealed());
+    }
+
+    #[tokio::test]
+    async fn the_close_decision_follows_the_cached_setting() {
+        let settings = Settings {
+            system: SystemSettings {
+                close_to_tray: true,
+                ..SystemSettings::default()
+            },
+            ..Settings::default()
+        };
+        let (state, _dir) = test_support::state_with(settings).await;
+        assert!(should_stay_in_tray(&state));
+
+        let settings = Settings {
+            system: SystemSettings {
+                close_to_tray: false,
+                ..SystemSettings::default()
+            },
+            ..Settings::default()
+        };
+        let (state, _dir) = test_support::state_with(settings).await;
+        assert!(!should_stay_in_tray(&state));
+    }
+
+    /// `COLORREF` is `0x00BBGGRR`, the reverse of the `#RRGGBB` the interface speaks.
+    #[cfg(all(test, windows))]
+    #[test]
+    fn a_colour_is_reordered_into_a_colorref() {
+        assert_eq!(colorref([0x11, 0x22, 0x33]), 0x0033_2211);
+        assert_eq!(colorref([0xff, 0x00, 0x00]), 0x0000_00ff);
+        assert_eq!(colorref([0x00, 0x00, 0xff]), 0x00ff_0000);
+    }
+}

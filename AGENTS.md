@@ -21,7 +21,7 @@ Typical user loop:
 4. History, presence, unread counts and settings persist across restarts.
 
 UI languages: English, Russian, Spanish, German, French, Portuguese and Chinese. Identifier:
-`dev.localme.desktop`. Version: `0.9.0`. Changelog: [CHANGELOG.md](CHANGELOG.md). Design notes:
+`dev.localme.desktop`. Version: `0.9.1`. Changelog: [CHANGELOG.md](CHANGELOG.md). Design notes:
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Stack (accurate)
@@ -68,6 +68,7 @@ src/
   stores/                  Pinia: peers, chat, settings, ui
   composables/             useNow, useMediaQuery, useEntrance
   app/                     router + routes, ShellView, connect (event bridge), errors, ready
+  test/                    shared test harness: mount helper, DTO factories, matchMedia, setup
 src-tauri/
   Cargo.toml               package `localme` (host) + workspace definition
   tauri.conf.json          Tauri 2 configuration
@@ -152,7 +153,8 @@ Host events: `peers`, `message`, `message_status`, `attachment`, `settings_chang
 `src/app/connect.ts` — the only place that subscribes to the host.
 
 Commands return a typed `ApiError` on failure (never a raw panic); `CommandError` in `src/ipc/`
-normalises it, and `isOffline` distinguishes "the peer is not reachable" from real errors.
+normalises it and exposes the host's own tag on `.kind` (`unknown_peer`, `network`, `storage`,
+…), so a caller can tell "the peer is not reachable" from a real failure without parsing text.
 
 ### Message pipeline
 
@@ -276,6 +278,8 @@ npm run lint
 npm run format:check
 npm run typecheck          # vue-tsc, strict
 npm run test               # Vitest (src/**/*.spec.ts)
+npm run test:watch         # Vitest in watch mode
+npm run test:coverage      # Vitest + v8 coverage, gated by the thresholds in vite.config.ts
 npm run test:scripts       # node --test scripts/lib
 npm run build              # vue-tsc + Vite
 npm run check:versions     # SemVer files + changelog section agree
@@ -284,7 +288,15 @@ cd src-tauri
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
+cargo llvm-cov --workspace --lib      # line coverage of the unit suites (the CI gate)
 ```
+
+A front-end spec sits beside its module; it runs in the `node` environment unless its first line
+declares `// @vitest-environment happy-dom`. The shared harness is `src/test/` — mount a component
+through `mountView` from `@/test/mount`, build DTOs with `@/test/factories`, and steer media queries
+with `@/test/matchMedia`. Mock `@/ipc` in any store or component spec; only `src/ipc/index.spec.ts`
+touches the Tauri modules. The Tauri mock runtime is not usable here (see §9.2 of
+`docs/ARCHITECTURE.md`), so host-side logic is covered where it is Tauri-free.
 
 The opt-in real-multicast test is `/loopback -- --ignored`; it is advisory because it depends on the
 machine's network interfaces.

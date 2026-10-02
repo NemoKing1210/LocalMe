@@ -391,7 +391,7 @@ pub fn peek_version(payload: &[u8]) -> Result<u16, ProtocolError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::attachment::{AttachmentMeta, FileName};
+    use crate::domain::attachment::{AttachmentMeta, FileName, Sha256};
     use crate::domain::ids::{AttachmentId, DeviceId};
     use crate::domain::peer::PeerProfile;
     use crate::error::DomainError;
@@ -667,5 +667,146 @@ mod tests {
             }
             .is_handshake()
         );
+    }
+
+    #[test]
+    fn goodbye_reasons_round_trip_through_their_wire_names() {
+        for reason in [
+            GoodbyeReason::Shutdown,
+            GoodbyeReason::Superseded,
+            GoodbyeReason::Error,
+            GoodbyeReason::Unknown,
+        ] {
+            assert_eq!(GoodbyeReason::from_wire(reason.as_str()), reason);
+        }
+        assert_eq!(GoodbyeReason::from_wire("because"), GoodbyeReason::Unknown);
+    }
+
+    #[test]
+    fn file_cancel_reasons_round_trip_and_say_what_is_retryable() {
+        for reason in [
+            FileCancelReason::Cancelled,
+            FileCancelReason::Failed,
+            FileCancelReason::TooLarge,
+            FileCancelReason::Unknown,
+            FileCancelReason::Checksum,
+            FileCancelReason::UnknownReason,
+        ] {
+            assert_eq!(FileCancelReason::from_wire(reason.as_str()), reason);
+        }
+        assert_eq!(
+            FileCancelReason::from_wire("from_the_future"),
+            FileCancelReason::UnknownReason
+        );
+
+        // A user cancelling is not worth offering a retry for; anything about the file is.
+        assert!(!FileCancelReason::Cancelled.is_retryable());
+        assert!(FileCancelReason::Failed.is_retryable());
+        assert!(FileCancelReason::TooLarge.is_retryable());
+        assert!(FileCancelReason::Unknown.is_retryable());
+        assert!(FileCancelReason::Checksum.is_retryable());
+        assert!(FileCancelReason::UnknownReason.is_retryable());
+    }
+
+    #[test]
+    fn file_transfer_frames_round_trip() {
+        let attachment = AttachmentId::generate();
+        let frames = vec![
+            Frame::FileChunk {
+                attachment,
+                offset: 0,
+                data: vec![1, 2, 3],
+            },
+            Frame::FileDone {
+                attachment,
+                sha256: Sha256::of(b"body"),
+            },
+            Frame::FileAck {
+                attachment,
+                received: 3,
+                state: FileAckState::Receiving,
+            },
+            Frame::FileAck {
+                attachment,
+                received: 3,
+                state: FileAckState::Complete,
+            },
+            Frame::FileCancel {
+                attachment,
+                reason: FileCancelReason::Checksum,
+            },
+            Frame::FileRequest { attachment },
+        ];
+        for frame in frames {
+            assert_eq!(round_trip(&frame).expect("round trip"), frame);
+        }
+    }
+
+    #[test]
+    fn every_frame_variant_has_a_stable_kind_label() {
+        let id = MessageId::generate();
+        let attachment = AttachmentId::generate();
+        let cases = vec![
+            (Frame::Hello(handshake()), "hello"),
+            (Frame::Welcome(handshake()), "welcome"),
+            (Frame::Heartbeat { seq: 1 }, "heartbeat"),
+            (
+                Frame::Chat {
+                    id,
+                    text: Some(MessageBody::parse("hi").expect("valid")),
+                    attachments: Vec::new(),
+                },
+                "chat",
+            ),
+            (Frame::ChatAck { id }, "chat_ack"),
+            (
+                Frame::FileChunk {
+                    attachment,
+                    offset: 0,
+                    data: Vec::new(),
+                },
+                "file_chunk",
+            ),
+            (
+                Frame::FileDone {
+                    attachment,
+                    sha256: Sha256::of(b"x"),
+                },
+                "file_done",
+            ),
+            (
+                Frame::FileAck {
+                    attachment,
+                    received: 0,
+                    state: FileAckState::Complete,
+                },
+                "file_ack",
+            ),
+            (
+                Frame::FileCancel {
+                    attachment,
+                    reason: FileCancelReason::Failed,
+                },
+                "file_cancel",
+            ),
+            (Frame::FileRequest { attachment }, "file_request"),
+            (
+                Frame::Profile {
+                    nickname: Nickname::parse("Аня").expect("valid"),
+                    avatar_seed: AvatarSeed::parse("s").expect("valid"),
+                },
+                "profile",
+            ),
+            (
+                Frame::Goodbye {
+                    reason: GoodbyeReason::Shutdown,
+                },
+                "goodbye",
+            ),
+            (Frame::error(ErrorCode::Internal, "boom"), "error"),
+        ];
+        for (frame, kind) in cases {
+            assert_eq!(frame.kind(), kind, "{frame:?}");
+        }
     }
 }

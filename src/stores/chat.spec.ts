@@ -8,6 +8,8 @@ vi.mock('@/ipc', () => ({
   sendMessage: vi.fn(),
 }));
 
+import * as ipc from '@/ipc';
+
 import { useChatStore } from './chat';
 
 const PEER = '018f2b9c-0000-7000-8000-0000000000aa';
@@ -44,8 +46,19 @@ function message(id: string, sentAt: number, peer = PEER): Message {
   };
 }
 
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((innerResolve) => {
+    resolve = innerResolve;
+  });
+  return { promise, resolve };
+}
+
 beforeEach(() => {
   setActivePinia(createPinia());
+  vi.mocked(ipc.history).mockReset();
+  vi.mocked(ipc.history).mockResolvedValue([]);
+  vi.mocked(ipc.sendMessage).mockReset();
 });
 
 describe('the chat store', () => {
@@ -202,5 +215,146 @@ describe('the chat store', () => {
     await chat.open(OTHER);
     expect(chat.messages).toHaveLength(0);
     expect(chat.peerId).toBe(OTHER);
+  });
+
+  it('clears the conversation when opened with no peer', async () => {
+    const chat = useChatStore();
+    await chat.open(PEER);
+    chat.add(message('a', 1_000));
+
+    await chat.open(null);
+
+    expect(chat.peerId).toBeNull();
+    expect(chat.messages).toHaveLength(0);
+    // No conversation means nothing to fetch.
+    expect(ipc.history).toHaveBeenCalledTimes(1);
+  });
+
+  it('loads the first page with the module page size and tracks a full page', async () => {
+    const page = Array.from({ length: 50 }, (_, index) => message(`m${index}`, index + 1));
+    vi.mocked(ipc.history).mockResolvedValue(page);
+    const chat = useChatStore();
+
+    await chat.open(PEER);
+
+    expect(ipc.history).toHaveBeenCalledWith(PEER, null, 50);
+    expect(chat.messages).toHaveLength(50);
+    // A full page is the signal that the host may hold older messages.
+    expect(chat.hasMore).toBe(true);
+  });
+
+  it('does not offer more pages when the first page is short', async () => {
+    vi.mocked(ipc.history).mockResolvedValue([message('a', 1_000)]);
+    const chat = useChatStore();
+
+    await chat.open(PEER);
+
+    expect(chat.hasMore).toBe(false);
+  });
+
+  it('ignores a first page that arrives after the conversation changed', async () => {
+    const request = deferred<Message[]>();
+    vi.mocked(ipc.history).mockReturnValueOnce(request.promise);
+    vi.mocked(ipc.history).mockResolvedValueOnce([message('o', 1_000, OTHER)]);
+    const chat = useChatStore();
+
+    const pending = chat.open(PEER);
+    await chat.open(OTHER);
+
+    request.resolve([message('stale', 1_000, PEER)]);
+    await pending;
+
+    expect(chat.peerId).toBe(OTHER);
+    expect(chat.messages.map((entry) => entry.id)).toEqual(['o']);
+  });
+
+  it('does not ask for older messages before a page is loaded', async () => {
+    const chat = useChatStore();
+    await chat.open(PEER);
+    expect(ipc.history).toHaveBeenCalledTimes(1);
+
+    await chat.loadOlder();
+
+    expect(ipc.history).toHaveBeenCalledTimes(1);
+  });
+
+  it('requests the page before the oldest message and prepends it', async () => {
+    vi.mocked(ipc.history).mockResolvedValueOnce([message('c', 3_000)]);
+    const chat = useChatStore();
+    await chat.open(PEER);
+
+    vi.mocked(ipc.history).mockResolvedValueOnce([message('a', 1_000), message('b', 2_000)]);
+    await chat.loadOlder();
+
+    expect(ipc.history).toHaveBeenLastCalledWith(PEER, { sentAtMs: 3_000, id: 'c' }, 50);
+    expect(chat.messages.map((entry) => entry.id)).toEqual(['a', 'b', 'c']);
+    expect(chat.hasMore).toBe(false);
+  });
+
+  it('keeps offering older pages while the host returns a full one', async () => {
+    vi.mocked(ipc.history).mockResolvedValueOnce([message('z', 100_000)]);
+    const chat = useChatStore();
+    await chat.open(PEER);
+
+    const older = Array.from({ length: 50 }, (_, index) => message(`o${index}`, index + 1));
+    vi.mocked(ipc.history).mockResolvedValueOnce(older);
+    await chat.loadOlder();
+
+    expect(chat.hasMore).toBe(true);
+  });
+
+  it('stores a sent message with its files and adds the returned row', async () => {
+    const stored: Message = {
+      ...message('s', 5_000),
+      direction: 'outgoing',
+      body: 'hi',
+      status: 'queued',
+      deliveredAt: null,
+    };
+    vi.mocked(ipc.sendMessage).mockResolvedValue(stored);
+    const chat = useChatStore();
+    await chat.open(PEER);
+
+    await chat.send('hi', ['/tmp/a.txt']);
+
+    expect(ipc.sendMessage).toHaveBeenCalledWith(PEER, 'hi', ['/tmp/a.txt']);
+    expect(chat.messages.map((entry) => entry.id)).toEqual(['s']);
+  });
+
+  it('does not add a second row when the host also delivers the sent message', async () => {
+    const stored: Message = {
+      ...message('s', 5_000),
+      direction: 'outgoing',
+      body: 'hi',
+      status: 'queued',
+      deliveredAt: null,
+    };
+    vi.mocked(ipc.sendMessage).mockResolvedValue(stored);
+    const chat = useChatStore();
+    await chat.open(PEER);
+    await chat.send('hi');
+
+    // The host fans the same stored row out as a `message` event; `add` merges by identifier.
+    chat.add({ ...stored, status: 'delivered', deliveredAt: 6_000 });
+
+    expect(chat.messages).toHaveLength(1);
+    expect(chat.messages[0]?.status).toBe('delivered');
+  });
+
+  it('does not send with no conversation open or while a send is in flight', async () => {
+    const chat = useChatStore();
+    await chat.send('nobody');
+    expect(ipc.sendMessage).not.toHaveBeenCalled();
+
+    await chat.open(PEER);
+    const request = deferred<Message>();
+    vi.mocked(ipc.sendMessage).mockReturnValue(request.promise);
+
+    const first = chat.send('one');
+    await chat.send('two');
+    expect(ipc.sendMessage).toHaveBeenCalledTimes(1);
+
+    request.resolve(message('s', 5_000));
+    await first;
   });
 });

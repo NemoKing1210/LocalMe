@@ -64,6 +64,19 @@ pub fn allow_preview<R: Runtime>(app: &AppHandle<R>, path: &Path) {
 /// The scope is granted here, once, rather than opened wholesale: the interface can display
 /// exactly the files the user chose and the files that were received, and nothing else.
 pub fn inspect<R: Runtime>(app: &AppHandle<R>, path: &Path) -> FilePick {
+    let pick = describe(path);
+    // Best effort: a file the asset protocol cannot be told about still attaches and still
+    // transfers, it just cannot be previewed. Only a usable file is exposed to the scope.
+    if pick.problem.is_none() {
+        allow_preview(app, path);
+    }
+    pick
+}
+
+/// The verdict on a path, without touching the asset scope: everything a file's own metadata
+/// can decide, and nothing that needs the application handle.
+#[must_use]
+fn describe(path: &Path) -> FilePick {
     let metadata = match std::fs::metadata(path) {
         Ok(metadata) => metadata,
         Err(error) => {
@@ -74,34 +87,27 @@ pub fn inspect<R: Runtime>(app: &AppHandle<R>, path: &Path) -> FilePick {
     if !metadata.is_file() {
         return FilePick::unusable(path, "directory");
     }
-    let size = metadata.len();
     let raw = path
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let name = FileName::sanitise(&raw);
+    classify(path, FileName::sanitise(&raw), metadata.len())
+}
+
+/// The verdict for a readable file of a known size: the only place the size cap and the kind
+/// are decided, so the composer's preview and the metadata the core stores cannot disagree.
+#[must_use]
+fn classify(path: &Path, name: FileName, size: u64) -> FilePick {
     let kind = match name.kind() {
         AttachmentKind::Image => "image",
         AttachmentKind::File => "file",
     };
-    if size > MAX_ATTACHMENT_BYTES {
-        return FilePick {
-            path: path.to_string_lossy().into_owned(),
-            name: name.as_str().to_owned(),
-            size,
-            kind,
-            problem: Some("tooLarge"),
-        };
-    }
-    // Best effort: a file the asset protocol cannot be told about still attaches and still
-    // transfers, it just cannot be previewed.
-    allow_preview(app, path);
     FilePick {
         path: path.to_string_lossy().into_owned(),
         name: name.as_str().to_owned(),
         size,
         kind,
-        problem: None,
+        problem: (size > MAX_ATTACHMENT_BYTES).then_some("tooLarge"),
     }
 }
 
@@ -206,5 +212,94 @@ mod tests {
             stored_path(Some(&file.to_string_lossy())).expect("a file"),
             file
         );
+    }
+
+    #[test]
+    fn a_readable_file_is_described_with_its_size_and_kind() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let file = dir.path().join("notes.txt");
+        std::fs::write(&file, b"hello").expect("write");
+
+        let pick = describe(&file);
+        assert_eq!(pick.problem, None);
+        assert_eq!(pick.name, "notes.txt");
+        assert_eq!(pick.size, 5);
+        assert_eq!(pick.kind, "file");
+        assert_eq!(pick.path, file.to_string_lossy().into_owned());
+    }
+
+    #[test]
+    fn a_directory_is_reported_rather_than_described_as_a_file() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let nested = dir.path().join("folder");
+        std::fs::create_dir(&nested).expect("mkdir");
+
+        let pick = describe(&nested);
+        assert_eq!(pick.problem, Some("directory"));
+        assert_eq!(pick.name, "folder");
+        assert_eq!(pick.size, 0);
+        assert_eq!(pick.kind, "file");
+    }
+
+    #[test]
+    fn a_path_that_does_not_exist_is_reported_missing() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let pick = describe(&dir.path().join("gone.bin"));
+        assert_eq!(pick.problem, Some("missing"));
+        assert_eq!(pick.name, "gone.bin");
+        assert_eq!(pick.size, 0);
+    }
+
+    #[test]
+    fn the_size_cap_is_inclusive_at_the_limit() {
+        let path = Path::new("/tmp/edge.bin");
+        let at_limit = classify(path, FileName::sanitise("edge.bin"), MAX_ATTACHMENT_BYTES);
+        assert_eq!(at_limit.problem, None);
+        assert_eq!(at_limit.size, MAX_ATTACHMENT_BYTES);
+
+        let over = classify(
+            path,
+            FileName::sanitise("edge.bin"),
+            MAX_ATTACHMENT_BYTES + 1,
+        );
+        assert_eq!(over.problem, Some("tooLarge"));
+        assert_eq!(over.size, MAX_ATTACHMENT_BYTES + 1);
+    }
+
+    #[test]
+    fn an_image_keeps_its_kind_while_a_document_does_not() {
+        let path = Path::new("/tmp/pic.png");
+        assert_eq!(
+            classify(path, FileName::sanitise("pic.PNG"), 1).kind,
+            "image"
+        );
+        assert_eq!(
+            classify(path, FileName::sanitise("doc.txt"), 1).kind,
+            "file"
+        );
+    }
+
+    #[test]
+    fn the_display_name_is_the_sanitised_file_name() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let file = dir.path().join(".hidden");
+        std::fs::write(&file, b"x").expect("write");
+
+        // The leading dot is stripped exactly as the core will strip it, so the chip the user
+        // sees is the name the recipient gets.
+        let pick = describe(&file);
+        assert_eq!(pick.name, "hidden");
+        assert_eq!(pick.name, FileName::sanitise(".hidden").as_str());
+    }
+
+    #[test]
+    fn a_file_that_vanishes_between_inspections_is_reported_missing() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let file = dir.path().join("flaky.bin");
+        std::fs::write(&file, b"x").expect("write");
+
+        assert_eq!(describe(&file).problem, None);
+        std::fs::remove_file(&file).expect("remove");
+        assert_eq!(describe(&file).problem, Some("missing"));
     }
 }

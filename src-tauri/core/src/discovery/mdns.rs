@@ -397,7 +397,57 @@ fn emit(sink: &mpsc::Sender<DiscoveryEvent>, event: DiscoveryEvent) {
 
 #[cfg(test)]
 mod tests {
+    use std::net::SocketAddr;
+
     use super::*;
+
+    const TEST_PORT: u16 = 47820;
+
+    fn own_announcement() -> OwnAnnouncement {
+        let nickname = Nickname::parse("alice").expect("valid nickname");
+        let device_id = DeviceId::generate();
+        OwnAnnouncement {
+            device_id,
+            avatar_seed: AvatarSeed::derive(device_id, &nickname),
+            nickname,
+            port: TEST_PORT,
+        }
+    }
+
+    /// The TXT records an announcement carries, as raw strings so invalid values can be fed in.
+    fn props(id: &str, nick: &str, seed: &str) -> Vec<(&'static str, String)> {
+        vec![
+            ("id", id.to_owned()),
+            ("nick", nick.to_owned()),
+            ("seed", seed.to_owned()),
+        ]
+    }
+
+    /// A resolved service built through the crate's public constructor: `ResolvedService` is
+    /// `#[non_exhaustive]`, so a struct literal is not available from outside `mdns-sd`.
+    fn resolved(properties: &[(&str, String)], addresses: &[&str]) -> ResolvedService {
+        ServiceInfo::new(
+            SERVICE_TYPE,
+            "peer",
+            "peer.local.",
+            addresses,
+            TEST_PORT,
+            properties,
+        )
+        .expect("the test service record is valid")
+        .as_resolved_service()
+    }
+
+    fn resolved_peer(peer: &OwnAnnouncement, addresses: &[&str]) -> ResolvedService {
+        resolved(
+            &props(
+                &peer.device_id.to_string(),
+                peer.nickname.as_str(),
+                peer.avatar_seed.as_str(),
+            ),
+            addresses,
+        )
+    }
 
     #[test]
     fn instance_and_host_names_fit_the_service_name_cap() {
@@ -413,5 +463,223 @@ mod tests {
         assert_eq!(instance, format!("localme-{}", device_id.short()));
         assert_eq!(hostname(device_id), format!("{}.local.", device_id.short()));
         assert_eq!(full_name(device_id), format!("{instance}.{SERVICE_TYPE}"));
+    }
+
+    #[test]
+    fn the_advertised_service_carries_identity_in_its_txt_records() {
+        let own = own_announcement();
+        let discovery = MdnsDiscovery::new(own.clone());
+
+        let info = discovery.service_info().expect("the announcement is valid");
+
+        assert_eq!(info.get_type(), SERVICE_TYPE);
+        assert_eq!(info.get_fullname(), full_name(own.device_id));
+        assert_eq!(info.get_hostname(), hostname(own.device_id));
+        assert_eq!(info.get_port(), own.port);
+        let id = own.device_id.to_string();
+        let version = PROTOCOL_VERSION.to_string();
+        assert_eq!(info.get_property_val_str("id"), Some(id.as_str()));
+        assert_eq!(info.get_property_val_str("nick"), Some("alice"));
+        assert_eq!(
+            info.get_property_val_str("seed"),
+            Some(own.avatar_seed.as_str())
+        );
+        assert_eq!(info.get_property_val_str("pv"), Some(version.as_str()));
+    }
+
+    #[test]
+    fn a_resolved_service_becomes_a_peer_with_ipv4_first() {
+        let peer = own_announcement();
+        let record = resolved_peer(&peer, &["fe80::1", "192.168.1.20"]);
+
+        let discovered = peer_from_resolved(&record, DeviceId::generate()).expect("a usable peer");
+
+        assert_eq!(discovered.device_id, peer.device_id);
+        assert_eq!(discovered.nickname, peer.nickname);
+        assert_eq!(discovered.avatar_seed, peer.avatar_seed);
+        assert_eq!(
+            discovered.addresses,
+            vec![
+                "192.168.1.20:47820"
+                    .parse::<SocketAddr>()
+                    .expect("valid address"),
+                "[fe80::1]:47820"
+                    .parse::<SocketAddr>()
+                    .expect("valid address"),
+            ],
+            "the advertised port is applied to every address, IPv4 first"
+        );
+    }
+
+    #[test]
+    fn our_own_service_is_never_reported_as_a_peer() {
+        let own = own_announcement();
+        let record = resolved_peer(&own, &["192.168.1.20"]);
+
+        assert!(peer_from_resolved(&record, own.device_id).is_none());
+    }
+
+    #[test]
+    fn a_service_missing_required_txt_records_is_ignored() {
+        let remote = DeviceId::generate();
+        let seed = "seed";
+
+        let cases = [
+            props("irrelevant", "bob", seed),                            // no id
+            vec![("id", remote.to_string()), ("seed", seed.to_owned())], // no nick
+            vec![("id", remote.to_string()), ("nick", "bob".to_owned())], // no seed
+        ];
+
+        for properties in cases {
+            let record = resolved(&properties, &["192.168.1.20"]);
+            assert!(
+                peer_from_resolved(&record, DeviceId::generate()).is_none(),
+                "a service without id, nick and seed is unusable"
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_txt_values_are_ignored() {
+        let remote = DeviceId::generate();
+        let seed = "seed";
+
+        let bad_id = resolved(&props("not-a-device-id", "bob", seed), &["192.168.1.20"]);
+        assert!(peer_from_resolved(&bad_id, DeviceId::generate()).is_none());
+
+        let bad_nick = resolved(&props(&remote.to_string(), "  ", seed), &["192.168.1.20"]);
+        assert!(peer_from_resolved(&bad_nick, DeviceId::generate()).is_none());
+
+        let bad_seed = resolved(&props(&remote.to_string(), "bob", ""), &["192.168.1.20"]);
+        assert!(peer_from_resolved(&bad_seed, DeviceId::generate()).is_none());
+    }
+
+    #[test]
+    fn a_service_that_advertises_no_address_is_ignored() {
+        let peer = own_announcement();
+        let record = resolved_peer(&peer, &[]);
+
+        assert!(peer_from_resolved(&record, DeviceId::generate()).is_none());
+    }
+
+    #[test]
+    fn a_resolved_service_is_forwarded_until_the_removal_forgets_it() {
+        let own = own_announcement();
+        let remote = own_announcement();
+        let record = resolved_peer(&remote, &["192.168.1.30"]);
+        let fullname = record.fullname.clone();
+        let (sink, mut events) = mpsc::channel(4);
+        let mut known = HashMap::new();
+
+        forward(
+            ServiceEvent::ServiceResolved(Box::new(record)),
+            own.device_id,
+            &sink,
+            &mut known,
+        );
+
+        let expected_address: SocketAddr = "192.168.1.30:47820".parse().expect("valid address");
+        assert_eq!(
+            events.try_recv().expect("the peer is reported"),
+            DiscoveryEvent::Found(DiscoveredPeer {
+                device_id: remote.device_id,
+                nickname: remote.nickname.clone(),
+                avatar_seed: remote.avatar_seed.clone(),
+                addresses: vec![expected_address],
+            })
+        );
+        assert_eq!(known.get(&fullname), Some(&remote.device_id));
+
+        forward(
+            ServiceEvent::ServiceRemoved(SERVICE_TYPE.to_owned(), fullname),
+            own.device_id,
+            &sink,
+            &mut known,
+        );
+        assert_eq!(
+            events.try_recv().expect("the removal is reported"),
+            DiscoveryEvent::Lost {
+                device_id: remote.device_id
+            }
+        );
+        assert!(known.is_empty(), "the service is forgotten after its loss");
+
+        // A removal for a service that was never resolved has no device to report.
+        forward(
+            ServiceEvent::ServiceRemoved(
+                SERVICE_TYPE.to_owned(),
+                "ghost._localme._tcp.local.".to_owned(),
+            ),
+            own.device_id,
+            &sink,
+            &mut known,
+        );
+        assert!(events.try_recv().is_err());
+    }
+
+    #[test]
+    fn our_own_resolved_service_is_not_forwarded() {
+        let own = own_announcement();
+        let record = resolved_peer(&own, &["192.168.1.30"]);
+        let (sink, mut events) = mpsc::channel(4);
+        let mut known = HashMap::new();
+
+        forward(
+            ServiceEvent::ServiceResolved(Box::new(record)),
+            own.device_id,
+            &sink,
+            &mut known,
+        );
+
+        assert!(known.is_empty());
+        assert!(events.try_recv().is_err());
+    }
+
+    #[test]
+    fn unrelated_service_events_are_ignored() {
+        let own = DeviceId::generate();
+        let (sink, mut events) = mpsc::channel(4);
+        let mut known = HashMap::new();
+
+        for event in [
+            ServiceEvent::SearchStarted(SERVICE_TYPE.to_owned()),
+            ServiceEvent::ServiceFound(
+                SERVICE_TYPE.to_owned(),
+                "peer._localme._tcp.local.".to_owned(),
+            ),
+            ServiceEvent::SearchStopped(SERVICE_TYPE.to_owned()),
+        ] {
+            forward(event, own, &sink, &mut known);
+        }
+
+        assert!(known.is_empty());
+        assert!(events.try_recv().is_err());
+    }
+
+    #[test]
+    fn emit_drops_events_instead_of_blocking_or_panicking() {
+        let peer = own_announcement();
+        let event = DiscoveryEvent::Found(DiscoveredPeer {
+            device_id: peer.device_id,
+            nickname: peer.nickname.clone(),
+            avatar_seed: peer.avatar_seed.clone(),
+            addresses: vec!["127.0.0.1:47820".parse().expect("valid address")],
+        });
+
+        let (sink, mut events) = mpsc::channel(1);
+        emit(&sink, event.clone());
+        emit(&sink, event.clone()); // the sink is full: dropped, never awaited
+        assert_eq!(events.try_recv().expect("the first event"), event);
+
+        drop(events);
+        emit(&sink, event); // the session is gone: dropped too
+    }
+
+    #[test]
+    fn stopping_a_never_started_discovery_is_a_no_op() {
+        let discovery = MdnsDiscovery::new(own_announcement());
+
+        discovery.shutdown();
+        discovery.stop();
     }
 }

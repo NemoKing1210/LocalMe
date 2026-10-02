@@ -43,5 +43,39 @@ export default defineConfig({
     environment: 'node',
     include: ['src/**/*.spec.ts'],
     restoreMocks: true,
+    setupFiles: ['./src/test/setup.ts'],
+    server: {
+      deps: {
+        // `@material/material-color-utilities` ships one extensionless relative import
+        // (`dynamiccolor/color_spec_2025.js` → `./dynamic_color`), which Node's ESM resolver
+        // refuses when the package is externalised. Inlining it lets Vite resolve the specifier
+        // the same way the application build does.
+        inline: ['@material/material-color-utilities'],
+      },
+    },
+    coverage: {
+      provider: 'v8',
+      reporter: ['text', 'html', 'lcov'],
+      reportsDirectory: 'coverage',
+      // Every source file counts, not only the imported ones, so an untested module is visible
+      // as a gap rather than absent from the report.
+      include: ['src/**/*.{ts,vue}'],
+      exclude: [
+        'src/**/*.spec.ts',
+        'src/**/*.d.ts',
+        'src/test/**',
+        'src/main.ts',
+        'src/i18n/messages/**',
+      ],
+      // A gate, not a report: `npm run test:coverage` fails when a change lowers coverage past
+      // these. They sit a little under what the suite actually reaches, so ordinary refactoring
+      // does not fail the build for noise, while a new untested module does.
+      thresholds: {
+        statements: 93,
+        branches: 85,
+        functions: 94,
+        lines: 95,
+      },
+    },
   },
 });

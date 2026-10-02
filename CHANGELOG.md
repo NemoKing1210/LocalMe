@@ -5,6 +5,28 @@ All notable changes to LocalMe are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.1] - 2026-10-02
+
+### Added
+
+- A test suite for the interface: the stores, the IPC boundary, the theme engine, the
+  composables, the chat, people, onboarding and settings screens, and the design-system
+  components. `npm run test` runs it; `npm run test:watch` reruns on change
+- A shared test harness in `src/test/` — a mount helper that installs the real Pinia, router and
+  i18n, DTO factories, a controllable `matchMedia`, and a per-test reset — so a new test states
+  only the behaviour it checks
+- Front-end coverage measurement and a gate: `npm run test:coverage` fails below the thresholds
+  in `vite.config.ts`, so a new module with no test fails the build rather than going unnoticed
+- Wider Rust coverage: the session actor (outbox drain, presence, every command and attachment
+  path), the connection handshake and pump, discovery (beacon codec, mDNS translation, the
+  composite source), the storage migrations and queries, and the host's Tauri-free state and
+  window policy
+
+### Changed
+
+- CI measures both sides: the front end through `npm run test:coverage`, the Rust workspace
+  through `cargo llvm-cov`
+
 ## [0.9.0] - 2026-10-02
 
 ### Added

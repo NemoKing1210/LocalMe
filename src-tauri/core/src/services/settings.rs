@@ -641,4 +641,120 @@ mod tests {
         assert!(path.exists());
         assert!(!path.with_extension("json.tmp").exists());
     }
+
+    #[tokio::test]
+    async fn a_handle_with_no_actor_left_reports_shutting_down() {
+        // A command channel whose receiver has already gone: every call must be an error rather
+        // than a hang, because the host treats it as "the core is stopping".
+        let (commands, receiver) = mpsc::channel(1);
+        drop(receiver);
+        let (events, _) = broadcast::channel(1);
+        let handle = SettingsHandle { commands, events };
+
+        assert!(matches!(handle.get().await, Err(CoreError::ShuttingDown)));
+        assert!(matches!(
+            handle.update(Settings::default()).await,
+            Err(CoreError::ShuttingDown)
+        ));
+    }
+
+    #[tokio::test]
+    async fn an_actor_that_never_replies_reports_shutting_down() {
+        // The send succeeds, but the reply channel is dropped before an answer arrives.
+        let (commands, mut receiver) = mpsc::channel(1);
+        let (events, _) = broadcast::channel(1);
+        let handle = SettingsHandle { commands, events };
+        tokio::spawn(async move {
+            let _ = receiver.recv().await;
+        });
+
+        assert!(matches!(
+            handle.update(Settings::default()).await,
+            Err(CoreError::ShuttingDown)
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_settings_file_from_the_future_is_reported_and_reset() {
+        let dir = tempdir().expect("tempdir");
+        let path = settings_path(dir.path());
+        let raw = format!(r#"{{"version":{}}}"#, SETTINGS_VERSION + 1);
+        tokio::fs::write(&path, raw).await.expect("write");
+
+        let (handle, problem) = spawn(path).await;
+        assert!(
+            problem
+                .expect("a reported problem")
+                .contains("could not be used"),
+            "a version this build cannot read must be reported, not guessed at"
+        );
+        assert_eq!(handle.get().await.expect("get"), Settings::default());
+    }
+
+    #[tokio::test]
+    async fn an_unreadable_settings_path_is_reported_and_reset() {
+        let dir = tempdir().expect("tempdir");
+        let path = settings_path(dir.path());
+        // A directory where a file is expected: the read fails for a reason other than NotFound.
+        tokio::fs::create_dir(&path).await.expect("create dir");
+
+        let (handle, problem) = spawn(path).await;
+        assert!(
+            problem
+                .expect("a reported problem")
+                .contains("could not be read"),
+            "an I/O failure must be reported"
+        );
+        assert_eq!(handle.get().await.expect("get"), Settings::default());
+    }
+
+    #[tokio::test]
+    async fn an_update_fails_when_the_parent_cannot_be_created() {
+        let dir = tempdir().expect("tempdir");
+        // The parent of the settings path is a regular file, so `create_dir_all` must fail.
+        let blocker = dir.path().join("blocker");
+        tokio::fs::write(&blocker, b"not a directory")
+            .await
+            .expect("write");
+        let (handle, _) = spawn(blocker.join("settings.json")).await;
+
+        let error = handle
+            .update(Settings::default())
+            .await
+            .expect_err("a write that cannot happen must be an error");
+        assert!(matches!(error, CoreError::Storage(_)), "{error:?}");
+    }
+
+    #[tokio::test]
+    async fn an_update_fails_when_the_temporary_file_cannot_be_written() {
+        let dir = tempdir().expect("tempdir");
+        let path = settings_path(dir.path());
+        // The temporary name is already a directory.
+        tokio::fs::create_dir(path.with_extension("json.tmp"))
+            .await
+            .expect("create dir");
+        let (handle, problem) = spawn(path).await;
+        assert!(problem.is_none());
+
+        let error = handle
+            .update(Settings::default())
+            .await
+            .expect_err("the temporary file cannot be replaced by a directory");
+        assert!(matches!(error, CoreError::Storage(_)), "{error:?}");
+    }
+
+    #[tokio::test]
+    async fn an_update_fails_when_the_destination_is_a_directory() {
+        let dir = tempdir().expect("tempdir");
+        let path = settings_path(dir.path());
+        // The destination path is a directory, so the rename must fail after the write succeeds.
+        tokio::fs::create_dir(&path).await.expect("create dir");
+        let (handle, _) = spawn(path).await;
+
+        let error = handle
+            .update(Settings::default())
+            .await
+            .expect_err("the rename onto a directory must fail");
+        assert!(matches!(error, CoreError::Storage(_)), "{error:?}");
+    }
 }

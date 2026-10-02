@@ -35,6 +35,8 @@ so discovery, chat, the tray and persistence will not behave as in the packaged 
 | `npm run format` / `format:check`                       | Prettier (100 width)                                 |
 | `npm run typecheck`                                     | `vue-tsc`, strict                                    |
 | `npm run test`                                          | Front-end unit tests (Vitest)                        |
+| `npm run test:watch`                                    | Front-end unit tests, rerun on change                |
+| `npm run test:coverage`                                 | Front-end tests + v8 coverage, gated by a threshold  |
 | `npm run test:scripts`                                  | Version-tooling tests (`node --test`)                |
 | `npm run build`                                         | `vue-tsc` + Vite production bundle                   |
 | `npm run check:versions`                                | Confirm SemVer files and the changelog section match |
@@ -96,6 +98,17 @@ persistence:
 - Tray close, native notification, single-instance focus
 - English and Russian copy for new strings
 - Light and dark theme if you changed chrome or tokens
+
+A front-end spec sits beside the module as `<module>.spec.ts` and runs in the `node` environment
+unless its first line declares `// @vitest-environment happy-dom`. Mount a component through
+`mountView` from `@/test/mount`, build host DTOs with `@/test/factories`, and steer the media
+queries with `@/test/matchMedia` — the harness in `src/test/` exists so a spec states only what it
+checks. Mock `@/ipc` in any store or component spec; the boundary itself is tested against mocked
+Tauri modules. `npm run test:coverage` enforces the thresholds in `vite.config.ts`, so a new module
+without a test fails the build. On the Rust side, `cargo llvm-cov --workspace` measures the same
+thing; the Tauri mock runtime is not usable in this project (see `docs/ARCHITECTURE.md` §9.2), so
+host-side logic is covered where it does not need an `AppHandle`. Coverage of the whole
+front end is described in `docs/ARCHITECTURE.md` §10.7.
 
 The two-instance check on one machine:
 

@@ -294,9 +294,78 @@ impl Drop for LiveConnectionGuard {
 mod tests {
     use super::*;
     use crate::domain::ids::DeviceId;
+    use crate::domain::nickname::Nickname;
+    use crate::domain::peer::PeerProfile;
+    use crate::protocol::limits::PROTOCOL_VERSION;
 
     fn id(value: u128) -> DeviceId {
         DeviceId::from_uuid(uuid::Uuid::from_u128(value))
+    }
+
+    fn handshake(value: u128, name: &str) -> Handshake {
+        let profile = PeerProfile::new(id(value), Nickname::parse(name).expect("nickname"));
+        Handshake::new(PROTOCOL_VERSION, &profile, 0)
+    }
+
+    #[test]
+    fn role_names_are_stable() {
+        assert_eq!(Role::Dialer.as_str(), "dialer");
+        assert_eq!(Role::Acceptor.as_str(), "acceptor");
+    }
+
+    #[tokio::test]
+    async fn every_transport_event_names_its_device() {
+        let expected = id(7);
+        let (link, _commands) = PeerLink::channel();
+
+        let connected = TransportEvent::Connected {
+            role: Role::Dialer,
+            handshake: handshake(7, "Ann"),
+            link: link.clone(),
+            remote: "127.0.0.1:1234".parse().expect("address"),
+        };
+        assert_eq!(connected.device_id(), expected);
+
+        let frame = TransportEvent::Frame {
+            peer: expected,
+            frame: Frame::Heartbeat { seq: 1 },
+        };
+        assert_eq!(frame.device_id(), expected);
+
+        let disconnected = TransportEvent::Disconnected {
+            peer: expected,
+            link: link.id(),
+            reason: DisconnectReason::Closed,
+        };
+        assert_eq!(disconnected.device_id(), expected);
+
+        let dial_failed = TransportEvent::DialFailed {
+            peer: expected,
+            reason: "unreachable".to_owned(),
+        };
+        assert_eq!(dial_failed.device_id(), expected);
+    }
+
+    #[test]
+    fn concurrent_reservations_never_exceed_the_limit() {
+        let live = Arc::new(LiveConnections::new());
+        let max = 8;
+        let threads: Vec<_> = (0..16)
+            .map(|_| {
+                let live = Arc::clone(&live);
+                std::thread::spawn(move || live.try_reserve(max))
+            })
+            .collect();
+
+        let guards: Vec<_> = threads
+            .into_iter()
+            .filter_map(|thread| thread.join().expect("thread"))
+            .collect();
+        assert_eq!(guards.len(), max, "exactly {max} threads reserve a slot");
+        assert_eq!(live.count(), max);
+
+        drop(guards);
+        assert_eq!(live.count(), 0);
     }
 
     #[test]

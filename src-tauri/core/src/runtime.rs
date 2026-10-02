@@ -287,3 +287,184 @@ fn spawn_accept_loop(
         }
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::nickname::Nickname;
+    use tempfile::TempDir;
+
+    fn nickname(value: &str) -> Nickname {
+        Nickname::parse(value).expect("valid nickname")
+    }
+
+    fn config(dir: &TempDir, port: u16, name: &str) -> CoreConfig {
+        CoreConfig::without_discovery(dir.path().to_path_buf(), nickname(name), port, 0)
+    }
+
+    #[test]
+    fn core_config_defaults_are_the_production_ports() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let config = CoreConfig::new(dir.path().to_path_buf(), nickname("me"));
+        assert_eq!(config.preferred_port, DEFAULT_TCP_PORT);
+        assert_eq!(config.beacon_port, DEFAULT_BEACON_PORT);
+        assert!(config.enable_discovery);
+        assert_eq!(config.data_dir, dir.path());
+        assert_eq!(config.default_nickname.as_str(), "me");
+    }
+
+    #[test]
+    fn without_discovery_pins_the_ports_and_disables_the_adapters() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let config =
+            CoreConfig::without_discovery(dir.path().to_path_buf(), nickname("me"), 40_404, 45_454);
+        assert_eq!(config.preferred_port, 40_404);
+        assert_eq!(config.beacon_port, 45_454);
+        assert!(!config.enable_discovery);
+    }
+
+    #[tokio::test]
+    async fn starting_creates_the_data_directory() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let nested = dir.path().join("no").join("such").join("dir");
+        let config = CoreConfig::without_discovery(nested.clone(), nickname("me"), 0, 0);
+
+        let core = Core::start(config).await.expect("core starts");
+        assert!(nested.is_dir(), "the data directory must be created");
+        assert!(nested.join("localme.db").is_file());
+        assert!(core.storage_recovered.is_none());
+        // Discovery was disabled, so there is nothing to report a problem about.
+        assert!(core.discovery_problem.is_none());
+        core.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_restart_reuses_the_stored_identity_and_nickname() {
+        let dir = tempfile::tempdir().expect("temp dir");
+
+        let first = Core::start(config(&dir, 0, "first")).await.expect("starts");
+        let device_id = first.device_id;
+        assert_eq!(first.profile.nickname.as_str(), "first");
+        first.shutdown().await;
+
+        // A different fallback: the stored values must win, or a restart would rename the user.
+        let second = Core::start(config(&dir, 0, "ignored"))
+            .await
+            .expect("restarts");
+        assert_eq!(second.device_id, device_id, "the device id must survive");
+        assert_eq!(second.profile.nickname.as_str(), "first");
+        second.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn an_unusable_preferred_port_falls_back_to_an_ephemeral_one() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        // Hold the wildcard port the core prefers, so its bind is refused.
+        let occupied = tokio::net::TcpListener::bind(("0.0.0.0", 0))
+            .await
+            .expect("bind");
+        let taken = occupied.local_addr().expect("address").port();
+
+        let core = Core::start(config(&dir, taken, "me"))
+            .await
+            .expect("starts");
+        assert_ne!(core.port, taken, "the taken port must not be reported");
+        assert_ne!(core.port, 0, "an ephemeral port is still a real port");
+        core.shutdown().await;
+        drop(occupied);
+    }
+
+    #[tokio::test]
+    async fn a_garbage_database_is_quarantined_and_the_core_still_starts() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        tokio::fs::write(dir.path().join("localme.db"), b"this is not a sqlite file")
+            .await
+            .expect("seed the corrupt file");
+
+        let core = Core::start(config(&dir, 0, "recovered"))
+            .await
+            .expect("the core starts over a fresh database");
+        let preserved = core
+            .storage_recovered
+            .clone()
+            .expect("the unusable file must be preserved");
+        assert!(preserved.contains("corrupt"), "{preserved}");
+        assert_eq!(core.profile.nickname.as_str(), "recovered");
+        core.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn shutdown_stops_the_session() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let core = Core::start(config(&dir, 0, "me")).await.expect("starts");
+        let session = core.session.clone();
+        assert!(session.is_running());
+
+        core.shutdown().await;
+        assert!(
+            !session.is_running(),
+            "the session must have stopped once shutdown returns"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_fresh_store_generates_and_persists_an_identity() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = SqliteStore::open(&dir.path().join("localme.db")).expect("open");
+
+        let (device_id, resolved) = resolve_identity(&store, &nickname("fresh"))
+            .await
+            .expect("resolves");
+        assert_eq!(resolved.as_str(), "fresh");
+        assert_eq!(
+            store
+                .meta_get(META_DEVICE_ID)
+                .await
+                .expect("read")
+                .as_deref(),
+            Some(device_id.to_string().as_str())
+        );
+        assert_eq!(
+            store
+                .meta_get(META_NICKNAME)
+                .await
+                .expect("read")
+                .as_deref(),
+            Some("fresh")
+        );
+
+        // A second resolution over the same store returns the persisted values.
+        let (again, name) = resolve_identity(&store, &nickname("ignored"))
+            .await
+            .expect("resolves");
+        assert_eq!(again, device_id);
+        assert_eq!(name.as_str(), "fresh");
+    }
+
+    #[tokio::test]
+    async fn a_stored_nickname_that_is_not_usable_falls_back() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = SqliteStore::open(&dir.path().join("localme.db")).expect("open");
+        store.meta_set(META_NICKNAME, "   ").await.expect("set");
+
+        let (_, nickname) = resolve_identity(&store, &nickname("fallback"))
+            .await
+            .expect("resolves");
+        assert_eq!(nickname.as_str(), "fallback");
+    }
+
+    #[tokio::test]
+    async fn a_stored_device_id_that_is_not_a_uuid_is_a_storage_error() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = SqliteStore::open(&dir.path().join("localme.db")).expect("open");
+        store
+            .meta_set(META_DEVICE_ID, "not-a-uuid")
+            .await
+            .expect("set");
+
+        let error = resolve_identity(&store, &nickname("me"))
+            .await
+            .expect_err("a corrupt identity must not be silently replaced");
+        assert!(matches!(error, CoreError::Storage(_)), "{error:?}");
+    }
+}

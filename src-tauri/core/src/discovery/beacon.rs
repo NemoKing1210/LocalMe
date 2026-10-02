@@ -136,6 +136,16 @@ fn multicast_group() -> Ipv4Addr {
     Ipv4Addr::from(BEACON_MULTICAST_ADDR)
 }
 
+/// The announce period: the idle period until any peer has been heard, then the settled one,
+/// which is longer because a peer that already knows about us needs reminding less often.
+fn announce_interval(settled: bool) -> Duration {
+    if settled {
+        BEACON_INTERVAL_SETTLED
+    } else {
+        BEACON_INTERVAL_IDLE
+    }
+}
+
 fn announce_targets(port: u16) -> [SocketAddr; 2] {
     [
         SocketAddr::from((Ipv4Addr::BROADCAST, port)),
@@ -333,7 +343,7 @@ async fn run(
 
     // The first tick of a fresh interval completes immediately, which is what sends the
     // opening announce.
-    let mut announce_timer = time::interval(BEACON_INTERVAL_IDLE);
+    let mut announce_timer = time::interval(announce_interval(false));
     announce_timer.set_missed_tick_behavior(MissedTickBehavior::Delay);
     let mut sweep = time::interval(SWEEP_INTERVAL);
     sweep.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -383,10 +393,9 @@ async fn run(
                             settled = true;
                             // The period cannot be changed in place, so the single interval is
                             // replaced here; there is still only ever one announce timer.
-                            announce_timer = time::interval_at(
-                                time::Instant::now() + BEACON_INTERVAL_SETTLED,
-                                BEACON_INTERVAL_SETTLED,
-                            );
+                            let period = announce_interval(true);
+                            announce_timer =
+                                time::interval_at(time::Instant::now() + period, period);
                             announce_timer.set_missed_tick_behavior(MissedTickBehavior::Delay);
                         }
                         let device_id = announcement.device_id;
@@ -667,5 +676,250 @@ mod tests {
             Ipv4Addr::from(BEACON_MULTICAST_ADDR),
             47821
         ))));
+    }
+
+    #[test]
+    fn the_announce_interval_is_idle_until_a_peer_is_heard_then_settled() {
+        assert_eq!(announce_interval(false), BEACON_INTERVAL_IDLE);
+        assert_eq!(announce_interval(true), BEACON_INTERVAL_SETTLED);
+        assert!(
+            announce_interval(true) > announce_interval(false),
+            "a settled beacon announces less often than an idle one"
+        );
+    }
+
+    #[test]
+    fn a_truncated_datagram_is_rejected() {
+        let own = own_named("frank");
+        let encoded = encode(Tag::Announce, &own).expect("encoded");
+
+        // Any proper prefix of a JSON object is unterminated and cannot parse.
+        for cut in [1, encoded.len() / 2, encoded.len() - 1] {
+            assert!(
+                decode_one(&encoded[..cut]).is_none(),
+                "a datagram cut to {cut} bytes must not decode"
+            );
+        }
+        assert!(decode_one(b"{").is_none());
+        assert!(decode_one(b"null").is_none());
+        assert!(decode_one(b"[]").is_none());
+    }
+
+    #[test]
+    fn a_datagram_from_a_foreign_device_is_not_filtered_by_the_codec() {
+        // Filtering our own id happens in the receive loop, not in the codec: any well-formed
+        // announcement decodes so the caller can decide.
+        let foreign = own_named("grace");
+
+        let (tag, announcement) =
+            decode_one(&encode(Tag::Announce, &foreign).expect("encoded")).expect("decodes");
+
+        assert_eq!(tag, Tag::Announce);
+        assert_eq!(announcement.device_id, foreign.device_id);
+    }
+
+    #[test]
+    fn unknown_json_fields_are_ignored_for_forward_compatibility() {
+        let id = DeviceId::generate();
+        let body = format!(
+            r#"{{"v":1,"t":"announce","id":"{id}","nick":"heidi","seed":"s","port":47820,"future":true}}"#
+        );
+
+        let (tag, announcement) = decode_one(body.as_bytes()).expect("decodes");
+        assert_eq!(tag, Tag::Announce);
+        assert_eq!(announcement.device_id, id);
+    }
+
+    #[test]
+    fn the_beacon_needs_a_tokio_runtime_to_start() {
+        let beacon = UdpBeacon::new(own_named("ivan"), 0);
+        let (sink, _events) = mpsc::channel(4);
+
+        let error = Discovery::start(&beacon, sink).expect_err("there is no runtime here");
+
+        assert!(matches!(error, DiscoveryError::Beacon(_)));
+    }
+
+    #[tokio::test]
+    async fn the_beacon_starts_and_stops_without_multicast() {
+        let beacon = UdpBeacon::new(own_named("judy"), 0);
+        let (sink, _events) = mpsc::channel(4);
+
+        Discovery::start(&beacon, sink.clone()).expect("an ephemeral port is always bindable");
+        // A second start while running is a no-op, not an error.
+        Discovery::start(&beacon, sink).expect("a second start is a no-op");
+
+        Discovery::stop(&beacon);
+        // Stopping again, and dropping afterwards, are no-ops too.
+        Discovery::stop(&beacon);
+        drop(beacon);
+    }
+
+    /// Waits for a discovery event, yielding to the loop instead of sleeping.
+    async fn wait_for_event(events: &mut mpsc::Receiver<DiscoveryEvent>) -> DiscoveryEvent {
+        for _ in 0..10_000 {
+            match events.try_recv() {
+                Ok(event) => return event,
+                Err(mpsc::error::TryRecvError::Empty) => tokio::task::yield_now().await,
+                Err(mpsc::error::TryRecvError::Disconnected) => panic!("the beacon sink closed"),
+            }
+        }
+        panic!("no discovery event arrived");
+    }
+
+    /// Waits for one datagram on `socket`, yielding instead of sleeping.
+    async fn wait_for_datagram(socket: &UdpSocket) -> Vec<u8> {
+        let mut buffer = [0_u8; 1024];
+        for _ in 0..10_000 {
+            match socket.try_recv_from(&mut buffer) {
+                Ok((len, _)) => return buffer[..len].to_vec(),
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+                    tokio::task::yield_now().await
+                }
+                Err(err) => panic!("the beacon socket failed: {err}"),
+            }
+        }
+        panic!("no datagram arrived");
+    }
+
+    /// Asserts nothing arrives on `socket` once the loop has had time to react.
+    async fn expect_no_datagram(socket: &UdpSocket) {
+        for _ in 0..64 {
+            tokio::task::yield_now().await;
+        }
+        let mut buffer = [0_u8; 1024];
+        match socket.try_recv_from(&mut buffer) {
+            Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
+            Ok((len, from)) => panic!("unexpected datagram of {len} bytes from {from}"),
+            Err(err) => panic!("the beacon socket failed: {err}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn the_loop_reports_a_peer_replies_once_and_honours_a_goodbye() {
+        let own = own_named("kim");
+        let socket = Arc::new(
+            UdpSocket::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+                .await
+                .expect("bind the beacon socket"),
+        );
+        let local = socket.local_addr().expect("local address");
+        let (sink, mut events) = mpsc::channel(16);
+        // Port 0 keeps the announce broadcasts off the wire: they are irrelevant to the
+        // unicast exchanges this test checks.
+        let task = tokio::spawn(run(Arc::clone(&socket), own.clone(), 0, sink));
+
+        let peer = own_named("laura");
+        let announce = encode(Tag::Announce, &peer).expect("encoded");
+        let sender = UdpSocket::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+            .await
+            .expect("bind the sender socket");
+        sender.send_to(&announce, local).await.expect("send");
+
+        let expected = DiscoveredPeer {
+            device_id: peer.device_id,
+            nickname: peer.nickname.clone(),
+            avatar_seed: peer.avatar_seed.clone(),
+            addresses: vec![SocketAddr::new(Ipv4Addr::LOCALHOST.into(), peer.port)],
+        };
+        assert_eq!(
+            wait_for_event(&mut events).await,
+            DiscoveryEvent::Found(expected.clone())
+        );
+
+        // The announce is answered once, with our own announcement, at its source address.
+        let reply = wait_for_datagram(&sender).await;
+        let (tag, reply_own) = decode(&reply).expect("the reply is a beacon datagram");
+        assert_eq!(tag, Tag::Announce);
+        assert_eq!(reply_own.device_id, own.device_id);
+
+        // A second announce inside the reply interval is still reported, but not answered.
+        sender.send_to(&announce, local).await.expect("send again");
+        assert_eq!(
+            wait_for_event(&mut events).await,
+            DiscoveryEvent::Found(expected)
+        );
+        expect_no_datagram(&sender).await;
+
+        // A goodbye for a known peer is reported as lost.
+        let goodbye = encode(Tag::Bye, &peer).expect("encoded");
+        sender.send_to(&goodbye, local).await.expect("send goodbye");
+        assert_eq!(
+            wait_for_event(&mut events).await,
+            DiscoveryEvent::Lost {
+                device_id: peer.device_id
+            }
+        );
+
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn the_loop_ignores_its_own_datagrams() {
+        let own = own_named("mallory");
+        let socket = Arc::new(
+            UdpSocket::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+                .await
+                .expect("bind the beacon socket"),
+        );
+        let local = socket.local_addr().expect("local address");
+        let (sink, mut events) = mpsc::channel(16);
+        let task = tokio::spawn(run(Arc::clone(&socket), own.clone(), 0, sink));
+
+        let sender = UdpSocket::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+            .await
+            .expect("bind the sender socket");
+        // Our own announcement, looped back by the network stack, must be ignored:
+        // the first event to arrive is for the foreign peer that follows it.
+        sender
+            .send_to(&encode(Tag::Announce, &own).expect("encoded"), local)
+            .await
+            .expect("send our own");
+        let foreign = own_named("nina");
+        sender
+            .send_to(&encode(Tag::Announce, &foreign).expect("encoded"), local)
+            .await
+            .expect("send foreign");
+
+        let event = wait_for_event(&mut events).await;
+        assert!(
+            matches!(&event, DiscoveryEvent::Found(peer) if peer.device_id == foreign.device_id),
+            "our own device id must be filtered before the foreign peer is reported: {event:?}"
+        );
+        for _ in 0..64 {
+            tokio::task::yield_now().await;
+        }
+        assert!(
+            events.try_recv().is_err(),
+            "our own looped-back announce must not produce an event"
+        );
+
+        task.abort();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_sweep_tick_is_quiet_while_no_peer_is_known() {
+        // `Liveness` ages peers with the wall clock, so a paused tick can only exercise the
+        // bookkeeping here: with nobody heard, the sweep must report nothing.
+        let own = own_named("olive");
+        let socket = Arc::new(
+            UdpSocket::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+                .await
+                .expect("bind the beacon socket"),
+        );
+        let (sink, mut events) = mpsc::channel(4);
+        let task = tokio::spawn(run(socket, own, 0, sink));
+
+        time::advance(SWEEP_INTERVAL * 4).await;
+        for _ in 0..64 {
+            tokio::task::yield_now().await;
+        }
+
+        assert!(
+            events.try_recv().is_err(),
+            "a sweep with no known peer must be silent"
+        );
+
+        task.abort();
     }
 }

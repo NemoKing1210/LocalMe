@@ -314,4 +314,64 @@ mod tests {
         assert_eq!(seed.as_str(), "018f2b9c-0000-7000-8000-000000000000:Аня");
         assert!(seed.as_str().chars().count() <= MAX_AVATAR_SEED_CHARS);
     }
+
+    #[test]
+    fn message_ids_round_trip_and_keep_their_uuid() {
+        let uuid = uuid::Uuid::from_u128(42);
+        let id = MessageId::from_uuid(uuid);
+        assert_eq!(id.as_uuid(), uuid);
+
+        let json = serde_json::to_string(&id).expect("serialise");
+        assert_eq!(json, format!("\"{uuid}\""));
+        let back: MessageId = serde_json::from_str(&json).expect("deserialise");
+        assert_eq!(back, id);
+
+        assert!("garbage".parse::<MessageId>().is_err());
+        assert!(serde_json::from_str::<MessageId>("\"garbage\"").is_err());
+    }
+
+    #[test]
+    fn attachment_ids_round_trip_and_reject_garbage() {
+        let id = AttachmentId::generate();
+        let json = serde_json::to_string(&id).expect("serialise");
+        assert_eq!(json, format!("\"{id}\""));
+        let back: AttachmentId = serde_json::from_str(&json).expect("deserialise");
+        assert_eq!(back, id);
+
+        let uuid = uuid::Uuid::from_u128(7);
+        assert_eq!(AttachmentId::from_uuid(uuid).as_uuid(), uuid);
+        assert!("garbage".parse::<AttachmentId>().is_err());
+        assert!(serde_json::from_str::<AttachmentId>("\"garbage\"").is_err());
+    }
+
+    #[test]
+    fn v7_identifiers_sort_by_creation_and_tie_break_by_uuid() {
+        // The storage layer orders by id, so two identifiers made in the same millisecond must
+        // still have one deterministic order.
+        let low = MessageId::from_uuid(uuid::Uuid::from_u128(
+            0x018f_2b9c_0000_7000_8000_0000_0000_0001,
+        ));
+        let high = MessageId::from_uuid(uuid::Uuid::from_u128(
+            0x018f_2b9c_0000_7000_8000_0000_0000_0002,
+        ));
+        assert!(high > low);
+        assert!(low < high);
+
+        let first = AttachmentId::generate();
+        let second = AttachmentId::generate();
+        assert!(second > first, "uuid v7 must sort by creation order");
+    }
+
+    #[test]
+    fn an_avatar_seed_is_a_string_on_the_wire_and_in_the_interface() {
+        let seed = AvatarSeed::parse("seed-Аня").expect("valid");
+        assert_eq!(seed.to_string(), "seed-Аня");
+
+        let json = serde_json::to_string(&seed).expect("serialise");
+        assert_eq!(json, "\"seed-Аня\"");
+        let back: AvatarSeed = serde_json::from_str(&json).expect("deserialise");
+        assert_eq!(back, seed);
+
+        assert!(serde_json::from_str::<AvatarSeed>("\"\"").is_err());
+    }
 }

@@ -213,3 +213,206 @@ impl AppState {
         self.core.lock().ok().and_then(|mut guard| guard.take())
     }
 }
+
+/// A real, discovery-free core in a temporary data directory, shared by the host's test modules.
+#[cfg(test)]
+pub(crate) mod test_support {
+    use super::{AppState, Settings};
+    use localme_core::domain::nickname::Nickname;
+    use localme_core::runtime::{Core, CoreConfig};
+
+    /// Builds the host state over a freshly started core, with `settings` as the cached document.
+    pub(crate) async fn state_with(settings: Settings) -> (AppState, tempfile::TempDir) {
+        let dir = tempfile::tempdir().expect("a temporary data directory");
+        let config = CoreConfig::without_discovery(
+            dir.path().to_path_buf(),
+            Nickname::parse("Tester").expect("a valid nickname"),
+            0,
+            0,
+        );
+        let core = Core::start(config).await.expect("the core starts");
+        (AppState::new(core, settings), dir)
+    }
+
+    /// The same, with the default settings document.
+    pub(crate) async fn state() -> (AppState, tempfile::TempDir) {
+        state_with(Settings::default()).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::test_support;
+    use super::*;
+    use localme_core::services::SystemSettings;
+
+    fn labels() -> UiLabels {
+        UiLabels::default()
+    }
+
+    #[test]
+    fn the_default_labels_are_the_english_ones() {
+        let labels = labels();
+        assert_eq!(labels.app_name, "LocalMe");
+        assert_eq!(labels.open, "Open LocalMe");
+        assert_eq!(labels.quit, "Quit LocalMe");
+        assert_eq!(labels.tooltip_idle, "LocalMe — no unread messages");
+        assert_eq!(labels.tooltip_unread, "LocalMe — {count} unread");
+        assert_eq!(labels.new_message, "New message");
+        assert_eq!(labels.conversations, "Conversations");
+        assert_eq!(labels.all_conversations, "All conversations");
+        assert_eq!(labels.mark_all_read, "Mark all as read");
+        assert_eq!(labels.notifications, "Notifications");
+        assert_eq!(labels.close_to_tray, "Close to tray");
+        assert_eq!(labels.autostart, "Start with the system");
+        assert_eq!(labels.settings, "Settings…");
+        assert_eq!(labels.open_logs, "Open logs folder");
+    }
+
+    #[test]
+    fn the_tooltip_substitutes_the_count_only_when_there_is_one() {
+        let labels = labels();
+        assert_eq!(labels.tooltip(0), "LocalMe — no unread messages");
+        assert_eq!(labels.tooltip(1), "LocalMe — 1 unread");
+        assert_eq!(labels.tooltip(7), "LocalMe — 7 unread");
+        assert_eq!(labels.tooltip(u32::MAX), "LocalMe — 4294967295 unread");
+    }
+
+    #[test]
+    fn the_window_title_gains_the_count_only_when_something_is_unread() {
+        let labels = labels();
+        assert_eq!(labels.window_title(0), "LocalMe");
+        assert_eq!(labels.window_title(1), "LocalMe (1)");
+        assert_eq!(labels.window_title(12), "LocalMe (12)");
+    }
+
+    #[test]
+    fn the_labels_round_trip_through_camel_case_json() {
+        let value = serde_json::to_value(labels()).expect("serialises");
+        assert_eq!(value["appName"], "LocalMe");
+        assert_eq!(value["tooltipIdle"], "LocalMe — no unread messages");
+        assert_eq!(value["tooltipUnread"], "LocalMe — {count} unread");
+        assert!(value.get("allConversations").is_some());
+        assert!(value.get("markAllRead").is_some());
+        assert!(value.get("closeToTray").is_some());
+        assert!(value.get("openLogs").is_some());
+        assert!(value.get("app_name").is_none());
+
+        let back: UiLabels = serde_json::from_value(value.clone()).expect("deserialises");
+        assert_eq!(serde_json::to_value(back).expect("re-serialises"), value);
+    }
+
+    #[tokio::test]
+    async fn the_settings_snapshot_is_the_document_the_state_was_built_with() {
+        let settings = Settings {
+            system: SystemSettings {
+                close_to_tray: false,
+                ..SystemSettings::default()
+            },
+            ..Settings::default()
+        };
+        let (state, _dir) = test_support::state_with(settings.clone()).await;
+        assert_eq!(state.settings_snapshot(), settings);
+    }
+
+    #[tokio::test]
+    async fn peers_are_kept_in_the_order_they_were_set() {
+        let (state, _dir) = test_support::state().await;
+        assert!(state.peers_snapshot().is_empty());
+
+        let peers = vec![
+            TrayPeer {
+                device_id: DeviceId::generate(),
+                nickname: "Alice".to_owned(),
+                unread: 2,
+            },
+            TrayPeer {
+                device_id: DeviceId::generate(),
+                nickname: "Bob".to_owned(),
+                unread: 0,
+            },
+        ];
+        state.set_peers(peers);
+
+        let snapshot = state.peers_snapshot();
+        assert_eq!(snapshot.len(), 2);
+        assert_eq!(snapshot[0].nickname, "Alice");
+        assert_eq!(snapshot[0].unread, 2);
+        assert_eq!(snapshot[1].nickname, "Bob");
+        assert_eq!(snapshot[1].unread, 0);
+    }
+
+    #[tokio::test]
+    async fn the_active_chat_can_be_set_and_cleared() {
+        let (state, _dir) = test_support::state().await;
+        let peer = DeviceId::generate();
+        assert_eq!(state.active_chat(), None);
+        state.set_active_chat(Some(peer));
+        assert_eq!(state.active_chat(), Some(peer));
+        state.set_active_chat(None);
+        assert_eq!(state.active_chat(), None);
+    }
+
+    #[tokio::test]
+    async fn the_last_notified_peer_is_taken_rather_than_read() {
+        let (state, _dir) = test_support::state().await;
+        let peer = DeviceId::generate();
+        assert_eq!(state.take_last_notified(), None);
+
+        state.set_last_notified(Some(peer));
+        assert_eq!(state.take_last_notified(), Some(peer));
+        // Taking empties it, so a second reveal does not reopen the same conversation.
+        assert_eq!(state.take_last_notified(), None);
+
+        state.set_last_notified(None);
+        assert_eq!(state.take_last_notified(), None);
+    }
+
+    #[tokio::test]
+    async fn labels_can_be_replaced_wholesale() {
+        let (state, _dir) = test_support::state().await;
+        assert_eq!(state.labels_snapshot().app_name, "LocalMe");
+
+        let custom = UiLabels {
+            app_name: "LocalMe (ru)".to_owned(),
+            open: "Открыть".to_owned(),
+            ..UiLabels::default()
+        };
+        state.set_labels(custom);
+
+        let snapshot = state.labels_snapshot();
+        assert_eq!(snapshot.app_name, "LocalMe (ru)");
+        assert_eq!(snapshot.open, "Открыть");
+        assert_eq!(snapshot.quit, "Quit LocalMe");
+    }
+
+    #[tokio::test]
+    async fn the_window_is_active_only_when_visible_and_focused() {
+        let (state, _dir) = test_support::state().await;
+        // Hidden and unfocused.
+        assert!(!state.is_window_active());
+
+        // Visible but unfocused.
+        state.window_visible.store(true, Ordering::Relaxed);
+        assert!(!state.is_window_active());
+
+        // Visible and focused.
+        state.window_focused.store(true, Ordering::Relaxed);
+        assert!(state.is_window_active());
+
+        // Focused but hidden.
+        state.window_visible.store(false, Ordering::Relaxed);
+        assert!(!state.is_window_active());
+    }
+
+    #[tokio::test]
+    async fn the_core_is_handed_over_at_most_once() {
+        let (state, _dir) = test_support::state().await;
+        let core = state
+            .take_core()
+            .expect("the first take hands over the core");
+        assert!(state.take_core().is_none());
+        core.shutdown().await;
+        assert!(state.take_core().is_none());
+    }
+}

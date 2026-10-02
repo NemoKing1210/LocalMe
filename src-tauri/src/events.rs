@@ -169,3 +169,30 @@ pub fn emit_open_settings<R: Runtime>(app: &AppHandle<R>) {
         tracing::debug!(%error, "the open-settings request could not be delivered");
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::test_support;
+
+    /// Only `window_is_visible` is reachable without an `AppHandle`; the rest of the module
+    /// emits through one, and the `tauri::test` mock runtime is deliberately not enabled (its
+    /// test binary fails to start on Windows), so it cannot be built here.
+    #[test]
+    fn the_event_names_are_the_ones_the_interface_listens_for() {
+        assert_eq!(SETTINGS_EVENT, "settings_changed");
+        assert_eq!(SNAPSHOT_EVENT, "state_snapshot");
+        assert_eq!(OPEN_CHAT_EVENT, "open_chat");
+        assert_eq!(OPEN_SETTINGS_EVENT, "open_settings");
+    }
+
+    #[tokio::test]
+    async fn visibility_tracks_the_window_flag() {
+        let (state, _dir) = test_support::state().await;
+        assert!(!window_is_visible(&state));
+        state.window_visible.store(true, Ordering::Relaxed);
+        assert!(window_is_visible(&state));
+        state.window_visible.store(false, Ordering::Relaxed);
+        assert!(!window_is_visible(&state));
+    }
+}

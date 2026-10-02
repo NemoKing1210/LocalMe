@@ -46,3 +46,6 @@ export const useUiStore = defineStore('ui', () => {
 
   return { notice, noticeText, notify, fail, dismiss };
 });
+
+/** The store's public shape, for the tests and their helpers that carry one around. */
+export type UiStore = ReturnType<typeof useUiStore>;

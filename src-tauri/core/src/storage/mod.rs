@@ -2197,4 +2197,824 @@ mod tests {
             Err(StorageError::Unavailable)
         ));
     }
+
+    // ---- helpers for the newer tests ----------------------------------------------------
+
+    fn message_id(seed: u128) -> MessageId {
+        MessageId::from_uuid(uuid::Uuid::from_u128(seed))
+    }
+
+    fn attachment_id(seed: u128) -> AttachmentId {
+        AttachmentId::from_uuid(uuid::Uuid::from_u128(seed))
+    }
+
+    fn attachment_for(
+        seed: u128,
+        message: &ChatMessage,
+        name: &str,
+        state: AttachmentState,
+        path: Option<String>,
+    ) -> Attachment {
+        let name = FileName::sanitise(name);
+        Attachment {
+            id: attachment_id(seed),
+            message_id: message.id,
+            peer: message.peer,
+            direction: message.direction,
+            kind: AttachmentKind::of(&name),
+            name,
+            size: 2_048,
+            state,
+            transferred: 0,
+            sha256: None,
+            created_at: message.sent_at,
+            path,
+        }
+    }
+
+    /// Writes the file an attachment row names, returning its path on disk.
+    fn write_stored_file(store: &SqliteStore, attachment: &Attachment) -> std::path::PathBuf {
+        let directory = store.files_root().join(attachment.id.to_string());
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join(attachment.name.as_str());
+        std::fs::write(&path, b"payload").unwrap();
+        path
+    }
+
+    /// A migrated database owned directly, for the row-level error paths.
+    fn raw_connection(dir: &TempDir) -> Connection {
+        let mut conn = Connection::open(dir.path().join("raw.db")).unwrap();
+        schema::migrate(&mut conn).unwrap();
+        conn
+    }
+
+    fn seed_message(conn: &Connection) -> (String, String) {
+        let device = DeviceId::generate().to_string();
+        conn.execute(
+            "INSERT INTO peers (device_id, nickname, avatar_seed, first_seen_ms) \
+             VALUES (?1, 'Ann', 'seed', 1)",
+            params![device],
+        )
+        .unwrap();
+        let message = MessageId::generate().to_string();
+        conn.execute(
+            "INSERT INTO messages \
+               (id, peer_id, outgoing, body, sent_at_ms, received_at_ms, status, read) \
+             VALUES (?1, ?2, 0, 'hi', 1, 1, 'received', 1)",
+            params![message, device],
+        )
+        .unwrap();
+        (device, message)
+    }
+
+    // ---- cursor paging ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn history_cursor_resolves_ties_by_id_in_both_directions() {
+        let (_dir, store) = open_store();
+        let peer = profile(40, "Tie");
+        store.upsert_peer_seen(&peer, None, Some(1)).await.unwrap();
+
+        // Ten messages share one timestamp: only the identifier can order them.
+        let ids: Vec<MessageId> = (1..=10_u128).map(message_id).collect();
+        for id in &ids {
+            let mut message = incoming(peer.device_id, 500, true);
+            message.id = *id;
+            store.insert_message(&message).await.unwrap();
+        }
+        let mut newest_first = ids.clone();
+        newest_first.sort_by(|a, b| b.cmp(a));
+
+        let first = store.history_page(peer.device_id, None, 4).await.unwrap();
+        assert_eq!(
+            first.iter().map(|m| m.id).collect::<Vec<_>>(),
+            newest_first[..4].to_vec()
+        );
+
+        let cursor = HistoryCursor {
+            sent_at_ms: 500,
+            id: first.last().unwrap().id,
+        };
+        let second = store
+            .history_page(peer.device_id, Some(cursor), 4)
+            .await
+            .unwrap();
+        assert_eq!(
+            second.iter().map(|m| m.id).collect::<Vec<_>>(),
+            newest_first[4..8].to_vec(),
+            "the page resumes strictly after the cursor even with equal timestamps"
+        );
+
+        let cursor = HistoryCursor {
+            sent_at_ms: 500,
+            id: second.last().unwrap().id,
+        };
+        let third = store
+            .history_page(peer.device_id, Some(cursor), 4)
+            .await
+            .unwrap();
+        assert_eq!(
+            third.iter().map(|m| m.id).collect::<Vec<_>>(),
+            newest_first[8..].to_vec()
+        );
+
+        // A cursor on the oldest row yields nothing rather than repeating it.
+        let cursor = HistoryCursor {
+            sent_at_ms: 500,
+            id: newest_first[9],
+        };
+        assert!(
+            store
+                .history_page(peer.device_id, Some(cursor), 4)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    // ---- attachments --------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn attachment_rows_track_progress_state_and_digest() {
+        let (_dir, store) = open_store();
+        let peer = profile(41, "File");
+        store.upsert_peer_seen(&peer, None, Some(1)).await.unwrap();
+
+        let mut message = incoming(peer.device_id, 10, true);
+        let name = FileName::sanitise("report.PDF");
+        let file = attachment_for(7, &message, "report.PDF", AttachmentState::Queued, None);
+        message.attachments = vec![file.clone()];
+        store.insert_message(&message).await.unwrap();
+
+        let stored = store.attachment(file.id).await.unwrap().expect("stored");
+        assert_eq!(stored.state, AttachmentState::Queued);
+        assert_eq!(stored.transferred, 0);
+        assert_eq!(stored.sha256, None);
+        assert_eq!(
+            stored.path, None,
+            "an unfinished incoming file has no path yet"
+        );
+        assert_eq!(stored.kind, AttachmentKind::File);
+
+        store.set_attachment_progress(file.id, 2_048).await.unwrap();
+        assert_eq!(
+            store
+                .attachment(file.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .transferred,
+            2_048
+        );
+
+        let digest = Sha256::of(b"report bytes");
+        store.set_attachment_digest(file.id, digest).await.unwrap();
+        assert_eq!(
+            store.attachment(file.id).await.unwrap().unwrap().sha256,
+            Some(digest)
+        );
+
+        store
+            .set_attachment_state(file.id, AttachmentState::Receiving)
+            .await
+            .unwrap();
+        assert_eq!(
+            store.attachment(file.id).await.unwrap().unwrap().state,
+            AttachmentState::Receiving
+        );
+
+        store
+            .set_attachment_state(file.id, AttachmentState::Complete)
+            .await
+            .unwrap();
+        let complete = store.attachment(file.id).await.unwrap().unwrap();
+        assert_eq!(complete.state, AttachmentState::Complete);
+        let ready = store
+            .files_root()
+            .join(file.id.to_string())
+            .join(name.as_str());
+        assert_eq!(
+            complete.path.as_deref(),
+            Some(ready.to_string_lossy().as_ref()),
+            "a complete incoming file reports the path it landed on"
+        );
+        assert_eq!(complete.sha256, Some(digest));
+    }
+
+    #[tokio::test]
+    async fn only_messages_with_open_transfers_are_offered_for_resumption() {
+        let (_dir, store) = open_store();
+        let peer = profile(42, "Resume");
+        store.upsert_peer_seen(&peer, None, Some(1)).await.unwrap();
+
+        let mut waiting = outgoing(peer.device_id, 1, MessageStatus::Queued);
+        let waiting_file =
+            attachment_for(1, &waiting, "waiting.bin", AttachmentState::Queued, None);
+        waiting.attachments = vec![waiting_file];
+        let mut in_flight = outgoing(peer.device_id, 2, MessageStatus::Queued);
+        let in_flight_file = attachment_for(
+            2,
+            &in_flight,
+            "in-flight.bin",
+            AttachmentState::Sending,
+            None,
+        );
+        in_flight.attachments = vec![in_flight_file];
+        let mut finished = outgoing(peer.device_id, 3, MessageStatus::Delivered);
+        let finished_file = attachment_for(
+            3,
+            &finished,
+            "finished.bin",
+            AttachmentState::Complete,
+            None,
+        );
+        finished.attachments = vec![finished_file];
+        let text_only = outgoing(peer.device_id, 4, MessageStatus::Queued);
+        let incoming_file = incoming(peer.device_id, 5, true);
+        for message in [&waiting, &in_flight, &finished, &text_only, &incoming_file] {
+            store.insert_message(message).await.unwrap();
+        }
+
+        let offered = store
+            .messages_with_unfinished_attachments(peer.device_id)
+            .await
+            .unwrap();
+        assert_eq!(
+            offered.iter().map(|m| m.id).collect::<Vec<_>>(),
+            vec![waiting.id, in_flight.id],
+            "only outgoing messages with queued/sending attachments, oldest first"
+        );
+        assert_eq!(
+            offered[0].attachments.len(),
+            1,
+            "the whole message is carried so the peer can match the transfer"
+        );
+
+        store
+            .set_attachment_state(in_flight.attachments[0].id, AttachmentState::Cancelled)
+            .await
+            .unwrap();
+        let offered = store
+            .messages_with_unfinished_attachments(peer.device_id)
+            .await
+            .unwrap();
+        assert_eq!(
+            offered.iter().map(|m| m.id).collect::<Vec<_>>(),
+            vec![waiting.id]
+        );
+
+        let next = store
+            .next_outbox_message(peer.device_id)
+            .await
+            .unwrap()
+            .expect("a queued message");
+        assert_eq!(next.id, waiting.id);
+        assert_eq!(
+            next.attachments.len(),
+            1,
+            "the outbox message arrives with its files"
+        );
+
+        assert!(
+            store
+                .next_outbox_message(device(98))
+                .await
+                .unwrap()
+                .is_none(),
+            "a conversation with nothing queued has no outbox message"
+        );
+    }
+
+    #[tokio::test]
+    async fn retransmission_does_not_reset_attachment_progress() {
+        let (_dir, store) = open_store();
+        let peer = profile(43, "Retry");
+        store.upsert_peer_seen(&peer, None, Some(1)).await.unwrap();
+
+        let mut message = outgoing(peer.device_id, 1, MessageStatus::Queued);
+        let file = attachment_for(
+            5,
+            &message,
+            "half.bin",
+            AttachmentState::Sending,
+            Some("C:/src/half.bin".to_owned()),
+        );
+        let id = file.id;
+        message.attachments = vec![file];
+        assert!(store.insert_message(&message).await.unwrap());
+        store.set_attachment_progress(id, 1_024).await.unwrap();
+
+        assert!(
+            !store.insert_message(&message).await.unwrap(),
+            "the message itself is a duplicate"
+        );
+        let stored = store.attachment(id).await.unwrap().unwrap();
+        assert_eq!(
+            stored.transferred, 1_024,
+            "a retransmitted frame must not rewind a half-done transfer"
+        );
+        assert_eq!(stored.state, AttachmentState::Sending);
+        assert_eq!(
+            stored.path.as_deref(),
+            Some("C:/src/half.bin"),
+            "an outgoing attachment keeps the sender's source path"
+        );
+        assert_eq!(
+            store
+                .history_page(peer.device_id, None, 10)
+                .await
+                .unwrap()
+                .len(),
+            1,
+            "the duplicate did not add a row"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_file_only_message_stores_no_body_but_keeps_its_file() {
+        let (_dir, store) = open_store();
+        let peer = profile(47, "Files");
+        store.upsert_peer_seen(&peer, None, Some(1)).await.unwrap();
+
+        let mut message = outgoing(peer.device_id, 1, MessageStatus::Queued);
+        message.body = None;
+        let file = attachment_for(9, &message, "only.bin", AttachmentState::Queued, None);
+        message.attachments = vec![file];
+        store.insert_message(&message).await.unwrap();
+
+        let page = store.history_page(peer.device_id, None, 10).await.unwrap();
+        assert_eq!(page.len(), 1);
+        assert_eq!(page[0].body, None, "a file-only message has no text");
+        assert_eq!(page[0].attachments.len(), 1);
+        assert_eq!(page[0].attachments[0].name.as_str(), "only.bin");
+    }
+
+    // ---- forget / restore / retention ---------------------------------------------------
+
+    #[tokio::test]
+    async fn forgetting_marks_the_device_and_removes_only_its_files() {
+        let (_dir, store) = open_store();
+        let doomed = profile(44, "Doomed");
+        let kept = profile(45, "Kept");
+        store
+            .upsert_peer_seen(&doomed, None, Some(1))
+            .await
+            .unwrap();
+        store.upsert_peer_seen(&kept, None, Some(1)).await.unwrap();
+
+        let mut doomed_message = incoming(doomed.device_id, 1, true);
+        let doomed_file = attachment_for(
+            44,
+            &doomed_message,
+            "doomed.bin",
+            AttachmentState::Complete,
+            None,
+        );
+        let doomed_path = write_stored_file(&store, &doomed_file);
+        doomed_message.attachments = vec![doomed_file];
+        store.insert_message(&doomed_message).await.unwrap();
+
+        let mut kept_message = incoming(kept.device_id, 2, true);
+        let kept_file = attachment_for(
+            45,
+            &kept_message,
+            "kept.bin",
+            AttachmentState::Complete,
+            None,
+        );
+        let kept_path = write_stored_file(&store, &kept_file);
+        kept_message.attachments = vec![kept_file];
+        store.insert_message(&kept_message).await.unwrap();
+
+        store.forget_peer(doomed.device_id, true).await.unwrap();
+
+        let devices = store.known_devices().await.unwrap();
+        let doomed_device = devices
+            .iter()
+            .find(|known| known.device_id == doomed.device_id)
+            .expect("a forgotten device stays listed");
+        assert!(doomed_device.forgotten);
+        assert_eq!(doomed_device.message_count, 0);
+        assert!(
+            !store
+                .peer(doomed.device_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .is_listed()
+        );
+
+        let kept_device = devices
+            .iter()
+            .find(|known| known.device_id == kept.device_id)
+            .unwrap();
+        assert!(!kept_device.forgotten);
+        assert_eq!(kept_device.message_count, 1);
+
+        assert!(
+            !doomed_path.exists(),
+            "the deleted conversation's file goes with it"
+        );
+        assert!(kept_path.exists(), "another device's file is untouched");
+
+        // A device that appears again is a known device again.
+        store
+            .upsert_peer_seen(&doomed, Some("1.2.3.4:5"), Some(9_000))
+            .await
+            .unwrap();
+        let restored = store.peer(doomed.device_id).await.unwrap().unwrap();
+        assert!(!restored.forgotten);
+        assert!(restored.is_listed());
+        assert_eq!(restored.last_seen_ms, Some(9_000));
+    }
+
+    #[tokio::test]
+    async fn clearing_history_removes_stored_attachment_files() {
+        let (_dir, store) = open_store();
+        let peer = profile(49, "Wipe");
+        store.upsert_peer_seen(&peer, None, Some(1)).await.unwrap();
+
+        let mut message = incoming(peer.device_id, 1, true);
+        let file = attachment_for(11, &message, "gone.bin", AttachmentState::Complete, None);
+        let path = write_stored_file(&store, &file);
+        message.attachments = vec![file];
+        store.insert_message(&message).await.unwrap();
+        assert!(path.exists());
+
+        assert_eq!(store.clear_history().await.unwrap(), 1);
+        assert!(!path.exists(), "the stored file is removed with its row");
+    }
+
+    #[tokio::test]
+    async fn the_device_identity_metadata_round_trips() {
+        let (_dir, store) = open_store();
+        use crate::ports::store::{META_DEVICE_ID, META_NICKNAME};
+
+        assert_eq!(store.meta_get(META_DEVICE_ID).await.unwrap(), None);
+        store.meta_set(META_DEVICE_ID, "device-1").await.unwrap();
+        store.meta_set(META_NICKNAME, "Host").await.unwrap();
+        assert_eq!(
+            store.meta_get(META_DEVICE_ID).await.unwrap().as_deref(),
+            Some("device-1")
+        );
+        assert_eq!(
+            store.meta_get(META_NICKNAME).await.unwrap().as_deref(),
+            Some("Host")
+        );
+
+        // Retention bookkeeping is opaque text and must survive verbatim.
+        let cursor = "x".repeat(4_096);
+        store.meta_set("log_cursor", &cursor).await.unwrap();
+        assert_eq!(
+            store.meta_get("log_cursor").await.unwrap().as_deref(),
+            Some(cursor.as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn muting_and_touching_a_peer_persist() {
+        let (_dir, store) = open_store();
+        let peer = profile(48, "Quiet");
+        store.upsert_peer_seen(&peer, None, Some(1)).await.unwrap();
+
+        assert!(
+            !store
+                .peer(peer.device_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .notify_muted
+        );
+        store.set_peer_muted(peer.device_id, true).await.unwrap();
+        assert!(
+            store
+                .peer(peer.device_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .notify_muted
+        );
+        store.set_peer_muted(peer.device_id, false).await.unwrap();
+        assert!(
+            !store
+                .peer(peer.device_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .notify_muted
+        );
+
+        store.touch_peer_seen(peer.device_id, 5_000).await.unwrap();
+        assert_eq!(
+            store
+                .peer(peer.device_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .last_seen_ms,
+            Some(5_000)
+        );
+    }
+
+    #[tokio::test]
+    async fn the_startup_requeue_scan_settles_after_one_pass() {
+        let (_dir, store) = open_store();
+        let peer = profile(46, "Scan");
+        store.upsert_peer_seen(&peer, None, Some(1)).await.unwrap();
+        store
+            .insert_message(&outgoing(peer.device_id, 1, MessageStatus::Sending))
+            .await
+            .unwrap();
+        store
+            .insert_message(&outgoing(peer.device_id, 2, MessageStatus::Sending))
+            .await
+            .unwrap();
+
+        assert_eq!(store.requeue_all_pending().await.unwrap(), 2);
+        assert_eq!(
+            store.requeue_all_pending().await.unwrap(),
+            0,
+            "nothing is left in flight"
+        );
+        assert!(
+            store
+                .requeue_pending_messages(peer.device_id)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    // ---- error conversions ---------------------------------------------------------------
+
+    #[tokio::test]
+    async fn inserting_for_an_unknown_peer_is_a_sqlite_error() {
+        let (_dir, store) = open_store();
+        let orphan = incoming(device(99), 1, false);
+        assert!(
+            matches!(
+                store.insert_message(&orphan).await,
+                Err(StorageError::Sqlite(_))
+            ),
+            "the foreign key is enforced"
+        );
+    }
+
+    fn assert_invalid_peer(insert: impl Fn(&Connection)) {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = raw_connection(&dir);
+        insert(&conn);
+        assert!(matches!(
+            read_peers(&conn),
+            Err(StorageError::InvalidRow(_))
+        ));
+    }
+
+    #[test]
+    fn malformed_peer_rows_surface_as_invalid_row() {
+        assert_invalid_peer(|conn| {
+            conn.execute(
+                "INSERT INTO peers (device_id, nickname, avatar_seed, first_seen_ms) \
+                 VALUES ('not-a-uuid', 'Ann', 'seed', 1)",
+                [],
+            )
+            .unwrap();
+        });
+        assert_invalid_peer(|conn| {
+            conn.execute(
+                "INSERT INTO peers (device_id, nickname, avatar_seed, first_seen_ms) \
+                 VALUES (?1, '', 'seed', 1)",
+                params![DeviceId::generate().to_string()],
+            )
+            .unwrap();
+        });
+        assert_invalid_peer(|conn| {
+            conn.execute(
+                "INSERT INTO peers (device_id, nickname, avatar_seed, first_seen_ms) \
+                 VALUES (?1, 'Ann', '', 1)",
+                params![DeviceId::generate().to_string()],
+            )
+            .unwrap();
+        });
+        assert_invalid_peer(|conn| {
+            conn.execute(
+                "INSERT INTO peers (device_id, nickname, avatar_seed, first_seen_ms, unread) \
+                 VALUES (?1, 'Ann', 'seed', 1, -1)",
+                params![DeviceId::generate().to_string()],
+            )
+            .unwrap();
+        });
+        // A preview whose stored text no longer validates.
+        assert_invalid_peer(|conn| {
+            let device = DeviceId::generate().to_string();
+            conn.execute(
+                "INSERT INTO peers (device_id, nickname, avatar_seed, first_seen_ms) \
+                 VALUES (?1, 'Ann', 'seed', 1)",
+                params![device],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO messages \
+                   (id, peer_id, outgoing, body, sent_at_ms, received_at_ms, status, read) \
+                 VALUES (?1, ?2, 0, 'bell\u{7}here', 1, 1, 'received', 1)",
+                params![MessageId::generate().to_string(), device],
+            )
+            .unwrap();
+        });
+    }
+
+    #[test]
+    fn malformed_known_device_rows_surface_as_invalid_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = raw_connection(&dir);
+        conn.execute(
+            "INSERT INTO peers (device_id, nickname, avatar_seed, first_seen_ms) \
+             VALUES (?1, '', 'seed', 1)",
+            params![DeviceId::generate().to_string()],
+        )
+        .unwrap();
+        assert!(matches!(
+            read_known_devices(&conn),
+            Err(StorageError::InvalidRow(_))
+        ));
+    }
+
+    #[test]
+    fn malformed_message_rows_surface_as_invalid_row() {
+        fn message_row_error(id: &str, status: &str, body: Option<&str>) {
+            let dir = tempfile::tempdir().unwrap();
+            let conn = raw_connection(&dir);
+            let device = DeviceId::generate();
+            conn.execute(
+                "INSERT INTO peers (device_id, nickname, avatar_seed, first_seen_ms) \
+                 VALUES (?1, 'Ann', 'seed', 1)",
+                params![device.to_string()],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO messages \
+                   (id, peer_id, outgoing, body, sent_at_ms, received_at_ms, status, read) \
+                 VALUES (?1, ?2, 0, ?3, 1, 1, ?4, 1)",
+                params![id, device.to_string(), body, status],
+            )
+            .unwrap();
+            assert!(matches!(
+                history_page(&conn, Path::new("."), device, None, 10),
+                Err(StorageError::InvalidRow(_))
+            ));
+        }
+
+        message_row_error(&MessageId::generate().to_string(), "bogus", Some("hi"));
+        message_row_error("not-an-id", "received", Some("hi"));
+        message_row_error(
+            &MessageId::generate().to_string(),
+            "received",
+            Some("bell\u{7}here"),
+        );
+    }
+
+    fn assert_invalid_attachment(build: impl Fn(&Connection, &str, &str)) {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = raw_connection(&dir);
+        let (device, message) = seed_message(&conn);
+        // Foreign keys are on in this build; turn them off so a row whose parent identifier is
+        // unparseable can be seeded and then read back.
+        conn.pragma_update(None, "foreign_keys", "OFF").unwrap();
+        build(&conn, &device, &message);
+        let peer: DeviceId = device.parse().unwrap();
+        assert!(matches!(
+            history_page(&conn, Path::new("."), peer, None, 10),
+            Err(StorageError::InvalidRow(_))
+        ));
+    }
+
+    #[test]
+    fn malformed_attachment_rows_surface_as_invalid_row() {
+        let columns = "(id, message_id, peer_id, outgoing, name, size, kind, state, \
+                       transferred, sha256, path, created_at_ms)";
+        // A kind the domain no longer recognises.
+        assert_invalid_attachment(|conn, device, message| {
+            conn.execute(
+                &format!(
+                    "INSERT INTO attachments {columns} \
+                     VALUES (?1, ?2, ?3, 0, 'f.bin', 10, 'weird', 'queued', 0, NULL, NULL, 1)"
+                ),
+                params![AttachmentId::generate().to_string(), message, device],
+            )
+            .unwrap();
+        });
+        // A state the domain no longer recognises.
+        assert_invalid_attachment(|conn, device, message| {
+            conn.execute(
+                &format!(
+                    "INSERT INTO attachments {columns} \
+                     VALUES (?1, ?2, ?3, 0, 'f.bin', 10, 'file', 'weird', 0, NULL, NULL, 1)"
+                ),
+                params![AttachmentId::generate().to_string(), message, device],
+            )
+            .unwrap();
+        });
+        // A negative size cannot become a u64.
+        assert_invalid_attachment(|conn, device, message| {
+            conn.execute(
+                &format!(
+                    "INSERT INTO attachments {columns} \
+                     VALUES (?1, ?2, ?3, 0, 'f.bin', -5, 'file', 'queued', 0, NULL, NULL, 1)"
+                ),
+                params![AttachmentId::generate().to_string(), message, device],
+            )
+            .unwrap();
+        });
+        // A digest that is not hex.
+        assert_invalid_attachment(|conn, device, message| {
+            conn.execute(
+                &format!(
+                    "INSERT INTO attachments {columns} \
+                     VALUES (?1, ?2, ?3, 0, 'f.bin', 10, 'file', 'queued', 0, 'zz', NULL, 1)"
+                ),
+                params![AttachmentId::generate().to_string(), message, device],
+            )
+            .unwrap();
+        });
+        // An identifier that is not a UUID.
+        assert_invalid_attachment(|conn, device, message| {
+            conn.execute(
+                &format!(
+                    "INSERT INTO attachments {columns} \
+                     VALUES ('not-an-id', ?1, ?2, 0, 'f.bin', 10, 'file', 'queued', 0, NULL, NULL, 1)"
+                ),
+                params![message, device],
+            )
+            .unwrap();
+        });
+    }
+
+    #[test]
+    fn an_attachment_row_with_an_unparseable_parent_is_invalid() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = raw_connection(&dir);
+        let (device, _message) = seed_message(&conn);
+        // Foreign keys are on; the parent identifier is deliberately nonsense.
+        conn.pragma_update(None, "foreign_keys", "OFF").unwrap();
+        let id = AttachmentId::generate();
+        conn.execute(
+            "INSERT INTO attachments \
+               (id, message_id, peer_id, outgoing, name, size, kind, state, transferred, \
+                sha256, path, created_at_ms) \
+             VALUES (?1, 'not-an-id', ?2, 0, 'f.bin', 10, 'file', 'queued', 0, NULL, NULL, 1)",
+            params![id.to_string(), device],
+        )
+        .unwrap();
+
+        let row = conn
+            .query_row(
+                &format!("SELECT {ATTACHMENT_COLUMNS} FROM attachments WHERE id = ?1"),
+                params![id.to_string()],
+                AttachmentRow::read,
+            )
+            .unwrap();
+        assert!(matches!(
+            row.into_attachment(Path::new(".")),
+            Err(StorageError::InvalidRow(_))
+        ));
+    }
+
+    #[test]
+    fn requeueing_a_row_with_a_bad_identifier_is_invalid_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut conn = raw_connection(&dir);
+        let (device, _message) = seed_message(&conn);
+        conn.execute(
+            "INSERT INTO messages \
+               (id, peer_id, outgoing, body, sent_at_ms, received_at_ms, status, read) \
+             VALUES ('not-an-id', ?1, 1, 'x', 2, 2, 'sending', 1)",
+            params![device],
+        )
+        .unwrap();
+        let peer: DeviceId = device.parse().unwrap();
+        assert!(matches!(
+            requeue_pending_messages(&mut conn, peer),
+            Err(StorageError::InvalidRow(_))
+        ));
+    }
+
+    #[test]
+    fn remove_attachment_files_ignores_unknown_identifiers() {
+        let dir = tempfile::tempdir().unwrap();
+        let files = dir.path().join("files");
+        let known = attachment_id(77);
+        let known_dir = files.join(known.to_string());
+        std::fs::create_dir_all(&known_dir).unwrap();
+        std::fs::write(known_dir.join("f.bin"), b"x").unwrap();
+
+        remove_attachment_files(
+            &files,
+            &[
+                "not-an-id".to_owned(),
+                attachment_id(78).to_string(),
+                known.to_string(),
+            ],
+        );
+        assert!(!known_dir.exists(), "a known directory is removed");
+    }
 }

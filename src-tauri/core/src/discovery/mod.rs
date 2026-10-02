@@ -83,4 +83,59 @@ mod tests {
     fn no_advertised_address_yields_no_socket_address() {
         assert!(ordered_addresses([], 47820).is_empty());
     }
+
+    #[test]
+    fn address_order_does_not_depend_on_input_order() {
+        let v4_low = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1));
+        let v4_high = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 20));
+        let v6: IpAddr = "fe80::1".parse().expect("valid IPv6 address");
+
+        let forward = ordered_addresses([v6, v4_low, v4_high], 9);
+        let backward = ordered_addresses([v4_high, v4_low, v6], 9);
+
+        assert_eq!(
+            forward, backward,
+            "the order is total, not insertion-dependent"
+        );
+        assert_eq!(
+            forward,
+            vec![
+                SocketAddr::new(v4_low, 9),
+                SocketAddr::new(v4_high, 9),
+                SocketAddr::new(v6, 9),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_ipv6_only_peer_still_yields_its_address() {
+        let v6: IpAddr = "2001:db8::1".parse().expect("valid IPv6 address");
+
+        let ordered = ordered_addresses([v6], 47820);
+
+        assert_eq!(ordered, vec![SocketAddr::new(v6, 47820)]);
+    }
+
+    #[test]
+    fn lock_hands_out_the_guard_even_after_the_mutex_is_poisoned() {
+        let mutex = Mutex::new(1_u8);
+        assert_eq!(
+            *lock(&mutex),
+            1,
+            "an unpoisoned lock behaves like Mutex::lock"
+        );
+
+        let poisoned = Mutex::new(7_u8);
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = poisoned.lock().expect("the mutex starts clean");
+            panic!("poison the mutex on purpose");
+        }));
+        assert!(panicked.is_err(), "the guard was dropped during a panic");
+        assert!(poisoned.is_poisoned());
+        assert_eq!(
+            *lock(&poisoned),
+            7,
+            "a poisoned lock still hands out the last value rather than panicking"
+        );
+    }
 }

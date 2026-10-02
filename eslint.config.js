@@ -82,4 +82,21 @@ export default defineConfigWithVueTs(
       '@typescript-eslint/restrict-template-expressions': ['error', { allowNumber: true }],
     },
   },
+  {
+    name: 'localme/tests',
+    files: ['**/*.spec.ts', 'src/test/**/*.ts'],
+    rules: {
+      // `typeof import('@/ipc')` is the only way to type vitest's `importOriginal()` result: the
+      // module is mocked in place, so a value import of it cannot exist in the file.
+      '@typescript-eslint/consistent-type-imports': [
+        'error',
+        { prefer: 'type-imports', disallowTypeAnnotations: false },
+      ],
+      // A test that has just asserted a value is present takes it with `!`; the assertion on the
+      // line above is the guard, and a second one would be the ceremony the lint rule prevents.
+      '@typescript-eslint/no-non-null-assertion': 'off',
+      // A spec file defines two or three tiny stub components; the rule is about real SFCs.
+      'vue/one-component-per-file': 'off',
+    },
+  },
 );

@@ -40,6 +40,11 @@ jobs:
       - name: Unit tests
         run: npm run test
 
+      # The threshold in `vite.config.ts` is what makes the number a gate rather than a report;
+      # the lcov file the step leaves behind is what a reviewer reads.
+      - name: Unit tests with coverage
+        run: npm run test:coverage
+
       - name: Build
         run: npm run build
 
@@ -87,6 +92,36 @@ jobs:
         working-directory: src-tauri
         continue-on-error: true
 
+  # Rust coverage on one platform only: the number is a property of the code, and the three
+  # platforms already run the whole suite. `--fail-under-lines` makes it a gate rather than a
+  # report, the same shape as the front end's coverage step.
+  coverage:
+    name: Rust coverage
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup
+        uses: ./.github/actions/setup
+        with:
+          node: 'false'
+          frontend: 'false'
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Install llvm-tools
+        run: rustup component add llvm-tools-preview
+
+      - name: Measure
+        # Library targets only: the inline `#[cfg(test)]` modules and the unit suite are
+        # deterministic, while the two-instance loopback suite is timing-sensitive under
+        # instrumentation — and the `core` job already runs it, on three platforms.
+        run: cargo llvm-cov --workspace --lib --fail-under-lines 85
+        working-directory: src-tauri
+
   versions:
     name: Versions
     runs-on: ubuntu-22.04
@@ -109,7 +144,7 @@ jobs:
 
   ci:
     name: CI
-    needs: [frontend, core, versions]
+    needs: [frontend, core, coverage, versions]
     if: always()
     runs-on: ubuntu-22.04
     timeout-minutes: 5
@@ -118,4 +153,5 @@ jobs:
         run: |
           test '${{ needs.frontend.result }}' = success
           test '${{ needs.core.result }}' = success
+          test '${{ needs.coverage.result }}' = success
           test '${{ needs.versions.result }}' = success
