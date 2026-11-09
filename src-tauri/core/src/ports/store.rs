@@ -45,6 +45,9 @@ pub struct StoredPeer {
     pub unread: u32,
     pub notify_muted: bool,
     pub forgotten: bool,
+    pub pinned: bool,
+    /// Position inside the pinned block, ascending; `None` when the row is not pinned.
+    pub pin_rank: Option<i64>,
     pub last_activity_ms: Option<i64>,
     pub last_message: Option<MessagePreview>,
 }
@@ -110,6 +113,20 @@ pub trait Store: Send + Sync + 'static {
         &self,
         device_id: DeviceId,
         muted: bool,
+    ) -> impl Future<Output = Result<(), StorageError>> + Send;
+
+    /// Returns the rank the row received when `pinned` is true, and `None` when it was unpinned.
+    fn set_peer_pinned(
+        &self,
+        device_id: DeviceId,
+        pinned: bool,
+    ) -> impl Future<Output = Result<Option<i64>, StorageError>> + Send;
+
+    /// Rewrites the positions of the pinned rows to the order given. The caller has already
+    /// checked that the list is exactly the pinned set. Unknown or unpinned ids are ignored.
+    fn reorder_pinned(
+        &self,
+        device_ids: Vec<DeviceId>,
     ) -> impl Future<Output = Result<(), StorageError>> + Send;
 
     fn touch_peer_seen(

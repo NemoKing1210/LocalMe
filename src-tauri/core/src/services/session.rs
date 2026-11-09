@@ -1807,6 +1807,8 @@ mod tests {
         set_attachment_digest: bool,
         touch_peer_seen: bool,
         set_peer_muted: bool,
+        set_peer_pinned: bool,
+        reorder_pinned: bool,
         meta_set: bool,
         mark_delivered: bool,
         history_page: bool,
@@ -1903,6 +1905,8 @@ mod tests {
                 unread: 0,
                 notify_muted: false,
                 forgotten: false,
+                pinned: false,
+                pin_rank: None,
                 last_activity_ms: None,
                 last_message: None,
             });
@@ -1973,6 +1977,48 @@ mod tests {
             Ok(())
         }
 
+        async fn set_peer_pinned(
+            &self,
+            device_id: DeviceId,
+            pinned: bool,
+        ) -> Result<Option<i64>, StorageError> {
+            fail_guard!(self.lock().fail.set_peer_pinned);
+            let mut guard = self.lock();
+            if !pinned {
+                if let Some(entry) = guard.peers.get_mut(&device_id) {
+                    entry.pinned = false;
+                    entry.pin_rank = None;
+                }
+                return Ok(None);
+            }
+
+            let min = guard
+                .peers
+                .values()
+                .filter(|peer| peer.pinned && !peer.forgotten)
+                .filter_map(|peer| peer.pin_rank)
+                .min();
+            let rank = min.map_or(0, |value| value.saturating_sub(1));
+            if let Some(entry) = guard.peers.get_mut(&device_id) {
+                entry.pinned = true;
+                entry.pin_rank = Some(rank);
+            }
+            Ok(Some(rank))
+        }
+
+        async fn reorder_pinned(&self, device_ids: Vec<DeviceId>) -> Result<(), StorageError> {
+            fail_guard!(self.lock().fail.reorder_pinned);
+            let mut guard = self.lock();
+            for (rank, device_id) in device_ids.iter().enumerate() {
+                if let Some(entry) = guard.peers.get_mut(device_id)
+                    && entry.pinned
+                {
+                    entry.pin_rank = Some(i64::try_from(rank).unwrap_or(i64::MAX));
+                }
+            }
+            Ok(())
+        }
+
         async fn touch_peer_seen(
             &self,
             device_id: DeviceId,
@@ -2010,6 +2056,8 @@ mod tests {
                 let mut g = self.lock();
                 if let Some(entry) = g.peers.get_mut(&device_id) {
                     entry.forgotten = true;
+                    entry.pinned = false;
+                    entry.pin_rank = None;
                 }
                 if delete_history {
                     g.messages.retain(|m| m.peer != device_id);
@@ -5087,6 +5135,8 @@ mod tests {
                 unread: 0,
                 notify_muted: false,
                 forgotten: false,
+                pinned: false,
+                pin_rank: None,
                 last_activity_ms: None,
                 last_message: None,
             }

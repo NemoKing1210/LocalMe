@@ -75,6 +75,15 @@ enum Request {
         muted: bool,
         reply: Reply<()>,
     },
+    SetPeerPinned {
+        device_id: DeviceId,
+        pinned: bool,
+        reply: Reply<Option<i64>>,
+    },
+    ReorderPinned {
+        device_ids: Vec<DeviceId>,
+        reply: Reply<()>,
+    },
     TouchPeerSeen {
         device_id: DeviceId,
         seen_at_ms: i64,
@@ -324,6 +333,16 @@ fn dispatch(conn: &mut Connection, files: &Path, request: Request) {
         } => {
             let _ = reply.send(set_peer_muted(conn, device_id, muted));
         }
+        Request::SetPeerPinned {
+            device_id,
+            pinned,
+            reply,
+        } => {
+            let _ = reply.send(set_peer_pinned(conn, device_id, pinned));
+        }
+        Request::ReorderPinned { device_ids, reply } => {
+            let _ = reply.send(reorder_pinned(conn, &device_ids));
+        }
         Request::TouchPeerSeen {
             device_id,
             seen_at_ms,
@@ -458,7 +477,8 @@ fn peer_columns() -> String {
          (SELECT m.body FROM messages m WHERE m.peer_id = p.device_id \
            ORDER BY m.sent_at_ms DESC, m.id DESC LIMIT 1), \
          (SELECT m.outgoing FROM messages m WHERE m.peer_id = p.device_id \
-           ORDER BY m.sent_at_ms DESC, m.id DESC LIMIT 1)"
+           ORDER BY m.sent_at_ms DESC, m.id DESC LIMIT 1), \
+         p.pinned, p.pin_rank"
     )
 }
 
@@ -475,6 +495,8 @@ struct PeerRow {
     last_activity_ms: Option<i64>,
     last_body: Option<String>,
     last_outgoing: Option<i64>,
+    pinned: i64,
+    pin_rank: Option<i64>,
 }
 
 impl PeerRow {
@@ -492,6 +514,8 @@ impl PeerRow {
             last_activity_ms: row.get(9)?,
             last_body: row.get(10)?,
             last_outgoing: row.get(11)?,
+            pinned: row.get(12)?,
+            pin_rank: row.get(13)?,
         })
     }
 
@@ -520,6 +544,8 @@ impl PeerRow {
             unread: to_u32(self.unread)?,
             notify_muted: self.notify_muted != 0,
             forgotten: self.forgotten != 0,
+            pinned: self.pinned != 0,
+            pin_rank: self.pin_rank,
             last_activity_ms: self.last_activity_ms,
             last_message,
         })
@@ -861,6 +887,50 @@ fn set_peer_muted(conn: &Connection, device_id: DeviceId, muted: bool) -> Result
     Ok(())
 }
 
+fn set_peer_pinned(
+    conn: &Connection,
+    device_id: DeviceId,
+    pinned: bool,
+) -> Result<Option<i64>, StorageError> {
+    if !pinned {
+        conn.execute(
+            "UPDATE peers SET pinned = 0, pin_rank = NULL WHERE device_id = ?1",
+            params![device_id.to_string()],
+        )
+        .map_err(sqlite_error)?;
+        return Ok(None);
+    }
+
+    let min: Option<i64> = conn
+        .query_row(
+            "SELECT MIN(pin_rank) FROM peers WHERE pinned = 1 AND forgotten = 0",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(sqlite_error)?;
+    let rank = min.map_or(0, |value| value.saturating_sub(1));
+    conn.execute(
+        "UPDATE peers SET pinned = 1, pin_rank = ?2 WHERE device_id = ?1",
+        params![device_id.to_string(), rank],
+    )
+    .map_err(sqlite_error)?;
+    Ok(Some(rank))
+}
+
+fn reorder_pinned(conn: &mut Connection, device_ids: &[DeviceId]) -> Result<(), StorageError> {
+    let tx = conn.transaction().map_err(sqlite_error)?;
+    for (rank, device_id) in device_ids.iter().enumerate() {
+        let rank = i64::try_from(rank).unwrap_or(i64::MAX);
+        tx.execute(
+            "UPDATE peers SET pin_rank = ?2 WHERE device_id = ?1 AND pinned = 1",
+            params![device_id.to_string(), rank],
+        )
+        .map_err(sqlite_error)?;
+    }
+    tx.commit().map_err(sqlite_error)?;
+    Ok(())
+}
+
 fn touch_peer_seen(
     conn: &Connection,
     device_id: DeviceId,
@@ -911,7 +981,8 @@ fn forget_peer(
     // The row is always flagged, never deleted: the settings screen lists forgotten devices
     // so the user can see and restore them; `delete_history` only drops the conversation.
     tx.execute(
-        "UPDATE peers SET forgotten = 1, unread = 0 WHERE device_id = ?1",
+        "UPDATE peers SET forgotten = 1, unread = 0, pinned = 0, pin_rank = NULL \
+         WHERE device_id = ?1",
         params![device_id.to_string()],
     )
     .map_err(sqlite_error)?;
@@ -1347,6 +1418,24 @@ impl Store for SqliteStore {
             reply,
         })
         .await
+    }
+
+    async fn set_peer_pinned(
+        &self,
+        device_id: DeviceId,
+        pinned: bool,
+    ) -> Result<Option<i64>, StorageError> {
+        self.call(|reply| Request::SetPeerPinned {
+            device_id,
+            pinned,
+            reply,
+        })
+        .await
+    }
+
+    async fn reorder_pinned(&self, device_ids: Vec<DeviceId>) -> Result<(), StorageError> {
+        self.call(|reply| Request::ReorderPinned { device_ids, reply })
+            .await
     }
 
     async fn touch_peer_seen(
@@ -2764,6 +2853,70 @@ mod tests {
                 .last_seen_ms,
             Some(5_000)
         );
+    }
+
+    #[tokio::test]
+    async fn pinning_a_peer_places_it_on_top_and_reordering_rewrites_the_ranks() {
+        let (_dir, store) = open_store();
+        let ann = profile(61, "Ann");
+        let ben = profile(62, "Ben");
+        let cid = profile(63, "Cid");
+        for peer in [&ann, &ben, &cid] {
+            store.upsert_peer_seen(peer, None, Some(1)).await.unwrap();
+        }
+
+        assert_eq!(
+            store.set_peer_pinned(ann.device_id, true).await.unwrap(),
+            Some(0)
+        );
+        assert_eq!(
+            store.set_peer_pinned(ben.device_id, true).await.unwrap(),
+            Some(-1)
+        );
+        assert_eq!(
+            store.set_peer_pinned(cid.device_id, true).await.unwrap(),
+            Some(-2)
+        );
+
+        store
+            .reorder_pinned(vec![ann.device_id, cid.device_id, ben.device_id])
+            .await
+            .unwrap();
+
+        let stored = store.peers().await.unwrap();
+        let rank = |id| {
+            stored
+                .iter()
+                .find(|peer| peer.profile.device_id == id)
+                .unwrap()
+                .pin_rank
+        };
+        assert_eq!(rank(ann.device_id), Some(0));
+        assert_eq!(rank(cid.device_id), Some(1));
+        assert_eq!(rank(ben.device_id), Some(2));
+
+        assert_eq!(
+            store.set_peer_pinned(ben.device_id, false).await.unwrap(),
+            None
+        );
+        let ben_row = store.peer(ben.device_id).await.unwrap().unwrap();
+        assert!(!ben_row.pinned);
+        assert_eq!(ben_row.pin_rank, None);
+    }
+
+    #[tokio::test]
+    async fn forgetting_a_pinned_peer_clears_the_pin() {
+        let (_dir, store) = open_store();
+        let peer = profile(64, "Dana");
+        store.upsert_peer_seen(&peer, None, Some(1)).await.unwrap();
+        store.set_peer_pinned(peer.device_id, true).await.unwrap();
+
+        store.forget_peer(peer.device_id, false).await.unwrap();
+
+        let row = store.peer(peer.device_id).await.unwrap().unwrap();
+        assert!(row.forgotten);
+        assert!(!row.pinned);
+        assert_eq!(row.pin_rank, None);
     }
 
     #[tokio::test]

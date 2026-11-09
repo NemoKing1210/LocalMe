@@ -7,7 +7,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use super::sqlite_error;
 use crate::error::StorageError;
 
-pub(super) const SCHEMA_VERSION: u32 = 4;
+pub(super) const SCHEMA_VERSION: u32 = 5;
 
 pub(super) const MIGRATION_1: &str = "
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -105,6 +105,15 @@ pub(super) const MIGRATION_4: &str = "
 CREATE INDEX attachments_peer ON attachments(peer_id);
 ";
 
+/// Pin state and the manual order of the pinned block.
+///
+/// `pin_rank` is `NULL` for an unpinned row; among pinned rows it is the position, ascending.
+pub(super) const MIGRATION_5: &str = "
+ALTER TABLE peers ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE peers ADD COLUMN pin_rank INTEGER;
+CREATE INDEX peers_pinned ON peers(pinned, pin_rank) WHERE pinned = 1;
+";
+
 pub(super) fn migrate(conn: &mut Connection) -> Result<(), StorageError> {
     let mut version = current_version(conn)?;
     while version < SCHEMA_VERSION {
@@ -155,6 +164,7 @@ fn apply_migration(conn: &mut Connection, version: u32) -> Result<(), StorageErr
         2 => MIGRATION_2,
         3 => MIGRATION_3,
         4 => MIGRATION_4,
+        5 => MIGRATION_5,
         other => {
             return Err(StorageError::Migration {
                 version: other,
@@ -266,8 +276,26 @@ mod tests {
         assert_eq!(current_version(&conn).unwrap(), 0);
         migrate(&mut conn).unwrap();
         assert_eq!(current_version(&conn).unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 4, "the build under test");
+        assert_eq!(SCHEMA_VERSION, 5, "the build under test");
         assert!(table_exists(&conn, "attachments"));
+    }
+
+    #[test]
+    fn migration_five_adds_the_pin_columns() {
+        let (_dir, mut conn) = connection();
+        migrate(&mut conn).unwrap();
+
+        let columns: Vec<String> = conn
+            .prepare("SELECT name FROM pragma_table_info('peers')")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+
+        assert!(columns.contains(&"pinned".to_owned()));
+        assert!(columns.contains(&"pin_rank".to_owned()));
+        assert_eq!(SCHEMA_VERSION, 5, "the build under test");
     }
 
     #[test]
