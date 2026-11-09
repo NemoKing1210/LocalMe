@@ -101,6 +101,11 @@ pub enum SessionCommand {
         id: AttachmentId,
         reply: oneshot::Sender<()>,
     },
+    /// Asks the sender for a file that was announced but not transferred.
+    DownloadAttachment {
+        id: AttachmentId,
+        reply: oneshot::Sender<()>,
+    },
     History {
         peer: DeviceId,
         before: Option<HistoryCursor>,
@@ -236,6 +241,11 @@ impl SessionHandle {
 
     pub async fn retry_attachment(&self, id: AttachmentId) -> Result<(), CoreError> {
         self.request(|reply| SessionCommand::RetryAttachment { id, reply })
+            .await
+    }
+
+    pub async fn download_attachment(&self, id: AttachmentId) -> Result<(), CoreError> {
+        self.request(|reply| SessionCommand::DownloadAttachment { id, reply })
             .await
     }
 
@@ -673,6 +683,11 @@ impl<C: Clock, S: Store> Session<C, S> {
 
             SessionCommand::RetryAttachment { id, reply } => {
                 self.retry_attachment(id).await;
+                let _ = reply.send(());
+            }
+
+            SessionCommand::DownloadAttachment { id, reply } => {
+                self.download_attachment(id).await;
                 let _ = reply.send(());
             }
 
@@ -1182,6 +1197,8 @@ impl<C: Clock, S: Store> Session<C, S> {
         let _ = self.pump_outbox(peer).await;
         // Files that were interrupted pick up where the recipient's own file ends.
         self.resume_attachments(peer).await;
+        // Files that were asked for but never started have to be asked for again.
+        self.renew_download_requests(peer).await;
     }
 
     async fn on_frame(&mut self, peer: DeviceId, frame: Frame) {
@@ -4072,6 +4089,172 @@ mod tests {
         ));
         h.session.retry_attachment(id).await;
         assert_eq!(h.store.state_of(id), Some(AttachmentState::Complete));
+    }
+
+    #[tokio::test]
+    async fn download_attachment_requests_an_offered_file() {
+        let mut h = harness();
+        let peer = did(2);
+        h.add_peer(peer, "bob");
+        let mut rx = h.give_link(peer);
+        let id = AttachmentId::generate();
+        h.store.seed_attachment(attachment_row(
+            id,
+            MessageId::generate(),
+            peer,
+            Direction::Incoming,
+            AttachmentState::Offered,
+            4,
+            None,
+        ));
+
+        h.session.download_attachment(id).await;
+
+        assert_eq!(h.store.state_of(id), Some(AttachmentState::Receiving));
+        assert!(
+            sent_frames(&drain_links(&mut rx))
+                .iter()
+                .any(|f| matches!(f, Frame::FileRequest { attachment } if *attachment == id))
+        );
+    }
+
+    #[tokio::test]
+    async fn download_attachment_asks_again_when_no_bytes_have_arrived() {
+        let mut h = harness();
+        let peer = did(2);
+        h.add_peer(peer, "bob");
+        let mut rx = h.give_link(peer);
+        let id = AttachmentId::generate();
+        h.store.seed_attachment(attachment_row(
+            id,
+            MessageId::generate(),
+            peer,
+            Direction::Incoming,
+            AttachmentState::Receiving,
+            4,
+            None,
+        ));
+
+        h.session.download_attachment(id).await;
+
+        assert!(
+            sent_frames(&drain_links(&mut rx))
+                .iter()
+                .any(|f| matches!(f, Frame::FileRequest { attachment } if *attachment == id))
+        );
+    }
+
+    #[tokio::test]
+    async fn download_attachment_leaves_a_running_transfer_alone() {
+        let mut h = harness();
+        let peer = did(2);
+        h.add_peer(peer, "bob");
+        let mut rx = h.give_link(peer);
+        let id = AttachmentId::generate();
+        let mut row = attachment_row(
+            id,
+            MessageId::generate(),
+            peer,
+            Direction::Incoming,
+            AttachmentState::Receiving,
+            4,
+            None,
+        );
+        row.transferred = 100;
+        h.store.seed_attachment(row);
+
+        h.session.download_attachment(id).await;
+
+        assert!(
+            !sent_frames(&drain_links(&mut rx))
+                .iter()
+                .any(|f| matches!(f, Frame::FileRequest { .. }))
+        );
+        assert_eq!(h.store.state_of(id), Some(AttachmentState::Receiving));
+    }
+
+    #[tokio::test]
+    async fn download_attachment_ignores_outgoing_complete_and_unknown_rows() {
+        let mut h = harness();
+        let peer = did(2);
+        h.add_peer(peer, "bob");
+        let mut rx = h.give_link(peer);
+
+        let outgoing = AttachmentId::generate();
+        h.store.seed_attachment(attachment_row(
+            outgoing,
+            MessageId::generate(),
+            peer,
+            Direction::Outgoing,
+            AttachmentState::Offered,
+            4,
+            Some("src.bin".to_owned()),
+        ));
+        h.session.download_attachment(outgoing).await;
+        assert_eq!(h.store.state_of(outgoing), Some(AttachmentState::Offered));
+
+        let complete = AttachmentId::generate();
+        h.store.seed_attachment(attachment_row(
+            complete,
+            MessageId::generate(),
+            peer,
+            Direction::Incoming,
+            AttachmentState::Complete,
+            4,
+            Some("dst.bin".to_owned()),
+        ));
+        h.session.download_attachment(complete).await;
+        assert_eq!(h.store.state_of(complete), Some(AttachmentState::Complete));
+
+        h.session
+            .download_attachment(AttachmentId::generate())
+            .await;
+
+        assert!(
+            !sent_frames(&drain_links(&mut rx))
+                .iter()
+                .any(|f| matches!(f, Frame::FileRequest { .. }))
+        );
+    }
+
+    #[tokio::test]
+    async fn renew_download_requests_asks_for_zero_byte_incoming_rows() {
+        let mut h = harness();
+        let peer = did(2);
+        h.add_peer(peer, "bob");
+        let mut rx = h.give_link(peer);
+        let awaiting = AttachmentId::generate();
+        h.store.seed_attachment(attachment_row(
+            awaiting,
+            MessageId::generate(),
+            peer,
+            Direction::Incoming,
+            AttachmentState::Receiving,
+            4,
+            None,
+        ));
+        let mut partway = attachment_row(
+            AttachmentId::generate(),
+            MessageId::generate(),
+            peer,
+            Direction::Incoming,
+            AttachmentState::Receiving,
+            4,
+            None,
+        );
+        partway.transferred = 100;
+        h.store.seed_attachment(partway);
+
+        h.session.renew_download_requests(peer).await;
+
+        let requests: Vec<AttachmentId> = sent_frames(&drain_links(&mut rx))
+            .into_iter()
+            .filter_map(|frame| match frame {
+                Frame::FileRequest { attachment } => Some(attachment),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(requests, vec![awaiting]);
     }
 
     #[tokio::test]

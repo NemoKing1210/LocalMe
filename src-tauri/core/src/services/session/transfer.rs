@@ -452,24 +452,7 @@ impl<C: Clock, S: Store> Session<C, S> {
         let peer = row.peer;
 
         if row.direction == Direction::Incoming {
-            // Ask the sender to start again. Whatever was on disk is dropped first, because the
-            // offset the sender resumes from is measured against a file that is now empty.
-            if let Some(transfer) = self
-                .peers
-                .get_mut(&peer)
-                .and_then(|entry| entry.incoming.remove(&id))
-            {
-                Self::discard_transfer(transfer).await;
-            }
-            self.persist_attachment_state(id, AttachmentState::Receiving)
-                .await;
-            self.persist_attachment_progress(id, 0).await;
-            self.emit_attachment_row(peer, id).await;
-            if let Some(link) = self.peers.get(&peer).and_then(|entry| entry.link.clone())
-                && let Err(error) = link.try_send(Frame::FileRequest { attachment: id })
-            {
-                tracing::debug!(%peer, %id, %error, "failed to ask for the file again");
-            }
+            self.request_incoming(peer, id).await;
             return;
         }
 
@@ -511,7 +494,64 @@ impl<C: Clock, S: Store> Session<C, S> {
         self.maybe_start_transfer(peer).await;
     }
 
-    /// The result of a whole-file read that could not be done on the actor.
+    /// Asks the sender for an incoming file from the beginning.
+    ///
+    /// Anything already on disk is dropped first, because the offset the sender resumes from is
+    /// measured against a file that is now empty.
+    pub(super) async fn request_incoming(&mut self, peer: DeviceId, id: AttachmentId) {
+        if let Some(transfer) = self
+            .peers
+            .get_mut(&peer)
+            .and_then(|entry| entry.incoming.remove(&id))
+        {
+            Self::discard_transfer(transfer).await;
+        }
+        self.persist_attachment_state(id, AttachmentState::Receiving)
+            .await;
+        self.persist_attachment_progress(id, 0).await;
+        self.emit_attachment_row(peer, id).await;
+        if let Some(link) = self.peers.get(&peer).and_then(|entry| entry.link.clone())
+            && let Err(error) = link.try_send(Frame::FileRequest { attachment: id })
+        {
+            tracing::debug!(%peer, %id, %error, "failed to ask for the file");
+        }
+    }
+
+    /// "Download": asks the sender for a file the recipient has not fetched yet.
+    ///
+    /// A file that is already arriving is left alone — asking again would throw away the bytes
+    /// on disk — and a file that is here already is not requested at all.
+    pub(super) async fn download_attachment(&mut self, id: AttachmentId) {
+        let Ok(Some(row)) = self.store.attachment(id).await else {
+            return;
+        };
+        if row.direction != Direction::Incoming {
+            return;
+        }
+        match row.state {
+            AttachmentState::Complete => return,
+            AttachmentState::Receiving if row.transferred > 0 => return,
+            _ => {}
+        }
+        self.request_incoming(row.peer, id).await;
+    }
+
+    /// Repeats the requests a reconnect interrupted: rows that were asked for but never received
+    /// a byte. A transfer with bytes on disk resumes through its part file instead.
+    pub(super) async fn renew_download_requests(&mut self, peer: DeviceId) {
+        let Ok(ids) = self.store.incoming_attachments_without_bytes(peer).await else {
+            tracing::warn!(%peer, "failed to read the attachments awaiting a download");
+            return;
+        };
+        let Some(link) = self.peers.get(&peer).and_then(|entry| entry.link.clone()) else {
+            return;
+        };
+        for id in ids {
+            if let Err(error) = link.try_send(Frame::FileRequest { attachment: id }) {
+                tracing::debug!(%peer, %id, %error, "failed to repeat a download request");
+            }
+        }
+    }
     pub(super) async fn on_prepared(&mut self, prepared: Prep) {
         match prepared {
             Prep::SenderDigest {
