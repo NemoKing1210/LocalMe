@@ -21,7 +21,7 @@ Typical user loop:
 4. History, presence, unread counts and settings persist across restarts.
 
 UI languages: English, Russian, Spanish, German, French, Portuguese and Chinese. Identifier:
-`dev.localme.desktop`. Version: `0.12.0`. Changelog: [CHANGELOG.md](CHANGELOG.md). Design notes:
+`dev.localme.desktop`. Version: `0.13.0`. Changelog: [CHANGELOG.md](CHANGELOG.md). Design notes:
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Stack (accurate)

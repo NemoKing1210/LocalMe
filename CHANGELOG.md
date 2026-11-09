@@ -5,6 +5,17 @@ All notable changes to LocalMe are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.0] - 2026-11-09
+
+### Added
+
+- **Pinned conversations.** A conversation can be pinned from its row menu, and every pinned
+  conversation stays above the rest of the list — above unread and online ones — with a pin
+  glyph beside its name. Pinned conversations can be moved among themselves, by dragging a row
+  or with `Alt+↑` / `Alt+↓` while it has focus, and a newly pinned one arrives at the top of
+  the block. The order is kept across restarts; unpinning returns a conversation to the usual
+  unread-first ordering.
+
 ## [0.12.0] - 2026-11-09
 
 ### Added
