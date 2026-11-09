@@ -195,6 +195,37 @@ pub async fn set_peer_muted(
 
 /// # Errors
 ///
+/// [`ApiError::InvalidInput`] for a malformed identifier.
+#[tauri::command]
+pub async fn set_peer_pinned(
+    state: State<'_, Arc<AppState>>,
+    peer_id: String,
+    pinned: bool,
+) -> Result<(), ApiError> {
+    let peer = args::device_id(&peer_id)?;
+    Ok(state.session.set_pinned(peer, pinned).await?)
+}
+
+/// # Errors
+///
+/// [`ApiError::InvalidInput`] for a malformed identifier, or when the list is not the pinned set.
+#[tauri::command]
+pub async fn reorder_pinned_peers(
+    state: State<'_, Arc<AppState>>,
+    peer_ids: Vec<String>,
+) -> Result<(), ApiError> {
+    let ids = peer_ids
+        .iter()
+        .map(|raw| {
+            raw.parse::<localme_core::domain::ids::DeviceId>()
+                .map_err(|error| ApiError::invalid_input("peerIds", error))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(state.session.reorder_pinned(ids).await?)
+}
+
+/// # Errors
+///
 /// [`ApiError::ShuttingDown`] if the core has stopped.
 #[tauri::command]
 pub async fn known_devices(state: State<'_, Arc<AppState>>) -> Result<Vec<KnownDevice>, ApiError> {

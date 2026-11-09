@@ -180,6 +180,16 @@ export function setPeerMuted(peerId: DeviceId, muted: boolean): Promise<void> {
   return call('set_peer_muted', { peerId, muted });
 }
 
+/** Pins a conversation above the rest of the list, or releases it back into the sorted block. */
+export function setPeerPinned(peerId: DeviceId, pinned: boolean): Promise<void> {
+  return call('set_peer_pinned', { peerId, pinned });
+}
+
+/** Persists the manual order of the pinned block. The list must contain every pinned id once. */
+export function reorderPinnedPeers(peerIds: readonly DeviceId[]): Promise<void> {
+  return call('reorder_pinned_peers', { peerIds: [...peerIds] });
+}
+
 export function knownDevices(): Promise<KnownDevice[]> {
   return call('known_devices');
 }

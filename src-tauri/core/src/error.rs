@@ -127,6 +127,8 @@ pub enum CoreError {
     Transport(#[from] TransportError),
     #[error("unknown device {0}")]
     UnknownPeer(String),
+    #[error("the pinned order is not a permutation of the pinned conversations")]
+    InvalidPinnedOrder,
     #[error("the application is shutting down")]
     ShuttingDown,
     #[error("background task failed: {0}")]

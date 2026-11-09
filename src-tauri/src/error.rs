@@ -82,6 +82,11 @@ impl From<CoreError> for ApiError {
                 message: source.to_string(),
             },
             CoreError::UnknownPeer(device_id) => Self::UnknownPeer { device_id },
+            CoreError::InvalidPinnedOrder => Self::InvalidInput {
+                field: "peerIds".to_owned(),
+                message: "the pinned order is not a permutation of the pinned conversations"
+                    .to_owned(),
+            },
             CoreError::ShuttingDown => Self::ShuttingDown,
             CoreError::Task(message) => Self::Internal { message },
         }
@@ -104,6 +109,15 @@ mod tests {
     fn unknown_peer_failures_keep_the_identifier() {
         let error: ApiError = CoreError::UnknownPeer("abc".to_owned()).into();
         assert!(matches!(error, ApiError::UnknownPeer { device_id } if device_id == "abc"));
+    }
+
+    #[test]
+    fn an_invalid_pinned_order_is_an_input_error() {
+        let error: ApiError = CoreError::InvalidPinnedOrder.into();
+        assert!(matches!(
+            error,
+            ApiError::InvalidInput { ref field, .. } if field == "peerIds"
+        ));
     }
 
     #[test]

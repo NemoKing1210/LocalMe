@@ -56,6 +56,8 @@ macro_rules! ipc_handler {
             $crate::commands::forget_peer,
             $crate::commands::restore_peer,
             $crate::commands::set_peer_muted,
+            $crate::commands::set_peer_pinned,
+            $crate::commands::reorder_pinned_peers,
             $crate::commands::known_devices,
             $crate::commands::clear_history,
             $crate::commands::own_profile,

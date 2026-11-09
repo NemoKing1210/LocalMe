@@ -125,6 +125,15 @@ pub enum SessionCommand {
         muted: bool,
         reply: oneshot::Sender<()>,
     },
+    SetPinned {
+        peer: DeviceId,
+        pinned: bool,
+        reply: oneshot::Sender<()>,
+    },
+    ReorderPinned {
+        peer_ids: Vec<DeviceId>,
+        reply: oneshot::Sender<Result<(), CoreError>>,
+    },
     KnownDevices {
         reply: oneshot::Sender<Vec<KnownDevice>>,
     },
@@ -267,6 +276,24 @@ impl SessionHandle {
     pub async fn set_muted(&self, peer: DeviceId, muted: bool) -> Result<(), CoreError> {
         self.request(|reply| SessionCommand::SetMuted { peer, muted, reply })
             .await
+    }
+
+    pub async fn set_pinned(&self, peer: DeviceId, pinned: bool) -> Result<(), CoreError> {
+        self.request(|reply| SessionCommand::SetPinned {
+            peer,
+            pinned,
+            reply,
+        })
+        .await
+    }
+
+    pub async fn reorder_pinned(&self, peer_ids: Vec<DeviceId>) -> Result<(), CoreError> {
+        let (reply, receiver) = oneshot::channel();
+        self.commands
+            .send(SessionCommand::ReorderPinned { peer_ids, reply })
+            .await
+            .map_err(|_| CoreError::ShuttingDown)?;
+        receiver.await.map_err(|_| CoreError::ShuttingDown)?
     }
 
     pub async fn known_devices(&self) -> Result<Vec<KnownDevice>, CoreError> {
@@ -728,6 +755,28 @@ impl<C: Clock, S: Store> Session<C, S> {
                 let _ = reply.send(());
             }
 
+            SessionCommand::SetPinned {
+                peer,
+                pinned,
+                reply,
+            } => {
+                match self.store.set_peer_pinned(peer, pinned).await {
+                    Ok(rank) => {
+                        if let Some(entry) = self.peers.get_mut(&peer) {
+                            entry.stored.pinned = pinned;
+                            entry.stored.pin_rank = rank;
+                            self.emit_peers();
+                        }
+                    }
+                    Err(error) => tracing::warn!(%error, "failed to store the pin preference"),
+                }
+                let _ = reply.send(());
+            }
+
+            SessionCommand::ReorderPinned { peer_ids, reply } => {
+                let _ = reply.send(self.reorder_pinned(peer_ids).await);
+            }
+
             SessionCommand::KnownDevices { reply } => {
                 let devices = match self.store.known_devices().await {
                     Ok(devices) => devices,
@@ -1008,6 +1057,32 @@ impl<C: Clock, S: Store> Session<C, S> {
         entry.stored.forgotten = false;
         self.maybe_dial(peer);
         self.emit_peers();
+    }
+
+    async fn reorder_pinned(&mut self, peer_ids: Vec<DeviceId>) -> Result<(), CoreError> {
+        let pinned: Vec<DeviceId> = self
+            .peers
+            .values()
+            .filter(|entry| entry.stored.is_listed() && entry.stored.pinned)
+            .map(|entry| entry.profile.device_id)
+            .collect();
+        let requested: std::collections::HashSet<DeviceId> = peer_ids.iter().copied().collect();
+
+        if requested.len() != peer_ids.len()
+            || requested.len() != pinned.len()
+            || !pinned.iter().all(|id| requested.contains(id))
+        {
+            return Err(CoreError::InvalidPinnedOrder);
+        }
+
+        self.store.reorder_pinned(peer_ids.clone()).await?;
+        for (rank, id) in peer_ids.iter().enumerate() {
+            if let Some(entry) = self.peers.get_mut(id) {
+                entry.stored.pin_rank = Some(i64::try_from(rank).unwrap_or(i64::MAX));
+            }
+        }
+        self.emit_peers();
+        Ok(())
     }
 
     async fn handle_transport(&mut self, event: TransportEvent) {
@@ -3073,6 +3148,104 @@ mod tests {
             .await;
         reply.await.unwrap();
         assert!(!h.session.peers[&did(2)].stored.notify_muted);
+    }
+
+    #[tokio::test]
+    async fn command_set_pinned_puts_the_row_on_top_and_emits_peers() {
+        let mut h = harness();
+        h.add_peer(did(2), "bob");
+        h.add_peer(did(3), "ann");
+        let _ = h.events();
+
+        let (tx, reply) = oneshot::channel();
+        h.session
+            .handle_command(SessionCommand::SetPinned {
+                peer: did(2),
+                pinned: true,
+                reply: tx,
+            })
+            .await;
+        reply.await.unwrap();
+
+        let views = h.session.arranged_peers();
+        assert_eq!(views.first().unwrap().device_id, did(2));
+        assert!(views.first().unwrap().pinned);
+        assert_eq!(views.first().unwrap().pin_rank, Some(0));
+        assert!(
+            h.events()
+                .iter()
+                .any(|event| matches!(event, CoreEvent::Peers { .. }))
+        );
+    }
+
+    #[tokio::test]
+    async fn command_reorder_pinned_rewrites_the_order_and_rejects_a_non_permutation() {
+        let mut h = harness();
+        for id in [2, 3, 4] {
+            h.add_peer(did(id), "peer");
+            let (tx, reply) = oneshot::channel();
+            h.session
+                .handle_command(SessionCommand::SetPinned {
+                    peer: did(id),
+                    pinned: true,
+                    reply: tx,
+                })
+                .await;
+            reply.await.unwrap();
+        }
+
+        let (tx, reply) = oneshot::channel();
+        h.session
+            .handle_command(SessionCommand::ReorderPinned {
+                peer_ids: vec![did(4), did(2), did(3)],
+                reply: tx,
+            })
+            .await;
+        reply.await.unwrap().unwrap();
+        let order: Vec<DeviceId> = h
+            .session
+            .arranged_peers()
+            .into_iter()
+            .take(3)
+            .map(|peer| peer.device_id)
+            .collect();
+        assert_eq!(order, vec![did(4), did(2), did(3)]);
+
+        let (tx, reply) = oneshot::channel();
+        h.session
+            .handle_command(SessionCommand::ReorderPinned {
+                peer_ids: vec![did(2), did(3)],
+                reply: tx,
+            })
+            .await;
+        assert!(matches!(
+            reply.await.unwrap(),
+            Err(CoreError::InvalidPinnedOrder)
+        ));
+        assert_eq!(
+            h.session.arranged_peers().first().unwrap().device_id,
+            did(4),
+            "a rejected reorder changes nothing"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_store_failure_leaves_the_row_unpinned() {
+        let mut h = harness();
+        h.add_peer(did(2), "bob");
+        h.store.fail(|fail| fail.set_peer_pinned = true);
+
+        let (tx, reply) = oneshot::channel();
+        h.session
+            .handle_command(SessionCommand::SetPinned {
+                peer: did(2),
+                pinned: true,
+                reply: tx,
+            })
+            .await;
+        reply.await.unwrap();
+
+        assert!(!h.session.peers[&did(2)].stored.pinned);
     }
 
     #[tokio::test]
