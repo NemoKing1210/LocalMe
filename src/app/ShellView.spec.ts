@@ -24,6 +24,10 @@ const SettingsMarker = defineComponent({
   name: 'SettingsMarker',
   template: '<div class="marker marker--settings">settings page</div>',
 });
+const TitleBarMarker = defineComponent({
+  name: 'AppTitleBar',
+  template: '<header class="title-bar-marker" />',
+});
 
 const TWO_PANE = '(min-width: 720px)';
 
@@ -45,14 +49,15 @@ function piniaWithPeer(): Pinia {
   return pinia;
 }
 
-async function mountShell(route = '/'): Promise<VueWrapper> {
+async function mountShell(route = '/', customTitlebar = false): Promise<VueWrapper> {
   return mountView(ShellView, {
     route,
     router: testRouter(),
     pinia: piniaWithPeer(),
+    props: { customTitlebar },
     // The list is not the subject and would drag its virtualiser and per-row components into
-    // every assertion.
-    stubs: { UserListView: true },
+    // every assertion; the bar talks to the window and has its own spec.
+    stubs: { UserListView: true, AppTitleBar: TitleBarMarker },
   });
 }
 
@@ -72,6 +77,30 @@ describe('ShellView', () => {
     const wrapper = await mountShell('/chat/device-a');
 
     expect(wrapper.get('.shell').attributes('data-wide')).toBe('false');
+  });
+
+  it('draws the title bar above the detail page in the two-pane layout', async () => {
+    setMediaMatches(TWO_PANE, true);
+
+    const wrapper = await mountShell('/chat/device-a', true);
+
+    expect(wrapper.find('.shell__detail > .title-bar-marker').exists()).toBe(true);
+  });
+
+  it('leaves the title bar to the application in the one-pane layout', async () => {
+    setMediaMatches(TWO_PANE, false);
+
+    const wrapper = await mountShell('/chat/device-a', true);
+
+    expect(wrapper.find('.title-bar-marker').exists()).toBe(false);
+  });
+
+  it('draws no title bar when the host kept the native frame', async () => {
+    setMediaMatches(TWO_PANE, true);
+
+    const wrapper = await mountShell('/chat/device-a', false);
+
+    expect(wrapper.find('.title-bar-marker').exists()).toBe(false);
   });
 
   it('reacts to the window crossing the breakpoint after mount', async () => {

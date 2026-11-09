@@ -46,59 +46,75 @@ pub fn reveal<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
-/// Paints the native title bar `caption` with `text` glyphs; a no-op on platforms (and pre-22000
-/// Windows builds) whose window manager owns the frame.
-#[cfg(windows)]
-pub fn set_accent<R: Runtime>(app: &AppHandle<R>, caption: [u8; 3], text: [u8; 3]) {
-    use windows::Win32::Graphics::Dwm::{
-        DWMWA_BORDER_COLOR, DWMWA_CAPTION_COLOR, DWMWA_TEXT_COLOR, DwmSetWindowAttribute,
-    };
+/// Whether the native frame is removed and the interface draws its own title bar.
+///
+/// Windows only. It has the pieces a hand-drawn bar needs (a drag region that snaps, resize hit
+/// testing on an undecorated window, and the standard window operations), and its title bar is
+/// the one that otherwise ignores the palette. On Linux an undecorated window cannot be resized
+/// by the window manager, so the native frame stays there; on macOS the traffic lights are part
+/// of the platform's own contract and are left alone.
+#[must_use]
+pub const fn uses_custom_titlebar() -> bool {
+    cfg!(windows)
+}
 
+/// Removes the native frame where [`uses_custom_titlebar`] says the interface owns the bar.
+pub fn apply_frame<R: Runtime>(app: &AppHandle<R>) {
+    if !uses_custom_titlebar() {
+        return;
+    }
     let Some(window) = app.get_webview_window(MAIN_WINDOW) else {
-        tracing::warn!("main window is missing; the title bar keeps the system colour");
+        tracing::warn!("main window is missing; the native frame stays");
         return;
     };
+
+    // Shadow first: the resize hit testing Tauri installs when the decorations go away asks
+    // whether the window has an undecorated shadow, and the window is still decorated here.
+    if let Err(error) = window.set_shadow(true) {
+        tracing::debug!(%error, "the window shadow could not be enabled");
+    }
+    if let Err(error) = window.set_decorations(false) {
+        tracing::warn!(%error, "the native title bar could not be removed");
+        return;
+    }
+
+    round_corners(&window);
+}
+
+/// Windows 11 gives a framed window rounded corners; a borderless one only gets them when asked.
+#[cfg(windows)]
+fn round_corners<R: Runtime>(window: &tauri::WebviewWindow<R>) {
+    use windows::Win32::Graphics::Dwm::{
+        DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND, DwmSetWindowAttribute,
+    };
+
     let hwnd = match window.hwnd() {
         Ok(hwnd) => hwnd,
         Err(error) => {
-            tracing::warn!(%error, "the window has no native handle to paint");
+            tracing::debug!(%error, "the window has no native handle to round");
             return;
         }
     };
-
-    for (attribute, channel_order) in [
-        (DWMWA_CAPTION_COLOR, caption),
-        (DWMWA_BORDER_COLOR, caption),
-        (DWMWA_TEXT_COLOR, text),
-    ] {
-        let color = colorref(channel_order);
-        // SAFETY: `hwnd` is this process's live window handle, reached from the event loop;
-        // `color` is a `u32` that outlives the call, and each attribute above takes exactly one
-        // `COLORREF`, so the pointer and the size the call is told to read match.
-        let result = unsafe {
-            DwmSetWindowAttribute(
-                hwnd,
-                attribute,
-                std::ptr::from_ref(&color).cast(),
-                size_of::<u32>() as u32,
-            )
-        };
-        if let Err(error) = result {
-            // Expected on Windows builds that predate the attribute; the system frame stays.
-            tracing::debug!(%error, attribute = attribute.0, "the frame colour was refused");
-        }
+    let preference = DWMWCP_ROUND;
+    // SAFETY: `hwnd` is this process's live window handle, reached from the event loop; the
+    // attribute takes exactly one `DWM_WINDOW_CORNER_PREFERENCE`, and `preference` outlives the
+    // call, so the pointer and the size the call is told to read match.
+    let result = unsafe {
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_WINDOW_CORNER_PREFERENCE,
+            std::ptr::from_ref(&preference).cast(),
+            size_of_val(&preference) as u32,
+        )
+    };
+    if let Err(error) = result {
+        // Expected on Windows 10, which predates the attribute: the corners stay square.
+        tracing::debug!(%error, "the window corners could not be rounded");
     }
 }
 
-/// A `COLORREF` — `0x00BBGGRR` — from the `#RRGGBB` order the interface speaks.
-#[cfg(windows)]
-fn colorref([red, green, blue]: [u8; 3]) -> u32 {
-    u32::from(red) | (u32::from(green) << 8) | (u32::from(blue) << 16)
-}
-
-/// No hook away from Windows: the window manager draws and colours the frame.
 #[cfg(not(windows))]
-pub fn set_accent<R: Runtime>(_app: &AppHandle<R>, _caption: [u8; 3], _text: [u8; 3]) {}
+fn round_corners<R: Runtime>(_window: &tauri::WebviewWindow<R>) {}
 
 /// Hides the window; the process and its connections stay alive.
 pub fn hide<R: Runtime>(app: &AppHandle<R>) {
@@ -246,12 +262,10 @@ mod tests {
         assert!(!should_stay_in_tray(&state));
     }
 
-    /// `COLORREF` is `0x00BBGGRR`, the reverse of the `#RRGGBB` the interface speaks.
-    #[cfg(all(test, windows))]
     #[test]
-    fn a_colour_is_reordered_into_a_colorref() {
-        assert_eq!(colorref([0x11, 0x22, 0x33]), 0x0033_2211);
-        assert_eq!(colorref([0xff, 0x00, 0x00]), 0x0000_00ff);
-        assert_eq!(colorref([0x00, 0x00, 0xff]), 0x00ff_0000);
+    fn the_custom_titlebar_is_a_windows_decision() {
+        // The interface draws the bar exactly where the host removed the frame; the two must
+        // not disagree, so both read this one answer.
+        assert_eq!(uses_custom_titlebar(), cfg!(windows));
     }
 }

@@ -3,34 +3,54 @@ import { MotionConfig } from 'motion-v';
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { RouterView } from 'vue-router';
 
+import AppTitleBar from '@/app/AppTitleBar.vue';
 import { connectCoreEvents } from '@/app/connect';
 import { reportError } from '@/app/errors';
 import { signalReady } from '@/app/ready';
+import { TWO_PANE_QUERY, useMediaQuery } from '@/composables/useMediaQuery';
 import { useI18n } from '@/i18n';
 import * as ipc from '@/ipc';
 import OnboardingView from '@/features/onboarding/OnboardingView.vue';
 import { usePeerStore } from '@/stores/peers';
 import { useSettingsStore } from '@/stores/settings';
 import { useUiStore } from '@/stores/ui';
-import { useTheme } from '@/theme/useTheme';
 import MdSnackbar from '@/ui/MdSnackbar.vue';
 
 const peers = usePeerStore();
 const settings = useSettingsStore();
 const ui = useUiStore();
 const i18n = useI18n();
-const theme = useTheme();
 
 const loading = ref(true);
 const failure = ref(false);
+/**
+ * Whether the host removed the native frame, so this interface has to draw the title bar.
+ * `true` until the answer arrives: the window is only revealed after the bootstrap, so the
+ * value never paints on screen, and a failed bootstrap still leaves a bar with a close button.
+ */
+const customTitlebar = ref(true);
 
 let disconnect: (() => void) | null = null;
 
 const needsOnboarding = computed(() => !settings.onboarded);
 
+const wide = useMediaQuery(TWO_PANE_QUERY);
+const showsShell = computed<boolean>(
+  () => !loading.value && !failure.value && !needsOnboarding.value,
+);
+
+/**
+ * In the two-pane shell the bar is drawn inside the detail column, above the page, so the list
+ * column on its left runs all the way to the window's top edge. Everywhere else — the loading
+ * and error screens, onboarding, and the one-pane layout — the bar is a row of its own.
+ */
+const barInShell = computed<boolean>(() => customTitlebar.value && showsShell.value && wide.value);
+const appTitleBar = computed<boolean>(() => customTitlebar.value && !barInShell.value);
+
 onMounted(async () => {
   try {
     const payload = await ipc.bootstrap();
+    customTitlebar.value = payload.customTitlebar;
     settings.apply(payload.settings);
     peers.replace(payload.peers);
     if (payload.storageRecovered !== null) {
@@ -84,18 +104,6 @@ watch(
   },
   { immediate: true },
 );
-
-// The native frame is drawn by the operating system, so it cannot read the custom properties the
-// theme writes onto the document. The resolved pair is pushed across instead, whenever the
-// palette changes — which is the accent, the mode, or a light/dark flip the system made while
-// the mode is "system". An immediate run is what colours the frame before the window is shown.
-watch(
-  () => theme.scheme.value,
-  (scheme) => {
-    void ipc.setWindowAccent(scheme.primary, scheme['on-primary']);
-  },
-  { immediate: true },
-);
 </script>
 
 <template>
@@ -103,7 +111,9 @@ watch(
        every animation in the application, including the ones inside components that never
        mention motion at all. -->
   <MotionConfig reduced-motion="user">
-    <div class="app">
+    <div class="app" :data-title-bar="appTitleBar ? 'true' : 'false'">
+      <AppTitleBar v-if="appTitleBar" />
+
       <Transition name="app-swap" mode="out-in">
         <div v-if="loading" key="loading" class="app__centred">
           <span class="app__spinner" aria-hidden="true" />
@@ -117,7 +127,10 @@ watch(
 
         <OnboardingView v-else-if="needsOnboarding" key="onboarding" />
 
-        <RouterView v-else key="shell" />
+        <!-- The shell draws the bar itself when the layout has a list column to reach the top. -->
+        <RouterView v-else key="shell" v-slot="{ Component }">
+          <component :is="Component" :custom-titlebar="customTitlebar" />
+        </RouterView>
       </Transition>
 
       <MdSnackbar
@@ -134,10 +147,19 @@ watch(
 <style scoped>
 .app {
   display: grid;
-  grid-template-rows: 1fr;
   height: 100%;
   background: var(--md-sys-color-surface);
   color: var(--md-sys-color-on-surface);
+}
+
+/* The title bar is a row of its own only when it is drawn; without it the page has the whole
+   window, and an unconditional `auto 1fr` would leave it auto-sized in an empty second row. */
+.app[data-title-bar='true'] {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.app[data-title-bar='false'] {
+  grid-template-rows: minmax(0, 1fr);
 }
 
 .app__centred {

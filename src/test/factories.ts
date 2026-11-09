@@ -117,6 +117,7 @@ export function makeBootstrap(overrides: Partial<Bootstrap> = {}): Bootstrap {
     storageRecovered: null,
     discoveryProblem: null,
     version: '0.9.0',
+    customTitlebar: true,
     ...overrides,
   };
 }

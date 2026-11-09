@@ -165,6 +165,13 @@ async function onForgetConfirmed(deleteHistory: boolean): Promise<void> {
   min-height: 0;
 }
 
+/* The list column is one continuous surface: its colour comes from `.shell__list` and has to
+   run through the app bar too, or a `surface` band would cut it off from the title bar above.
+   Nothing scrolls beneath this bar — the rows scroll in the box below it. */
+.users :deep(.md-top-app-bar) {
+  background: transparent;
+}
+
 .users__scroll {
   flex: 1;
   min-height: 0;

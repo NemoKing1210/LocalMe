@@ -18,6 +18,8 @@ import MdIcon from '@/ui/MdIcon.vue';
 import MdIconButton from '@/ui/MdIconButton.vue';
 import { fileIconFor } from '@/ui/fileIcons';
 
+import ImageViewer from './ImageViewer.vue';
+
 const props = defineProps<{ attachment: Attachment }>();
 
 const i18n = useI18n();
@@ -50,6 +52,8 @@ const label = computed<MessageKey | null>(() => LABELS[props.attachment.state]);
 
 /** A preview that the web view could not load is not shown again. */
 const previewBroken = ref(false);
+/** Whether the picture is open in the viewer, where it can be zoomed and turned. */
+const viewing = ref(false);
 
 /** Only an image that is actually here has something to render. */
 const preview = computed<string | null>(() => {
@@ -99,8 +103,9 @@ async function save(): Promise<void> {
       v-if="preview !== null"
       type="button"
       class="attachment__preview"
-      :title="i18n.t('chat.attachmentOpen')"
-      @click="run(() => ipc.openAttachment(attachment.id))"
+      :title="i18n.t('imageViewer.open', { name: attachment.name })"
+      :aria-label="i18n.t('imageViewer.open', { name: attachment.name })"
+      @click="viewing = true"
     >
       <img
         :src="preview"
@@ -167,6 +172,13 @@ async function save(): Promise<void> {
       <MdIcon name="refresh" :size="16" />
       <span>{{ i18n.t('chat.attachmentRetry') }}</span>
     </button>
+
+    <ImageViewer
+      v-if="viewing && preview !== null"
+      :src="preview"
+      :name="attachment.name"
+      @close="viewing = false"
+    />
   </article>
 </template>
 

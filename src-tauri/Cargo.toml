@@ -1,6 +1,6 @@
 [package]
 name = "localme"
-version = "0.10.0"
+version = "0.12.0"
 edition = "2024"
 rust-version = "1.85"
 description = "LocalMe — a zero-configuration messenger for the local network"
@@ -41,6 +41,9 @@ path = "src/main.rs"
 tauri-build = { version = "2.7.0", features = [] }
 
 [dependencies]
+# Reads the platform clipboard, including a copied file list and a copied image, which neither
+# Tauri's clipboard plugin nor the web view exposes. See `src/clipboard.rs`.
+clipboard-rs = "0.3.5"
 localme-core = { path = "core" }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -52,9 +55,11 @@ tauri-plugin-os = "2.4.0"
 tauri-plugin-single-instance = "2.5.1"
 tokio = { workspace = true }
 tracing = { workspace = true }
+uuid = { workspace = true }
 tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
 
 [dev-dependencies]
+base64 = { workspace = true }
 tempfile = "3.23.0"
 
 [features]
@@ -70,9 +75,10 @@ custom-protocol = ["tauri/custom-protocol"]
 # controller handle `with_webview` hands out is that crate's type, not a lookalike.
 webview2-com = "0.39"
 windows-core = "0.62"
-# The window frame. Windows 11 colours a title bar from `DWMWA_CAPTION_COLOR`, and the attribute
-# has no Tauri wrapper, so it is set directly; this is the same `windows` version `tauri` links,
-# which is what makes `Window::hwnd` the `HWND` the call wants. See `src/window.rs`.
+# The window frame. Windows 11 rounds a bordered window on its own but leaves an undecorated one
+# square, and `DWMWA_WINDOW_CORNER_PREFERENCE` has no Tauri wrapper, so it is set directly; this
+# is the same `windows` version `tauri` links, which is what makes `Window::hwnd` the `HWND` the
+# call wants. See `src/window.rs`.
 windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Graphics_Dwm"] }
 
 [profile.release]

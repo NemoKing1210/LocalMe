@@ -203,6 +203,25 @@ describe('an attachment card', () => {
     expect(preview.attributes('alt')).toBe('cat.png');
   });
 
+  it('opens the picture in the viewer rather than in another application', async () => {
+    const { wrapper } = await mountCard({
+      kind: 'image',
+      name: 'cat.png',
+      path: '/pics/cat.png',
+      state: 'complete',
+    });
+
+    await wrapper.get('button[aria-label="Open cat.png"]').trigger('click');
+
+    const dialog = wrapper.get<HTMLDialogElement>('dialog.viewer');
+    expect(dialog.element.open).toBe(true);
+    expect(wrapper.get('.viewer__image').attributes('src')).toBe('file:///pics/cat.png');
+    expect(ipc.openAttachment).not.toHaveBeenCalled();
+
+    await wrapper.get('button[aria-label="Close the viewer"]').trigger('click');
+    expect(wrapper.find('dialog.viewer').exists()).toBe(false);
+  });
+
   it('does not preview a file, an image without a path, or an unfinished image', async () => {
     const { wrapper: file } = await mountCard({ kind: 'file', state: 'complete' });
     expect(file.find('.attachment__preview').exists()).toBe(false);

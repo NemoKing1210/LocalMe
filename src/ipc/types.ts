@@ -156,6 +156,8 @@ export interface Bootstrap {
   readonly storageRecovered: string | null;
   readonly discoveryProblem: string | null;
   readonly version: string;
+  /** The host removed the native frame, so the interface draws its own title bar. */
+  readonly customTitlebar: boolean;
 }
 
 export interface Diagnostics {

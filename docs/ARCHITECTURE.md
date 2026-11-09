@@ -863,16 +863,24 @@ variant the front end subscribes to.
   the strings once, and again on a language change, through `set_ui_labels`. That keeps one
   translation catalogue instead of a second one in Rust, at the cost of the tray being in English
   for the few milliseconds between process start and the first render.
-* **Window frame** — the title bar is the accent colour, and the palette it comes from is the
-  front end's (Material's tonal algorithm runs there, from the accent and the effective mode), so
-  the front end pushes the resolved `primary`/`onPrimary` pair over `set_window_accent` whenever
-  the palette changes. On Windows 11 the host colours the frame the system draws, through
-  `DWMWA_CAPTION_COLOR`/`DWMWA_BORDER_COLOR`/`DWMWA_TEXT_COLOR` (`src-tauri/src/window.rs`) —
-  the OS keeps ownership of the title bar, its buttons and its hit-testing. A pre-22000 Windows
-  build refuses the attributes, and on macOS and Linux the window manager owns the frame with no
-  equivalent hook, so there the frame simply stays the system's: the alternative — drawing a
-  title bar in the web view — would have to reimplement every platform's buttons and snap
-  behaviour. The two colours travel together because the label has to contrast with the bar.
+* **Window frame** — on Windows the frame belongs to the interface. `window::apply_frame`
+  removes the native decorations at startup (shadow first, so the resize hit testing Tauri
+  installs reads the right state) and asks DWM for rounded corners, which a borderless window
+  does not get on its own. `src/app/AppTitleBar.vue` then draws the bar: a drag region and
+  minimise/maximise/close buttons built from the same icons and corner radii as the rest of the
+  interface. In the two-pane shell the bar is rendered *inside* the detail column, above the
+  page, rather than as a row over both panes — so the list column keeps its full height and
+  starts at the window's top edge. The application draws a row of its own only for the screens
+  that have no shell (loading, failure, onboarding) and for the one-pane layout; `ShellView`
+  receives `customTitlebar` through the router and places the same component itself. Drag-to-snap and double-click-to-maximise are Tauri's drag-region
+  script; resizing an undecorated window is handled by Tauri's Windows hit testing; the colours
+  are the document's own custom properties, so the bar follows the accent and the light/dark
+  mode with no second channel between the palette and the frame. `uses_custom_titlebar()` is the
+  single answer to who owns the frame, read both when the decorations are removed and when the
+  bootstrap tells the interface whether to draw the bar — the two cannot disagree. macOS keeps
+  its traffic lights (they are the platform's contract) and Linux keeps its frame (the window
+  manager is what resizes an undecorated window), so the bar is mounted only where the host
+  actually removed the frame.
 * **Web view policy** — WebView2 ships Microsoft Edge's *general* autofill switched on, and that
   is why focusing an ordinary text field could offer to fill in a saved name or address inside a
   local-network messenger. It is a browser feature, not a form feature: no attribute, header or
@@ -887,7 +895,8 @@ variant the front end subscribes to.
 `capabilities/default.json` grants exactly what the *web view* invokes: `core:default` — which
 already carries the event bus the subscriptions use, the read-only window and app queries the
 interface may make, and the path/asset plumbing — plus `os:allow-hostname` for the onboarding
-default. Everything else the application does (notifications, file dialogs, autostart, the window
+default and the four window operations the title bar calls (`allow-start-dragging`,
+`allow-minimize`, `allow-toggle-maximize`, `allow-close`). Everything else the application does (notifications, file dialogs, autostart, the window
 and tray policy) is driven from Rust, which does not go through capabilities at all, so granting
 those plugins to the web view would only widen the blast radius of a compromised renderer for no
 behaviour. No `shell`, no `fs`, no HTTP scope, no global Tauri API (`withGlobalTauri: false`).

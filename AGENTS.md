@@ -21,7 +21,7 @@ Typical user loop:
 4. History, presence, unread counts and settings persist across restarts.
 
 UI languages: English, Russian, Spanish, German, French, Portuguese and Chinese. Identifier:
-`dev.localme.desktop`. Version: `0.10.0`. Changelog: [CHANGELOG.md](CHANGELOG.md). Design notes:
+`dev.localme.desktop`. Version: `0.12.0`. Changelog: [CHANGELOG.md](CHANGELOG.md). Design notes:
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Stack (accurate)
@@ -139,15 +139,15 @@ mirroring the Rust DTOs in `src/ipc/types.ts`. It is the only file that names a 
 string. Register a new command in `src-tauri/src/lib.rs`, implement it in `commands.rs`, then wrap
 it in `src/ipc/`.
 
-| Command group        | Commands                                                                                                                          |
-| -------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| Bootstrap & peers    | `bootstrap`, `list_peers`, `known_devices`, `forget_peer`, `restore_peer`, `set_peer_muted`                                       |
-| Chat                 | `history`, `send_message`, `clear_history`                                                                                        |
-| Files                | `pick_files`, `inspect_files`, `open_attachment`, `reveal_attachment`, `save_attachment`, `cancel_attachment`, `retry_attachment` |
-| Profile              | `own_profile`, `set_nickname`, `complete_onboarding`                                                                              |
-| Settings & UI labels | `get_settings`, `update_settings`, `set_ui_labels`, `set_active_chat`                                                             |
-| Window & lifecycle   | `diagnostics`                                                                                                                     |
-| Logs                 | `logs_info`, `open_logs_folder`, `clear_logs`, `log_frontend`                                                                     |
+| Command group        | Commands                                                                                                                                                                |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Bootstrap & peers    | `bootstrap`, `list_peers`, `known_devices`, `forget_peer`, `restore_peer`, `set_peer_muted`                                                                             |
+| Chat                 | `history`, `send_message`, `clear_history`                                                                                                                              |
+| Files                | `pick_files`, `inspect_files`, `paste_files`, `discard_pasted_file`, `open_attachment`, `reveal_attachment`, `save_attachment`, `cancel_attachment`, `retry_attachment` |
+| Profile              | `own_profile`, `set_nickname`, `complete_onboarding`                                                                                                                    |
+| Settings & UI labels | `get_settings`, `update_settings`, `set_ui_labels`, `set_active_chat`                                                                                                   |
+| Window & lifecycle   | `diagnostics`                                                                                                                                                           |
+| Logs                 | `logs_info`, `open_logs_folder`, `clear_logs`, `log_frontend`                                                                                                           |
 
 Host events: `peers`, `message`, `message_status`, `attachment`, `settings_changed`,
 `state_snapshot`, `open_chat`, `notice`, `stopped`. They are fanned into the stores by

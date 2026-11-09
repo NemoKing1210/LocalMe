@@ -13,6 +13,7 @@ use tauri::{AppHandle, Runtime, State};
 use tauri_plugin_dialog::DialogExt;
 
 use crate::args::{self, PageCursor};
+use crate::clipboard;
 use crate::error::ApiError;
 use crate::files::{self, FilePick};
 use crate::logging::{self, LogsInfo};
@@ -32,6 +33,8 @@ pub struct Bootstrap {
     /// Set when discovery could not be started.
     pub discovery_problem: Option<String>,
     pub version: String,
+    /// The host removed the native frame, so the interface draws the title bar.
+    pub custom_titlebar: bool,
 }
 
 /// # Errors
@@ -69,6 +72,7 @@ pub async fn bootstrap(state: State<'_, Arc<AppState>>) -> Result<Bootstrap, Api
         storage_recovered,
         discovery_problem,
         version: env!("CARGO_PKG_VERSION").to_owned(),
+        custom_titlebar: window::uses_custom_titlebar(),
     })
 }
 
@@ -285,21 +289,6 @@ pub fn set_ui_labels<R: Runtime>(
     Ok(())
 }
 
-/// # Errors
-///
-/// [`ApiError::InvalidInput`] if either colour is not `#RRGGBB`.
-#[tauri::command]
-pub fn set_window_accent<R: Runtime>(
-    app: AppHandle<R>,
-    accent: String,
-    on_accent: String,
-) -> Result<(), ApiError> {
-    let caption = args::hex_color("accent", &accent)?;
-    let text = args::hex_color("onAccent", &on_accent)?;
-    window::set_accent(&app, caption, text);
-    Ok(())
-}
-
 /// Tells the host which conversation is on screen, so a notification is not raised for a
 /// message the user is already reading.
 #[tauri::command]
@@ -412,6 +401,41 @@ pub fn inspect_files<R: Runtime>(app: AppHandle<R>, paths: Vec<String>) -> Vec<F
         .iter()
         .map(|path| files::inspect(&app, Path::new(path)))
         .collect()
+}
+
+/// Reads the clipboard and describes anything attachable on it.
+///
+/// A copied file is described from its own path, exactly as the picker and the drop are; an
+/// image that exists only on the clipboard has no path at all, so it is stored under the data
+/// directory first. Reading the clipboard can block (X11 sets its own timeout), so it happens
+/// off the interface thread. Nothing attachable is an empty answer, not an error to dismiss.
+#[tauri::command]
+pub async fn paste_files<R: Runtime>(app: AppHandle<R>) -> Vec<FilePick> {
+    let data_dir = match crate::resolve_data_dir(&app) {
+        Ok(directory) => directory,
+        Err(error) => {
+            tracing::warn!(%error, "the clipboard was not read: no data directory");
+            return Vec::new();
+        }
+    };
+
+    let reader = app.clone();
+    match tauri::async_runtime::spawn_blocking(move || clipboard::read(&reader, &data_dir)).await {
+        Ok(picks) => picks,
+        Err(error) => {
+            tracing::warn!(%error, "the clipboard reader did not finish");
+            Vec::new()
+        }
+    }
+}
+
+/// Deletes a pasted image the user removed from the composer before sending it.
+#[tauri::command]
+pub fn discard_pasted_file<R: Runtime>(app: AppHandle<R>, path: String) {
+    match crate::resolve_data_dir(&app) {
+        Ok(data_dir) => clipboard::discard(&data_dir, Path::new(&path)),
+        Err(error) => tracing::debug!(%error, "a removed paste was not deleted"),
+    }
 }
 
 /// Opens a received file with whatever the platform uses for its type.

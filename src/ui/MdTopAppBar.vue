@@ -18,7 +18,10 @@ withDefaults(
       <div v-if="$slots.leading" class="md-top-app-bar__leading">
         <slot name="leading" />
       </div>
-      <div class="md-top-app-bar__titles">
+      <div
+        class="md-top-app-bar__titles"
+        :class="{ 'md-top-app-bar__titles--first': !$slots.leading }"
+      >
         <span class="md-typescale-title-large md-top-app-bar__title">{{ title }}</span>
         <span v-if="subtitle" class="md-typescale-label-medium md-top-app-bar__subtitle">
           {{ subtitle }}
@@ -50,7 +53,10 @@ withDefaults(
   gap: 4px;
   align-items: center;
   height: var(--localme-top-bar-height);
-  padding-inline: 4px;
+  /* The same 16px the page content below uses, so the leading avatar or button lines up with
+     the list rows, message column and settings cards instead of sitting almost flush with the
+     window's side panel. */
+  padding-inline: 16px;
 }
 
 .md-top-app-bar__leading,
@@ -68,6 +74,12 @@ withDefaults(
   justify-content: center;
   min-width: 0;
   padding-inline: 8px;
+}
+
+/* With nothing leading it, the row's own inset is the title's inset — adding 8px here would
+   push the title out of line with the content padding it shares. */
+.md-top-app-bar__titles--first {
+  padding-inline-start: 0;
 }
 
 .md-top-app-bar__title {

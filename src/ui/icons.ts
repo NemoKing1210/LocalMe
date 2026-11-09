@@ -73,6 +73,17 @@ export const ICONS = {
     { kind: 'line', x1: 6, y1: 6, x2: 18, y2: 18 },
     { kind: 'line', x1: 18, y1: 6, x2: 6, y2: 18 },
   ],
+  // Window controls. They sit beside the same wordmark as the rest of the interface, so they
+  // follow its corner radii and stroke weight instead of the system frame's.
+  minimize: [{ kind: 'line', x1: 6, y1: 12, x2: 18, y2: 12 }],
+  maximize: [{ kind: 'rect', x: 5.5, y: 5.5, width: 13, height: 13, rx: 1.5 }],
+  restore: [
+    { kind: 'rect', x: 4.5, y: 8.5, width: 11, height: 11, rx: 1.5 },
+    {
+      kind: 'path',
+      d: 'M8.5 8.5v-2a1.5 1.5 0 0 1 1.5-1.5h8a1.5 1.5 0 0 1 1.5 1.5v8a1.5 1.5 0 0 1-1.5 1.5h-2',
+    },
+  ],
   back: [
     { kind: 'line', x1: 20, y1: 12, x2: 4.5, y2: 12 },
     { kind: 'polyline', points: '11.5,19 4.5,12 11.5,5' },
@@ -191,6 +202,33 @@ export const ICONS = {
       kind: 'path',
       d: 'M18.2 13.8v5a1.6 1.6 0 0 1-1.6 1.6H5.4a1.6 1.6 0 0 1-1.6-1.6V7.6A1.6 1.6 0 0 1 5.4 6h5',
     },
+  ],
+  // Image viewer. Same 24 px grid and stroke as `search` and `refresh`, so the toolbar reads
+  // as one set rather than as borrowed glyphs.
+  'zoom-in': [
+    { kind: 'circle', cx: 10.5, cy: 10.5, r: 5.6 },
+    { kind: 'line', x1: 14.6, y1: 14.6, x2: 20, y2: 20 },
+    { kind: 'line', x1: 8, y1: 10.5, x2: 13, y2: 10.5 },
+    { kind: 'line', x1: 10.5, y1: 8, x2: 10.5, y2: 13 },
+  ],
+  'zoom-out': [
+    { kind: 'circle', cx: 10.5, cy: 10.5, r: 5.6 },
+    { kind: 'line', x1: 14.6, y1: 14.6, x2: 20, y2: 20 },
+    { kind: 'line', x1: 8, y1: 10.5, x2: 13, y2: 10.5 },
+  ],
+  'rotate-right': [
+    { kind: 'path', d: 'M12 4a8 8 0 1 1-8 8' },
+    { kind: 'polyline', points: '9.4,1.4 12,4 9.4,6.6' },
+  ],
+  'rotate-left': [
+    { kind: 'path', d: 'M12 4a8 8 0 1 0 8 8' },
+    { kind: 'polyline', points: '14.6,1.4 12,4 14.6,6.6' },
+  ],
+  fit: [
+    { kind: 'path', d: 'M4 9V4h5' },
+    { kind: 'path', d: 'M20 9V4h-5' },
+    { kind: 'path', d: 'M4 15v5h5' },
+    { kind: 'path', d: 'M20 15v5h-5' },
   ],
 } as const satisfies Record<string, readonly Shape[]>;
 

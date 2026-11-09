@@ -27,24 +27,6 @@ pub fn nickname(value: &str) -> Result<Nickname, ApiError> {
 
 /// # Errors
 ///
-/// [`ApiError::InvalidInput`] naming `field`.
-pub fn hex_color(field: &str, value: &str) -> Result<[u8; 3], ApiError> {
-    let invalid = || ApiError::invalid_input(field, "expected a colour in #RRGGBB form");
-    let digits = value.strip_prefix('#').ok_or_else(invalid)?;
-    if digits.len() != 6 || !digits.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err(invalid());
-    }
-
-    let mut channels = [0u8; 3];
-    for (index, channel) in channels.iter_mut().enumerate() {
-        let pair = &digits[index * 2..index * 2 + 2];
-        *channel = u8::from_str_radix(pair, 16).map_err(|_| invalid())?;
-    }
-    Ok(channels)
-}
-
-/// # Errors
-///
 /// [`ApiError::InvalidInput`] naming the `body` argument; the message names the length limit.
 pub fn message_body(value: &str) -> Result<MessageBody, ApiError> {
     MessageBody::parse(value).map_err(|error| {
@@ -163,26 +145,6 @@ mod tests {
                 );
             }
             other => panic!("expected an input error, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn a_colour_parses_to_channels_in_the_order_the_interface_writes_them() {
-        assert_eq!(
-            hex_color("accent", "#6750A4").expect("valid"),
-            [0x67, 0x50, 0xA4]
-        );
-        assert_eq!(hex_color("accent", "#00ff00").expect("valid"), [0, 255, 0]);
-    }
-
-    #[test]
-    fn a_bad_colour_names_the_argument_the_interface_sent() {
-        for value in ["6750A4", "#6750A", "#6750A44", "#6750AG", "", "#"] {
-            let error = hex_color("onAccent", value).expect_err("not a colour");
-            match error {
-                ApiError::InvalidInput { field, .. } => assert_eq!(field, "onAccent"),
-                other => panic!("expected an input error for {value:?}, got {other:?}"),
-            }
         }
     }
 

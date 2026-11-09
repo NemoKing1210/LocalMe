@@ -2,9 +2,12 @@
 /**
  * The composer: text, files, and the one place the two are put together.
  *
- * Files can arrive here from the picker or from a drop anywhere on the window; either way they
- * are described by the host before they are shown, so a file that cannot be sent is visible as
- * such before the user presses send rather than as a failure afterwards.
+ * Files can arrive here from the picker, from a drop anywhere on the window, or from the
+ * clipboard; either way they are described by the host before they are shown, so a file that
+ * cannot be sent is visible as such before the user presses send rather than as a failure
+ * afterwards. A paste is decided from the event alone, because the default action cannot be
+ * cancelled after the host has answered; a clipboard image is stored by the host first, since
+ * the web view never sees a path for it.
  *
  * The textarea height is measured against `--localme-composer-max-height`; the length limit
  * mirrors the host's `MAX_BODY_CHARS`, which `send_message` enforces.
@@ -21,6 +24,8 @@ import { useUiStore } from '@/stores/ui';
 import MdIcon from '@/ui/MdIcon.vue';
 import MdIconButton from '@/ui/MdIconButton.vue';
 import { fileIconFor } from '@/ui/fileIcons';
+
+import ImageViewer from './ImageViewer.vue';
 
 const props = defineProps<{
   peer: Peer;
@@ -45,6 +50,8 @@ const draft = ref('');
 const picked = ref<readonly FilePick[]>([]);
 /** Paths whose thumbnail the web view could not load; they fall back to the type badge. */
 const thumbnailsFailed = ref<readonly string[]>([]);
+/** The pending picture open in the viewer, if any; a file that is not an image has none. */
+const viewing = ref<FilePick | null>(null);
 const dragging = ref(false);
 const textarea = ref<HTMLTextAreaElement | null>(null);
 /** The token's value, read once: it is a fact of the stylesheet, not of this component. */
@@ -106,9 +113,48 @@ async function pick(): Promise<void> {
   if (files.ok) add(files.value);
 }
 
+/**
+ * Whether a paste is about files rather than prose.
+ *
+ * A copied file list and a copied image arrive as file items; a Linux file manager copies a
+ * `file://` URI list instead. A clipboard with no text at all is asked about too: WebView2 does
+ * not always name the format of a file list copied in Explorer, and the host can read it where
+ * the web view cannot.
+ */
+function clipboardCarriesFiles(data: DataTransfer): boolean {
+  if (data.files.length > 0) return true;
+  if (data.types.includes('Files')) return true;
+  if (Array.from(data.items).some((item) => item.kind === 'file')) return true;
+  if (!data.types.some((type) => type.startsWith('text/'))) return true;
+  return data.getData('text/uri-list').includes('file://');
+}
+
+/** Hands the paste to the host, the only side that can see what was copied. */
+async function absorbPasted(): Promise<void> {
+  const files = await ui.attempt(() => ipc.pasteFiles(), 'the pasted files could not be read');
+  if (!files.ok) return;
+  if (files.value.length === 0) {
+    ui.notify('chat.nothingToPaste');
+    return;
+  }
+  add(files.value);
+}
+
+function onPaste(event: ClipboardEvent): void {
+  const data = event.clipboardData;
+  if (data === null || !clipboardCarriesFiles(data)) return;
+  event.preventDefault();
+  void absorbPasted();
+}
+
 function remove(path: string): void {
   picked.value = picked.value.filter((file) => file.path !== path);
   thumbnailsFailed.value = thumbnailsFailed.value.filter((known) => known !== path);
+  // Only a pasted image was copied by the host, and only that is deleted: the host refuses
+  // every path outside its own staging directory, so a user's file is never touched.
+  void ipc.discardPastedFile(path).catch((error: unknown) => {
+    console.warn('[localme] a discarded paste could not be deleted', error);
+  });
   void nextTick(resize);
 }
 
@@ -208,15 +254,23 @@ onBeforeUnmount(() => {
 
     <ul v-if="picked.length > 0" class="composer__files">
       <li v-for="file in picked" :key="file.path" class="composer__file">
-        <img
+        <button
           v-if="
             file.kind === 'image' && file.problem === null && !thumbnailsFailed.includes(file.path)
           "
-          class="composer__thumb"
-          :src="ipc.fileSrc(file.path)"
-          :alt="file.name"
-          @error="thumbnailsFailed = [...thumbnailsFailed, file.path]"
-        />
+          type="button"
+          class="composer__thumb-button"
+          :title="i18n.t('imageViewer.open', { name: file.name })"
+          :aria-label="i18n.t('imageViewer.open', { name: file.name })"
+          @click="viewing = file"
+        >
+          <img
+            class="composer__thumb"
+            :src="ipc.fileSrc(file.path)"
+            :alt="file.name"
+            @error="thumbnailsFailed = [...thumbnailsFailed, file.path]"
+          />
+        </button>
         <span v-else class="composer__thumb composer__thumb--glyph">
           <component :is="fileIconFor(file.name)" />
         </span>
@@ -264,6 +318,7 @@ onBeforeUnmount(() => {
         :aria-label="placeholder"
         @input="resize"
         @keydown="onKeydown"
+        @paste="onPaste"
       />
       <MdIconButton
         icon="send"
@@ -280,6 +335,13 @@ onBeforeUnmount(() => {
       </span>
       <span v-else class="composer__counter">{{ draft.length }} / {{ MAX_BODY_CHARS }}</span>
     </div>
+
+    <ImageViewer
+      v-if="viewing !== null"
+      :src="ipc.fileSrc(viewing.path)"
+      :name="viewing.name"
+      @close="viewing = null"
+    />
   </footer>
 </template>
 
@@ -331,6 +393,21 @@ onBeforeUnmount(() => {
   padding: 4px 4px 4px 6px;
   border-radius: var(--md-sys-shape-corner-medium);
   background: var(--md-sys-color-surface-container-high);
+}
+
+.composer__thumb-button {
+  display: inline-flex;
+  flex: none;
+  padding: 0;
+  border: none;
+  border-radius: var(--md-sys-shape-corner-small);
+  background: none;
+  cursor: zoom-in;
+}
+
+.composer__thumb-button:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 1px;
 }
 
 .composer__thumb {

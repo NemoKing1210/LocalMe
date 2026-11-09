@@ -175,6 +175,7 @@
   --localme-breakpoint-two-pane: 720px;
   --localme-list-width: 320px;
   --localme-user-row-height: 72px;
+  --localme-title-bar-height: 40px;
   --localme-top-bar-height: 64px;
   --localme-composer-max-height: 200px;
 }

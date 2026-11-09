@@ -3,6 +3,11 @@ import type { MessageCatalog } from './types';
 export const zh: MessageCatalog = {
   'app.name': 'LocalMe',
 
+  'window.minimize': '最小化',
+  'window.maximize': '最大化',
+  'window.restore': '还原',
+  'window.close': '关闭',
+
   'common.cancel': '取消',
   'common.delete': '删除',
   'common.retry': '重试',
@@ -72,6 +77,17 @@ export const zh: MessageCatalog = {
   'chat.fileTooLarge': '文件过大（上限为 {max}）',
   'chat.fileDirectory': '无法发送文件夹',
   'chat.fileMissing': '文件已不存在',
+  'chat.nothingToPaste': '剪贴板中没有可附加的文件',
+
+  'imageViewer.label': '图片查看器',
+  'imageViewer.open': '打开 {name}',
+  'imageViewer.close': '关闭查看器',
+  'imageViewer.zoomIn': '放大',
+  'imageViewer.zoomOut': '缩小',
+  'imageViewer.rotateLeft': '向左旋转',
+  'imageViewer.rotateRight': '向右旋转',
+  'imageViewer.reset': '适应图片',
+  'imageViewer.zoomLevel': '{percent}%',
   'chat.attachmentOpen': '打开',
   'chat.attachmentSave': '另存为…',
   'chat.attachmentReveal': '在文件夹中显示',

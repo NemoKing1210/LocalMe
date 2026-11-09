@@ -3,6 +3,11 @@ import type { MessageCatalog } from './types';
 export const ru: MessageCatalog = {
   'app.name': 'LocalMe',
 
+  'window.minimize': 'Свернуть',
+  'window.maximize': 'Развернуть',
+  'window.restore': 'Восстановить',
+  'window.close': 'Закрыть',
+
   'common.cancel': 'Отмена',
   'common.delete': 'Удалить',
   'common.retry': 'Повторить',
@@ -75,6 +80,17 @@ export const ru: MessageCatalog = {
   'chat.fileTooLarge': 'Слишком большой файл (предел — {max})',
   'chat.fileDirectory': 'Папки отправить нельзя',
   'chat.fileMissing': 'Файла больше нет',
+  'chat.nothingToPaste': 'В буфере обмена нет файлов для вложения',
+
+  'imageViewer.label': 'Просмотр изображения',
+  'imageViewer.open': 'Открыть {name}',
+  'imageViewer.close': 'Закрыть просмотр',
+  'imageViewer.zoomIn': 'Приблизить',
+  'imageViewer.zoomOut': 'Отдалить',
+  'imageViewer.rotateLeft': 'Повернуть влево',
+  'imageViewer.rotateRight': 'Повернуть вправо',
+  'imageViewer.reset': 'Вписать изображение',
+  'imageViewer.zoomLevel': '{percent}%',
   'chat.attachmentOpen': 'Открыть',
   'chat.attachmentSave': 'Сохранить как…',
   'chat.attachmentReveal': 'Показать в папке',

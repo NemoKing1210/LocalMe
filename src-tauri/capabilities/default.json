@@ -1,7 +1,14 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "LocalMe desktop capabilities. Least privilege: only what the web view itself invokes is granted. Notifications, dialogs, autostart and the window policy are driven from Rust, which does not go through capabilities, and `core:default` already carries the read-only window and app queries and the event bus.",
+  "description": "LocalMe desktop capabilities. Least privilege: only what the web view itself invokes is granted. `core:default` already carries the read-only window and app queries and the event bus; the title bar additionally drives the window it draws (drag, minimise, maximise, close). Notifications, dialogs, autostart and the window policy are driven from Rust, which does not go through capabilities.",
   "windows": ["main"],
-  "permissions": ["core:default", "os:allow-hostname"]
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging",
+    "core:window:allow-minimize",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-close",
+    "os:allow-hostname"
+  ]
 }

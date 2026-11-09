@@ -17,6 +17,8 @@ vi.mock('@/ipc', async (importOriginal) => ({
   __v_isRef: false,
   pickFiles: vi.fn(),
   inspectFiles: vi.fn(),
+  pasteFiles: vi.fn(),
+  discardPastedFile: vi.fn(),
   fileSrc: vi.fn(),
 }));
 
@@ -61,6 +63,24 @@ async function mountComposer(overrides: MountOverrides = {}): Promise<MountedCom
   return { wrapper, pinia, ui: useUiStore(pinia) };
 }
 
+interface ClipboardContents {
+  readonly types?: readonly string[];
+  readonly uriList?: string;
+}
+
+/** A paste event dressed the way the web view hands one over: cancelled by us or not. */
+function pasteWith(contents: ClipboardContents): ClipboardEvent {
+  const event = new Event('paste', { bubbles: true, cancelable: true }) as ClipboardEvent;
+  const data = {
+    files: [],
+    types: contents.types ?? [],
+    items: [],
+    getData: (type: string) => (type === 'text/uri-list' ? (contents.uriList ?? '') : ''),
+  };
+  Object.defineProperty(event, 'clipboardData', { value: data });
+  return event;
+}
+
 beforeEach(() => {
   tauri.handlers = [];
   tauri.onDragDropEvent.mockImplementation(
@@ -71,6 +91,8 @@ beforeEach(() => {
   );
   vi.mocked(ipc.pickFiles).mockResolvedValue([]);
   vi.mocked(ipc.inspectFiles).mockResolvedValue([]);
+  vi.mocked(ipc.pasteFiles).mockResolvedValue([]);
+  vi.mocked(ipc.discardPastedFile).mockResolvedValue(undefined);
   vi.mocked(ipc.fileSrc).mockImplementation((path: string) => `file://${path}`);
   setActivePinia(createPinia());
 });
@@ -232,6 +254,77 @@ describe('the composer', () => {
 
     await wrapper.find('button[aria-label="Remove a.txt"]').trigger('click');
     expect(wrapper.findAll('.composer__file')).toHaveLength(0);
+    // The host decides what it may delete: a chip the user picked is refused by its own check.
+    expect(ipc.discardPastedFile).toHaveBeenCalledWith('/tmp/a.txt');
+  });
+
+  it('attaches what the host finds on the clipboard when the paste carries files', async () => {
+    const { wrapper } = await mountComposer();
+    vi.mocked(ipc.pasteFiles).mockResolvedValue([
+      makeFilePick({ path: '/tmp/pasted.png', name: 'pasted.png', kind: 'image' }),
+    ]);
+    const textarea = wrapper.find('textarea');
+    const event = pasteWith({ types: ['Files'] });
+
+    (textarea.element as HTMLTextAreaElement).dispatchEvent(event);
+    await flushPromises();
+
+    // The default paste is stopped: a file list is not prose to be inserted.
+    expect(event.defaultPrevented).toBe(true);
+    expect(ipc.pasteFiles).toHaveBeenCalledTimes(1);
+    expect(wrapper.text()).toContain('pasted.png');
+  });
+
+  it('treats a file URI list as a file rather than pasting the path as text', async () => {
+    const { wrapper } = await mountComposer();
+    const textarea = wrapper.find('textarea');
+    const event = pasteWith({
+      types: ['text/uri-list', 'text/plain'],
+      uriList: 'file:///tmp/cat.png',
+    });
+
+    (textarea.element as HTMLTextAreaElement).dispatchEvent(event);
+    await flushPromises();
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(ipc.pasteFiles).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves a prose paste to the browser', async () => {
+    const { wrapper } = await mountComposer();
+    const textarea = wrapper.find('textarea');
+    const event = pasteWith({ types: ['text/plain'] });
+
+    (textarea.element as HTMLTextAreaElement).dispatchEvent(event);
+    await flushPromises();
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(ipc.pasteFiles).not.toHaveBeenCalled();
+  });
+
+  it('says when the clipboard holds nothing attachable after all', async () => {
+    const { wrapper, ui } = await mountComposer();
+    const textarea = wrapper.find('textarea');
+
+    // No format the web view can name: the host is asked, and it finds nothing.
+    (textarea.element as HTMLTextAreaElement).dispatchEvent(pasteWith({}));
+    await flushPromises();
+
+    expect(ui.noticeText).toBe('There are no files on the clipboard to attach');
+  });
+
+  it('does not report a failed clipboard read as a file problem', async () => {
+    const { wrapper, ui } = await mountComposer();
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.mocked(ipc.pasteFiles).mockRejectedValue(new Error('no clipboard'));
+
+    (wrapper.find('textarea').element as HTMLTextAreaElement).dispatchEvent(
+      pasteWith({ types: ['Files'] }),
+    );
+    await flushPromises();
+
+    expect(errorSpy).toHaveBeenCalled();
+    expect(ui.notice?.tone).toBe('error');
   });
 
   it('shows the drop overlay while dragging and inspects dropped paths', async () => {
@@ -312,6 +405,21 @@ describe('the composer', () => {
     await thumb.trigger('error');
     expect(wrapper.find('img.composer__thumb').exists()).toBe(false);
     expect(wrapper.find('.composer__thumb--glyph').exists()).toBe(true);
+  });
+
+  it('opens a pending picture in the viewer from its thumbnail', async () => {
+    const { wrapper } = await mountComposer();
+    vi.mocked(ipc.pickFiles).mockResolvedValue([
+      makeFilePick({ path: '/pics/cat.png', name: 'cat.png', kind: 'image' }),
+    ]);
+
+    await wrapper.find(ATTACH).trigger('click');
+    await flushPromises();
+
+    await wrapper.find('.composer__thumb-button').trigger('click');
+
+    expect(wrapper.find('dialog.viewer').exists()).toBe(true);
+    expect(wrapper.find('.viewer__image').attributes('src')).toBe('file:///pics/cat.png');
   });
 
   it('tells an away peer that messages wait until they return', async () => {

@@ -1,6 +1,11 @@
 export const en = {
   'app.name': 'LocalMe',
 
+  'window.minimize': 'Minimize',
+  'window.maximize': 'Maximize',
+  'window.restore': 'Restore',
+  'window.close': 'Close',
+
   'common.cancel': 'Cancel',
   'common.delete': 'Delete',
   'common.retry': 'Retry',
@@ -73,6 +78,17 @@ export const en = {
   'chat.fileTooLarge': 'Too large (the limit is {max})',
   'chat.fileDirectory': 'Folders cannot be sent',
   'chat.fileMissing': 'The file is no longer there',
+  'chat.nothingToPaste': 'There are no files on the clipboard to attach',
+
+  'imageViewer.label': 'Image viewer',
+  'imageViewer.open': 'Open {name}',
+  'imageViewer.close': 'Close the viewer',
+  'imageViewer.zoomIn': 'Zoom in',
+  'imageViewer.zoomOut': 'Zoom out',
+  'imageViewer.rotateLeft': 'Rotate left',
+  'imageViewer.rotateRight': 'Rotate right',
+  'imageViewer.reset': 'Fit the image',
+  'imageViewer.zoomLevel': '{percent}%',
   'chat.attachmentOpen': 'Open',
   'chat.attachmentSave': 'Save as…',
   'chat.attachmentReveal': 'Show in folder',

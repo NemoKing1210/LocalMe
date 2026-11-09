@@ -5,6 +5,49 @@ All notable changes to LocalMe are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.0] - 2026-11-09
+
+### Added
+
+- **A viewer for every picture.** Clicking an image — in a message or on a file still waiting in
+  the composer — opens it on its own, where it can be zoomed with the wheel, a trackpad pinch,
+  the toolbar or the `+` and `-` keys, moved by dragging, turned in quarter turns with the
+  toolbar or `R`, and fitted again with the Fit button or `0`. A double click zooms to detail
+  and the next one brings the whole picture back; Escape, the close button and a click beside
+  the picture close it. The image is shown as a modal dialog, so it is never clipped by a
+  bubble's entrance and the keyboard stays inside it.
+
+## [0.11.0] - 2026-11-09
+
+### Added
+
+- **Attachments from the clipboard.** Ctrl+V in the composer now attaches whatever the file
+  manager copied, and a screenshot or any copied image becomes an attachment of its own. The
+  clipboard is read by the host, because the web view is given a file with no path and an image
+  with no file at all; a copied image is written once under the data directory, so the message
+  that sends it keeps its preview, and it is deleted if the user takes it out before sending.
+  Pasting prose still pastes prose, unchanged.
+
+## [0.10.2] - 2026-11-09
+
+### Changed
+
+- **The window's title bar is now the application's own, not Windows'.** The native frame is
+  removed on Windows and the interface draws the bar instead: Material-style minimise,
+  maximise/restore and close buttons on the same surfaces and accent as everything below them,
+  in light and dark mode, with the rest of the strip free for dragging. In the two-pane layout
+  the bar sits above the conversation only, so the people column runs all the way to the top of
+  the window instead of starting under an empty strip. It remains a normal window — dragging
+  snaps it, double-clicking maximises, the edges resize, and closing still honours the "keep
+  running in the tray" setting. Other platforms keep their native frame.
+
+## [0.10.1] - 2026-11-09
+
+### Changed
+
+- **Cursor's workspace folder is ignored by git**, so editor-local rules and settings stay out
+  of the repository instead of showing up as untracked files
+
 ## [0.10.0] - 2026-11-09
 
 ### Added

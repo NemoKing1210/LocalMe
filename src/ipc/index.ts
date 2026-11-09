@@ -1,5 +1,6 @@
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 
 import type {
   ApiError,
@@ -131,6 +132,21 @@ export function inspectFiles(paths: readonly string[]): Promise<FilePick[]> {
   return call('inspect_files', { paths: [...paths] });
 }
 
+/**
+ * Reads the clipboard and describes anything attachable on it.
+ *
+ * A copied file keeps its own path; a copied image is stored by the host first, because a
+ * clipboard image has no path of its own. Nothing attachable is an empty array.
+ */
+export function pasteFiles(): Promise<FilePick[]> {
+  return call('paste_files');
+}
+
+/** Deletes a pasted image that was taken out of the composer before it was sent. */
+export function discardPastedFile(path: string): Promise<void> {
+  return call('discard_pasted_file', { path });
+}
+
 export function openAttachment(id: AttachmentId): Promise<void> {
   return call('open_attachment', { attachmentId: id });
 }
@@ -196,9 +212,33 @@ export function setUiLabels(labels: UiLabels): Promise<void> {
   return call('set_ui_labels', { labels });
 }
 
-/** Paints the native window frame; `onAccent` is the label colour and must contrast with it. */
-export function setWindowAccent(accent: string, onAccent: string): Promise<void> {
-  return call('set_window_accent', { accent, onAccent });
+/**
+ * Window controls for the title bar the interface draws itself.
+ *
+ * They live here like every other host boundary: no component talks to the window API
+ * directly, and a plain browser — which is how the UI is developed — has no window to ask.
+ */
+export function minimizeWindow(): Promise<void> {
+  return getCurrentWindow().minimize();
+}
+
+export function toggleMaximizeWindow(): Promise<void> {
+  return getCurrentWindow().toggleMaximize();
+}
+
+export function closeWindow(): Promise<void> {
+  return getCurrentWindow().close();
+}
+
+export function isWindowMaximized(): Promise<boolean> {
+  return getCurrentWindow().isMaximized();
+}
+
+/** Calls `handler` whenever the window is resized, which includes maximize and restore. */
+export function onWindowResized(handler: () => void): Promise<UnlistenFn> {
+  return getCurrentWindow().onResized(() => {
+    handler();
+  });
 }
 
 export function setActiveChat(peerId: DeviceId | null): Promise<void> {

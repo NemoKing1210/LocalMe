@@ -8,6 +8,16 @@ import UserListView from '@/features/users/UserListView.vue';
 import { ROUTE } from '@/app/routes';
 import { usePeerStore } from '@/stores/peers';
 
+import AppTitleBar from './AppTitleBar.vue';
+
+withDefaults(
+  defineProps<{
+    /** The host removed the native frame, so the shell has to place the bar itself. */
+    customTitlebar?: boolean;
+  }>(),
+  { customTitlebar: false },
+);
+
 const route = useRoute();
 const peers = usePeerStore();
 const wide = useMediaQuery(TWO_PANE_QUERY);
@@ -46,6 +56,10 @@ watch(
     </div>
 
     <main class="shell__detail">
+      <!-- Above the page rather than above both panes: the bar belongs to the detail side, so
+           the list column keeps its full height and reaches the top of the window. -->
+      <AppTitleBar v-if="customTitlebar && wide" />
+
       <RouterView v-slot="{ Component }">
         <AnimatePresence mode="wait">
           <motion.div
@@ -101,7 +115,6 @@ watch(
      same reason (it also holds a scrolling page). */
   min-height: 0;
   overflow: hidden;
-  border-inline-end: 1px solid var(--md-sys-color-outline-variant);
   background: var(--md-sys-color-surface-container-low);
 }
 

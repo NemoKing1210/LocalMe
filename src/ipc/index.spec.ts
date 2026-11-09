@@ -11,6 +11,19 @@ vi.mock('@tauri-apps/api/event', () => ({
   listen: vi.fn(),
 }));
 
+/** The window the title bar drives; `getCurrentWindow` is only ever reached through `ipc`. */
+const windowApi = vi.hoisted(() => ({
+  minimize: vi.fn(),
+  toggleMaximize: vi.fn(),
+  close: vi.fn(),
+  isMaximized: vi.fn(),
+  onResized: vi.fn(),
+}));
+
+vi.mock('@tauri-apps/api/window', () => ({
+  getCurrentWindow: () => windowApi,
+}));
+
 import { FIXED_NOW, makePeer, makeSettings } from '@/test/factories';
 
 import {
@@ -19,21 +32,27 @@ import {
   cancelAttachment,
   clearHistory,
   clearLogs,
+  closeWindow,
   completeOnboarding,
   diagnostics,
+  discardPastedFile,
   fileSrc,
   forgetPeer,
   getSettings,
   history,
   inspectFiles,
+  isWindowMaximized,
   knownDevices,
   listPeers,
   logFrontend,
   logsInfo,
+  minimizeWindow,
   onCoreEvent,
+  onWindowResized,
   openAttachment,
   openLogsFolder,
   ownProfile,
+  pasteFiles,
   pickFiles,
   restorePeer,
   retryAttachment,
@@ -44,7 +63,7 @@ import {
   setNickname,
   setPeerMuted,
   setUiLabels,
-  setWindowAccent,
+  toggleMaximizeWindow,
   updateSettings,
 } from './index';
 import type { ApiError, CoreEventMap, PageCursor, UiLabels } from './types';
@@ -224,6 +243,13 @@ const commandCases: readonly CommandCase[] = [
     command: 'inspect_files',
     args: { paths: ['/a.png', '/b.pdf'] },
   },
+  { title: 'pasteFiles', run: () => pasteFiles(), command: 'paste_files', args: undefined },
+  {
+    title: 'discardPastedFile',
+    run: () => discardPastedFile('/tmp/pasted.png'),
+    command: 'discard_pasted_file',
+    args: { path: '/tmp/pasted.png' },
+  },
   {
     title: 'openAttachment',
     run: () => openAttachment(ATTACHMENT_ID),
@@ -299,12 +325,6 @@ const commandCases: readonly CommandCase[] = [
     run: () => setUiLabels(labels),
     command: 'set_ui_labels',
     args: { labels },
-  },
-  {
-    title: 'setWindowAccent',
-    run: () => setWindowAccent('#101010', '#ffffff'),
-    command: 'set_window_accent',
-    args: { accent: '#101010', onAccent: '#ffffff' },
   },
   {
     title: 'setActiveChat with a peer',
@@ -412,6 +432,55 @@ describe('onCoreEvent', () => {
   });
 });
 
+describe('window controls', () => {
+  it('minimises the current window', async () => {
+    await minimizeWindow();
+
+    expect(windowApi.minimize).toHaveBeenCalledTimes(1);
+  });
+
+  it('toggles maximize on the current window', async () => {
+    await toggleMaximizeWindow();
+
+    expect(windowApi.toggleMaximize).toHaveBeenCalledTimes(1);
+  });
+
+  it('closes the current window', async () => {
+    await closeWindow();
+
+    expect(windowApi.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports whether the window is maximized', async () => {
+    windowApi.isMaximized.mockResolvedValue(true);
+
+    await expect(isWindowMaximized()).resolves.toBe(true);
+    expect(windowApi.isMaximized).toHaveBeenCalledTimes(1);
+  });
+
+  it('relays resize events and hands back the unlisten function', async () => {
+    const stop = vi.fn();
+    windowApi.onResized.mockResolvedValue(stop);
+    const handler = vi.fn();
+
+    const result = await onWindowResized(handler);
+
+    expect(result).toBe(stop);
+    expect(windowApi.onResized).toHaveBeenCalledTimes(1);
+
+    const delivered = windowApi.onResized.mock.calls[0]?.[0];
+    expect(delivered).toBeTypeOf('function');
+    delivered?.();
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+});
+
 beforeEach(() => {
+  vi.clearAllMocks();
   vi.mocked(invoke).mockResolvedValue(undefined);
+  windowApi.minimize.mockResolvedValue(undefined);
+  windowApi.toggleMaximize.mockResolvedValue(undefined);
+  windowApi.close.mockResolvedValue(undefined);
+  windowApi.isMaximized.mockResolvedValue(false);
+  windowApi.onResized.mockResolvedValue(() => {});
 });

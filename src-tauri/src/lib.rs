@@ -24,6 +24,7 @@ use state::AppState;
 
 mod args;
 mod autostart;
+mod clipboard;
 mod commands;
 mod error;
 mod events;
@@ -45,6 +46,8 @@ macro_rules! ipc_handler {
             $crate::commands::send_message,
             $crate::commands::pick_files,
             $crate::commands::inspect_files,
+            $crate::commands::paste_files,
+            $crate::commands::discard_pasted_file,
             $crate::commands::open_attachment,
             $crate::commands::reveal_attachment,
             $crate::commands::save_attachment,
@@ -61,7 +64,6 @@ macro_rules! ipc_handler {
             $crate::commands::get_settings,
             $crate::commands::update_settings,
             $crate::commands::set_ui_labels,
-            $crate::commands::set_window_accent,
             $crate::commands::set_active_chat,
             $crate::commands::diagnostics,
             $crate::commands::logs_info,
@@ -155,6 +157,7 @@ fn run_inner() -> Result<(), Box<dyn std::error::Error>> {
                 tracing::warn!(%error, path = %attachments.display(), "received files cannot be previewed");
             }
 
+            window::apply_frame(&handle);
             window::install_ready_gate(&handle);
             webview::disable_saved_info(&handle);
             events::spawn_forwarder(&handle);
@@ -222,8 +225,8 @@ fn run_inner() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// The data directory, shared by logging and the core so the two cannot disagree.
-fn resolve_data_dir(
-    app: &tauri::AppHandle,
+fn resolve_data_dir<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
 ) -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
     match data_dir_override() {
         Some(override_dir) => {

@@ -3,6 +3,11 @@ import type { MessageCatalog } from './types';
 export const pt: MessageCatalog = {
   'app.name': 'LocalMe',
 
+  'window.minimize': 'Minimizar',
+  'window.maximize': 'Maximizar',
+  'window.restore': 'Restaurar',
+  'window.close': 'Fechar',
+
   'common.cancel': 'Cancelar',
   'common.delete': 'Eliminar',
   'common.retry': 'Tentar novamente',
@@ -75,6 +80,17 @@ export const pt: MessageCatalog = {
   'chat.fileTooLarge': 'Grande demais (o limite é {max})',
   'chat.fileDirectory': 'Pastas não podem ser enviadas',
   'chat.fileMissing': 'O arquivo não está mais lá',
+  'chat.nothingToPaste': 'Não há arquivos para anexar na área de transferência',
+
+  'imageViewer.label': 'Visualizador de imagens',
+  'imageViewer.open': 'Abrir {name}',
+  'imageViewer.close': 'Fechar o visualizador',
+  'imageViewer.zoomIn': 'Ampliar',
+  'imageViewer.zoomOut': 'Reduzir',
+  'imageViewer.rotateLeft': 'Girar à esquerda',
+  'imageViewer.rotateRight': 'Girar à direita',
+  'imageViewer.reset': 'Ajustar a imagem',
+  'imageViewer.zoomLevel': '{percent} %',
   'chat.attachmentOpen': 'Abrir',
   'chat.attachmentSave': 'Salvar como…',
   'chat.attachmentReveal': 'Mostrar na pasta',

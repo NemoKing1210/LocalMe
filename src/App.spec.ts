@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { createPinia, setActivePinia, type Pinia } from 'pinia';
-import { nextTick } from 'vue';
+import { defineComponent, nextTick } from 'vue';
 import type { VueWrapper } from '@vue/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -9,7 +9,6 @@ vi.mock('@/ipc', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/ipc')>()),
   bootstrap: vi.fn(),
   setUiLabels: vi.fn(),
-  setWindowAccent: vi.fn(),
   logFrontend: vi.fn(),
 }));
 vi.mock('@/app/connect', () => ({ connectCoreEvents: vi.fn() }));
@@ -18,17 +17,23 @@ vi.mock('@/app/ready', () => ({ signalReady: vi.fn() }));
 import * as ipc from '@/ipc';
 import { connectCoreEvents } from '@/app/connect';
 import { signalReady } from '@/app/ready';
+import { TWO_PANE_QUERY } from '@/composables/useMediaQuery';
 import { setLocale, translate } from '@/i18n';
+import { setMediaMatches } from '@/test/matchMedia';
 import { usePeerStore } from '@/stores/peers';
 import { useSettingsStore } from '@/stores/settings';
 import { useUiStore } from '@/stores/ui';
-import { setAccentColor, setThemeMode } from '@/theme/useTheme';
+import { setThemeMode } from '@/theme/useTheme';
 import { makeBootstrap, makePeer, makeSettings } from '@/test/factories';
 import { flushPromises, mountView } from '@/test/mount';
 
 import App from './App.vue';
 
-const DEFAULT_ACCENT = '#6750A4';
+/** The real bar has its own spec; here only its presence in the layout is the subject. */
+const TitleBarMarker = defineComponent({
+  name: 'AppTitleBar',
+  template: '<header class="title-bar-marker" />',
+});
 
 function freshPinia(): Pinia {
   const pinia = createPinia();
@@ -37,7 +42,10 @@ function freshPinia(): Pinia {
 }
 
 async function mountApp(pinia: Pinia): Promise<VueWrapper> {
-  const wrapper = await mountView(App, { pinia });
+  const wrapper = await mountView(App, {
+    pinia,
+    stubs: { AppTitleBar: TitleBarMarker },
+  });
   await flushPromises();
   return wrapper;
 }
@@ -47,13 +55,11 @@ beforeEach(() => {
     makeBootstrap({ settings: makeSettings(), peers: [makePeer({ deviceId: 'device-a' })] }),
   );
   vi.mocked(ipc.setUiLabels).mockResolvedValue(undefined);
-  vi.mocked(ipc.setWindowAccent).mockResolvedValue(undefined);
   vi.mocked(connectCoreEvents).mockResolvedValue(() => {});
   vi.mocked(signalReady).mockResolvedValue(undefined);
 });
 
 afterEach(() => {
-  setAccentColor(DEFAULT_ACCENT);
   setThemeMode('system');
   setLocale('en');
 });
@@ -140,22 +146,31 @@ describe('App', () => {
     expect(second?.open).not.toBe(first?.open);
   });
 
-  it('pushes the window accent from the scheme and again when the scheme changes', async () => {
-    await mountApp(freshPinia());
+  it('draws the title bar when the host removed the native frame', async () => {
+    const wrapper = await mountApp(freshPinia());
 
-    expect(ipc.setWindowAccent).toHaveBeenCalledWith(
-      expect.stringMatching(/^#/),
-      expect.stringMatching(/^#/),
+    expect(wrapper.find('.title-bar-marker').exists()).toBe(true);
+    expect(wrapper.get('.app').attributes('data-title-bar')).toBe('true');
+  });
+
+  it('leaves the bar to the shell when the two-pane layout is on', async () => {
+    setMediaMatches(TWO_PANE_QUERY, true);
+
+    const wrapper = await mountApp(freshPinia());
+
+    // The shell places it inside the detail column, so the list column reaches the top.
+    expect(wrapper.find('.title-bar-marker').exists()).toBe(false);
+    expect(wrapper.get('.app').attributes('data-title-bar')).toBe('false');
+  });
+
+  it('leaves the frame to the system when the host kept it', async () => {
+    vi.mocked(ipc.bootstrap).mockResolvedValue(
+      makeBootstrap({ settings: makeSettings(), customTitlebar: false }),
     );
-    const before = vi.mocked(ipc.setWindowAccent).mock.calls.length;
-    const initial = vi.mocked(ipc.setWindowAccent).mock.calls[0]?.[0];
 
-    setAccentColor('#1B5E20');
-    await nextTick();
+    const wrapper = await mountApp(freshPinia());
 
-    expect(ipc.setWindowAccent).toHaveBeenCalledTimes(before + 1);
-    const updated = vi.mocked(ipc.setWindowAccent).mock.calls.at(-1)?.[0];
-    expect(updated).toMatch(/^#/);
-    expect(updated).not.toBe(initial);
+    expect(wrapper.find('.title-bar-marker').exists()).toBe(false);
+    expect(wrapper.get('.app').attributes('data-title-bar')).toBe('false');
   });
 });
