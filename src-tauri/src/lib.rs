@@ -256,22 +256,12 @@ async fn start_core(
     let settings = core.settings.get().await?;
     let state = Arc::new(AppState::new(core, settings));
 
-    // The platform's autostart state is authoritative over the stored setting.
-    match autostart::is_enabled(app) {
-        Ok(enabled) if enabled != state.settings_snapshot().system.autostart => {
-            tracing::info!(
-                stored = state.settings_snapshot().system.autostart,
-                actual = enabled,
-                "the autostart registration disagrees with the stored setting"
-            );
-            let mut settings = state.settings_snapshot();
-            settings.system.autostart = enabled;
-            if let Err(error) = state.settings.update(settings).await {
-                tracing::warn!(%error, "failed to record the actual autostart state");
-            }
-        }
-        Ok(_) => {}
-        Err(error) => tracing::debug!(%error, "the autostart state could not be read"),
+    // The stored setting is the user's intent: the registration is made to match it, which also
+    // repairs an entry left pointing at another executable by a move, a reinstall or an older
+    // build. A debug or isolated test build skips this, so it cannot rewrite the real entry.
+    let desired = state.settings_snapshot().system.autostart;
+    if let Err(error) = autostart::apply(app, desired) {
+        tracing::warn!(%error, "the autostart registration could not be synchronised");
     }
 
     if let Some(path) = state.core.lock().ok().and_then(|guard| {

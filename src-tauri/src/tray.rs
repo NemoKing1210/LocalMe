@@ -278,8 +278,8 @@ fn open_logs() {
 }
 
 /// Flips one field of the settings document and applies the same side effect the settings screen
-/// does: the start-with-system setting is owned by the operating system, so it is reconciled
-/// with the document after every save.
+/// does: the start-with-system setting is owned by the operating system, so it is applied before
+/// the document is saved.
 fn edit_settings<R: Runtime>(
     app: &AppHandle<R>,
     edit: impl FnOnce(&mut Settings) + Send + 'static,
@@ -296,13 +296,19 @@ fn edit_settings<R: Runtime>(
                 return;
             }
         };
+        let autostart_before = settings.system.autostart;
         edit(&mut settings);
-        match state.settings.update(settings).await {
-            Ok(saved) => {
-                if let Err(error) = crate::autostart::apply(&app, saved.system.autostart) {
-                    tracing::warn!(%error, "failed to apply the autostart registration");
-                }
+        // The start-with-system setting is owned by the operating system. Applying it before
+        // the document is written means a refused change leaves both the document and the menu
+        // on the previous value, rather than showing a switch that did nothing.
+        if settings.system.autostart != autostart_before {
+            if let Err(error) = crate::autostart::apply(&app, settings.system.autostart) {
+                tracing::warn!(%error, "failed to apply the autostart registration");
+                return;
             }
+        }
+        match state.settings.update(settings).await {
+            Ok(_) => {}
             Err(error) => tracing::warn!(%error, "failed to save a settings change from the tray"),
         }
     });

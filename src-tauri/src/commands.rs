@@ -292,18 +292,22 @@ pub async fn get_settings(state: State<'_, Arc<AppState>>) -> Result<Settings, A
 /// # Errors
 ///
 /// [`ApiError::Storage`] if the file could not be written; the previous document stays in
-/// effect.
+/// effect. [`ApiError::Internal`] if the platform refused the autostart change; the document is
+/// not written in that case either.
 #[tauri::command]
 pub async fn update_settings<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, Arc<AppState>>,
     settings: Settings,
 ) -> Result<Settings, ApiError> {
-    let saved = state.settings.update(settings).await?;
-    // The start-with-system setting is owned by the operating system, not by our file, so it is
-    // applied here rather than read from the document at startup.
-    crate::autostart::apply(&app, saved.system.autostart)?;
-    Ok(saved)
+    // The start-with-system setting is owned by the operating system, not by our file. It is
+    // applied before the document is written: if the platform refuses the change, the screen
+    // keeps the switch where it was instead of showing a change that did not happen.
+    let previous = state.settings.get().await?;
+    if previous.system.autostart != settings.system.autostart {
+        crate::autostart::apply(&app, settings.system.autostart)?;
+    }
+    Ok(state.settings.update(settings).await?)
 }
 
 /// # Errors
