@@ -67,6 +67,10 @@ export interface Peer {
   readonly lastSeenMs: UnixMillis | null;
   readonly unread: number;
   readonly notifyMuted: boolean;
+  /** Whether the conversation stays in the block above the rest of the list. */
+  readonly pinned: boolean;
+  /** Position inside the pinned block, ascending; `null` when the row is not pinned. */
+  readonly pinRank: number | null;
   readonly lastActivityMs: UnixMillis | null;
   readonly lastMessage: MessagePreview | null;
 }

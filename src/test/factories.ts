@@ -32,6 +32,8 @@ export function makePeer(overrides: Partial<Peer> = {}): Peer {
     lastSeenMs: FIXED_NOW,
     unread: 0,
     notifyMuted: false,
+    pinned: false,
+    pinRank: null,
     lastActivityMs: FIXED_NOW,
     lastMessage: null,
     ...overrides,

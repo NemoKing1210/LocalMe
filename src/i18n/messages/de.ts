@@ -44,6 +44,9 @@ export const de: MessageCatalog = {
   'users.mute': 'Benachrichtigungen stummschalten',
   'users.unmute': 'Benachrichtigungen wieder einschalten',
   'users.youPreview': 'Du: {body}',
+  'users.pin': 'Anheften',
+  'users.unpin': 'Lösen',
+  'users.pinned': 'Angeheftet',
 
   'forget.title': '{name} vergessen?',
   'forget.body':

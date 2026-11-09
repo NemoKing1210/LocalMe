@@ -105,17 +105,27 @@ describe('UserListItem', () => {
   });
 
   describe('the row menu', () => {
-    it('offers mute and forget, and emits mute when chosen', async () => {
+    it('offers pin first, then mute and forget', async () => {
       const wrapper = await mountItem(makePeer({ notifyMuted: false }));
       await wrapper.get('.md-menu__trigger').trigger('click');
       await flushPromises();
 
       const items = wrapper.findAll('.md-menu__item');
-      expect(items.map((item) => item.text())).toEqual(['Mute notifications', 'Forget…']);
+      expect(items.map((item) => item.text())).toEqual(['Pin', 'Mute notifications', 'Forget…']);
 
       await items[0]!.trigger('click');
-      expect(wrapper.emitted('mute')).toEqual([[]]);
+      expect(wrapper.emitted('pin')).toEqual([[]]);
+      expect(wrapper.emitted('mute')).toBeUndefined();
       expect(wrapper.emitted('forget')).toBeUndefined();
+    });
+
+    it('flips the pin label and shows a glyph once the row is pinned', async () => {
+      const wrapper = await mountItem(makePeer({ pinned: true, pinRank: 0 }));
+      expect(wrapper.find('.user-item__pin').exists()).toBe(true);
+
+      await wrapper.get('.md-menu__trigger').trigger('click');
+      await flushPromises();
+      expect(wrapper.findAll('.md-menu__item')[0]!.text()).toBe('Unpin');
     });
 
     it('flips the mute label and emits forget from the danger item', async () => {
@@ -124,10 +134,10 @@ describe('UserListItem', () => {
       await flushPromises();
 
       const items = wrapper.findAll('.md-menu__item');
-      expect(items[0]!.text()).toBe('Unmute notifications');
-      expect(items[1]!.classes()).toContain('md-menu__item--danger');
+      expect(items[1]!.text()).toBe('Unmute notifications');
+      expect(items[2]!.classes()).toContain('md-menu__item--danger');
 
-      await items[1]!.trigger('click');
+      await items[2]!.trigger('click');
       expect(wrapper.emitted('forget')).toEqual([[]]);
       expect(wrapper.emitted('mute')).toBeUndefined();
     });

@@ -41,6 +41,9 @@ export const zh: MessageCatalog = {
   'users.mute': '静音通知',
   'users.unmute': '取消静音',
   'users.youPreview': '你：{body}',
+  'users.pin': '置顶',
+  'users.unpin': '取消置顶',
+  'users.pinned': '已置顶',
 
   'forget.title': '忘记 {name}？',
   'forget.body': '对方将从你的列表中消失。如果其电脑再次出现在网络上，将作为新联系人添加。',

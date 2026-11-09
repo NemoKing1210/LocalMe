@@ -12,6 +12,7 @@ import { usePresence } from '@/composables/usePresence';
 import type { IconName } from '@/ui/icons';
 import MdAvatar from '@/ui/MdAvatar.vue';
 import MdBadge from '@/ui/MdBadge.vue';
+import MdIcon from '@/ui/MdIcon.vue';
 import MdListItem from '@/ui/MdListItem.vue';
 import MdMenu from '@/ui/MdMenu.vue';
 
@@ -22,6 +23,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   activate: [];
+  pin: [];
   mute: [];
   forget: [];
 }>();
@@ -56,6 +58,11 @@ interface RowMenuAction {
 
 const menuItems = computed<readonly RowMenuAction[]>(() => [
   {
+    id: 'pin',
+    label: i18n.t(props.peer.pinned ? 'users.unpin' : 'users.pin'),
+    icon: 'pin',
+  },
+  {
     id: 'mute',
     label: i18n.t(props.peer.notifyMuted ? 'users.unmute' : 'users.mute'),
     icon: props.peer.notifyMuted ? 'bell-off' : 'bell',
@@ -64,7 +71,8 @@ const menuItems = computed<readonly RowMenuAction[]>(() => [
 ]);
 
 function onMenuSelect(id: string): void {
-  if (id === 'mute') emit('mute');
+  if (id === 'pin') emit('pin');
+  else if (id === 'mute') emit('mute');
   else if (id === 'forget') emit('forget');
 }
 
@@ -98,6 +106,10 @@ function openMenu(event: MouseEvent): void {
     </template>
 
     <template #trailing>
+      <span v-if="peer.pinned" class="user-item__pin">
+        <MdIcon name="pin" :size="16" />
+        <span class="md-visually-hidden">{{ i18n.t('users.pinned') }}</span>
+      </span>
       <MdBadge :value="peer.unread" />
       <MdMenu
         ref="menu"
@@ -116,5 +128,11 @@ function openMenu(event: MouseEvent): void {
  */
 .md-list-item:not(:hover):not(:focus-within) :deep(.md-menu__trigger) {
   display: none;
+}
+
+.user-item__pin {
+  display: flex;
+  align-items: center;
+  color: var(--md-sys-color-outline);
 }
 </style>

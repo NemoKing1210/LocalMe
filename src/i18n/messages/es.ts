@@ -43,6 +43,9 @@ export const es: MessageCatalog = {
   'users.mute': 'Silenciar notificaciones',
   'users.unmute': 'Activar notificaciones',
   'users.youPreview': 'Tú: {body}',
+  'users.pin': 'Fijar',
+  'users.unpin': 'Quitar fijación',
+  'users.pinned': 'Fijado',
 
   'forget.title': '¿Olvidar a {name}?',
   'forget.body':

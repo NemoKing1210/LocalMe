@@ -53,6 +53,8 @@ vi.mock('@/ipc', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/ipc')>()),
   listPeers: vi.fn(),
   setPeerMuted: vi.fn(),
+  setPeerPinned: vi.fn(),
+  reorderPinnedPeers: vi.fn(),
   forgetPeer: vi.fn(),
 }));
 
@@ -188,6 +190,36 @@ describe('UserListView', () => {
     const ui = useUiStore(pinia);
     expect(ui.notice?.key).toBe('error.internal');
     expect(ui.notice?.tone).toBe('error');
+  });
+
+  it('toggles the pin through the peer id when the row asks for it', async () => {
+    const { wrapper } = await mountList([makePeer({ deviceId: 'device-a', pinned: false })]);
+
+    wrapper.findComponent(UserListItem).vm.$emit('pin');
+    await flushPromises();
+
+    expect(ipc.setPeerPinned).toHaveBeenCalledWith('device-a', true);
+  });
+
+  it('pins a row while a search is active', async () => {
+    const { wrapper } = await mountList([makePeer({ deviceId: 'device-b', nickname: 'Bob' })], {
+      query: 'bo',
+    });
+
+    wrapper.findComponent(UserListItem).vm.$emit('pin');
+    await flushPromises();
+
+    expect(ipc.setPeerPinned).toHaveBeenCalledWith('device-b', true);
+  });
+
+  it('reports a failed pin instead of leaving it silent', async () => {
+    vi.mocked(ipc.setPeerPinned).mockRejectedValueOnce(new Error('offline'));
+    const { wrapper, pinia } = await mountList([makePeer({ deviceId: 'device-a' })]);
+
+    wrapper.findComponent(UserListItem).vm.$emit('pin');
+    await flushPromises();
+
+    expect(useUiStore(pinia).notice?.key).toBe('error.internal');
   });
 
   it('forgets the peer, clears the conversation and leaves the address', async () => {

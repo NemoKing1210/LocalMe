@@ -77,6 +77,13 @@ async function onMute(peer: Peer): Promise<void> {
   );
 }
 
+async function onPin(peer: Peer): Promise<void> {
+  await ui.attempt(
+    () => ipc.setPeerPinned(peer.deviceId, !peer.pinned),
+    'the conversation could not be pinned',
+  );
+}
+
 const forgetTarget = ref<Peer | null>(null);
 
 async function onForgetConfirmed(deleteHistory: boolean): Promise<void> {
@@ -142,6 +149,7 @@ async function onForgetConfirmed(deleteHistory: boolean): Promise<void> {
             :peer="row.peer"
             :selected="peers.selectedId === row.peer.deviceId"
             @activate="onActivate(row.peer)"
+            @pin="onPin(row.peer)"
             @mute="onMute(row.peer)"
             @forget="forgetTarget = row.peer"
           />

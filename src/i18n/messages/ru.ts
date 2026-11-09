@@ -43,6 +43,9 @@ export const ru: MessageCatalog = {
   'users.mute': 'Отключить уведомления',
   'users.unmute': 'Включить уведомления',
   'users.youPreview': 'Вы: {body}',
+  'users.pin': 'Закрепить',
+  'users.unpin': 'Открепить',
+  'users.pinned': 'Закреплён',
 
   'forget.title': 'Удалить {name}?',
   'forget.body':

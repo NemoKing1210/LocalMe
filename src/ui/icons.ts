@@ -120,6 +120,11 @@ export const ICONS = {
   ],
   bell: BELL,
   'bell-off': [...BELL, { kind: 'line', x1: 4, y1: 4, x2: 20, y2: 20 }],
+  pin: [
+    { kind: 'path', d: 'M9 4h6' },
+    { kind: 'path', d: 'M10 4v5.2L7.6 13v1.6h8.8V13L14 9.2V4' },
+    { kind: 'line', x1: 12, y1: 14.6, x2: 12, y2: 20.5 },
+  ],
   offline: [
     { kind: 'circle', cx: 12, cy: 12, r: 9 },
     { kind: 'line', x1: 5.6, y1: 5.6, x2: 18.4, y2: 18.4 },

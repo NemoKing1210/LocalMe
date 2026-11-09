@@ -43,6 +43,9 @@ export const fr: MessageCatalog = {
   'users.mute': 'Mettre les notifications en sourdine',
   'users.unmute': 'Réactiver les notifications',
   'users.youPreview': 'Vous : {body}',
+  'users.pin': 'Épingler',
+  'users.unpin': 'Détacher',
+  'users.pinned': 'Épinglé',
 
   'forget.title': 'Oublier {name} ?',
   'forget.body':
