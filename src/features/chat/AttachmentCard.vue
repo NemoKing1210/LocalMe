@@ -1,47 +1,43 @@
 <script setup lang="ts">
 /**
- * One attachment inside a message: its picture when it is an image and it is here, its name and
- * size always, and — while it is moving — how far it has come.
+ * One document inside a message: its name and size always, and — while it is moving — how far it
+ * has come. Pictures are drawn by the gallery and playable media by the media list, so this card
+ * is only ever a file.
  *
  * The card is the whole of the user's control over a transfer, so the actions are on it rather
  * than in a menu: a menu would have to be drawn from inside the bubble's entrance transform.
- * A transfer that failed says so where the file would have been, rather than in a snackbar the
- * reader has already dismissed.
+ * They appear on hover or focus, and are always visible where there is no pointer. A transfer that
+ * failed says so where the file would have been, rather than in a snackbar the reader has already
+ * dismissed.
  */
-import { computed, ref } from 'vue';
+import { computed } from 'vue';
 
 import { useI18n, type MessageKey } from '@/i18n';
 import * as ipc from '@/ipc';
-import type { Attachment, AttachmentState } from '@/ipc';
+import type { Attachment } from '@/ipc';
 import { useUiStore } from '@/stores/ui';
 import MdIcon from '@/ui/MdIcon.vue';
 import MdIconButton from '@/ui/MdIconButton.vue';
 import { fileIconFor } from '@/ui/fileIcons';
 
-import ImageViewer from './ImageViewer.vue';
+import { attachmentStateLabel } from './attachmentLabels';
 
 const props = defineProps<{ attachment: Attachment }>();
 
 const i18n = useI18n();
 const ui = useUiStore();
 
-/** A record so a new host state is a compile error here rather than a silently blank card. */
-const LABELS: Record<AttachmentState, MessageKey | null> = {
-  offered: 'chat.attachmentNotDownloaded',
-  queued: 'chat.attachmentQueued',
-  sending: 'chat.attachmentSending',
-  receiving: 'chat.attachmentReceiving',
-  complete: null,
-  cancelled: 'chat.attachmentCancelled',
-  failed: 'chat.attachmentFailed',
-};
-
-const inFlight = computed(
-  () => !['complete', 'cancelled', 'failed'].includes(props.attachment.state),
+/** Only a transfer that is actually moving has progress and a cancel action. */
+const inFlight = computed(() =>
+  ['queued', 'sending', 'receiving'].includes(props.attachment.state),
 );
 const finished = computed(() => props.attachment.state === 'complete');
 const retryable = computed(
   () => props.attachment.state === 'failed' || props.attachment.state === 'cancelled',
+);
+/** A file the recipient may fetch: this side has the metadata but no bytes. */
+const downloadable = computed(
+  () => props.attachment.state === 'offered' && props.attachment.direction === 'incoming',
 );
 
 const percent = computed(() => {
@@ -49,28 +45,7 @@ const percent = computed(() => {
   return Math.min(100, Math.round((props.attachment.transferred / props.attachment.size) * 100));
 });
 
-const label = computed<MessageKey | null>(() => LABELS[props.attachment.state]);
-
-/** A preview that the web view could not load is not shown again. */
-const previewBroken = ref(false);
-/** Whether the picture is open in the viewer, where it can be zoomed and turned. */
-const viewing = ref(false);
-
-/** Only an image that is actually here has something to render. */
-const preview = computed<string | null>(() => {
-  const { kind, path } = props.attachment;
-  if (previewBroken.value || kind !== 'image' || path === null || !finished.value) return null;
-  return ipc.fileSrc(path);
-});
-
-/**
- * A file that was there a moment ago can be gone, and the web view answers a missing source with a
- * broken-image mark rather than nothing. Falling back to the icon keeps the card readable instead
- * of alarming: the name, the size and the actions are all still there.
- */
-function onPreviewError(): void {
-  previewBroken.value = true;
-}
+const label = computed<MessageKey | null>(() => attachmentStateLabel(props.attachment));
 
 /** The badge for the file's extension; the composer shows the same one for the same file. */
 const glyph = computed(() => fileIconFor(props.attachment.name));
@@ -96,27 +71,18 @@ async function save(): Promise<void> {
     ui.notify('chat.attachmentSaved', { path: saved.value });
   }
 }
+
+/**
+ * Asks the host to fetch the file and save it where the user chooses. The return value is only
+ * the chosen path: whether the copy actually happened is reported later by `attachment_saved`.
+ */
+function download(): void {
+  run(() => ipc.downloadAttachment(props.attachment.id));
+}
 </script>
 
 <template>
   <article class="attachment" :class="{ 'attachment--failed': attachment.state === 'failed' }">
-    <button
-      v-if="preview !== null"
-      type="button"
-      class="attachment__preview"
-      :title="i18n.t('imageViewer.open', { name: attachment.name })"
-      :aria-label="i18n.t('imageViewer.open', { name: attachment.name })"
-      @click="viewing = true"
-    >
-      <img
-        :src="preview"
-        :alt="attachment.name"
-        loading="lazy"
-        decoding="async"
-        @error="onPreviewError"
-      />
-    </button>
-
     <div class="attachment__row">
       <span class="attachment__glyph" aria-hidden="true">
         <component :is="glyph" />
@@ -139,7 +105,14 @@ async function save(): Promise<void> {
         </span>
       </span>
 
-      <span v-if="finished" class="attachment__actions">
+      <span v-if="downloadable" class="attachment__actions">
+        <MdIconButton
+          icon="download"
+          :label="i18n.t('chat.attachmentDownload')"
+          @click="download"
+        />
+      </span>
+      <span v-else-if="finished" class="attachment__actions">
         <MdIconButton
           icon="launch"
           :label="i18n.t('chat.attachmentOpen')"
@@ -173,13 +146,6 @@ async function save(): Promise<void> {
       <MdIcon name="refresh" :size="16" />
       <span>{{ i18n.t('chat.attachmentRetry') }}</span>
     </button>
-
-    <ImageViewer
-      v-if="viewing && preview !== null"
-      :src="preview"
-      :name="attachment.name"
-      @close="viewing = false"
-    />
   </article>
 </template>
 
@@ -191,23 +157,6 @@ async function save(): Promise<void> {
   min-inline-size: 240px;
   max-inline-size: 340px;
   overflow: hidden;
-}
-
-.attachment__preview {
-  display: block;
-  padding: 0;
-  border: none;
-  background: none;
-  cursor: pointer;
-}
-
-.attachment__preview img {
-  display: block;
-  inline-size: 100%;
-  max-block-size: 240px;
-  object-fit: cover;
-  border-radius: var(--md-sys-shape-corner-medium);
-  background: var(--md-sys-color-surface-container-highest);
 }
 
 .attachment__row {
@@ -266,6 +215,23 @@ async function save(): Promise<void> {
   display: inline-flex;
   align-items: center;
   flex: none;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--md-sys-motion-duration-short4) var(--md-sys-motion-easing-standard);
+}
+
+/* The card's actions appear when the card is pointed at or reached by keyboard. */
+.attachment:hover .attachment__actions,
+.attachment:focus-within .attachment__actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+@media (hover: none) {
+  .attachment__actions {
+    opacity: 1;
+    pointer-events: auto;
+  }
 }
 
 .attachment__progress {

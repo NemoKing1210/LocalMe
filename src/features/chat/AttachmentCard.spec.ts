@@ -17,9 +17,9 @@ vi.mock('@/ipc', async (importOriginal) => ({
   openAttachment: vi.fn(),
   revealAttachment: vi.fn(),
   saveAttachment: vi.fn(),
+  downloadAttachment: vi.fn(),
   cancelAttachment: vi.fn(),
   retryAttachment: vi.fn(),
-  fileSrc: vi.fn(),
 }));
 
 import * as ipc from '@/ipc';
@@ -42,10 +42,10 @@ async function mountCard(overrides: Partial<Attachment> = {}): Promise<MountedCa
 }
 
 beforeEach(() => {
-  vi.mocked(ipc.fileSrc).mockImplementation((path: string) => `file://${path}`);
   vi.mocked(ipc.openAttachment).mockResolvedValue(undefined);
   vi.mocked(ipc.revealAttachment).mockResolvedValue(undefined);
   vi.mocked(ipc.saveAttachment).mockResolvedValue(null);
+  vi.mocked(ipc.downloadAttachment).mockResolvedValue(null);
   vi.mocked(ipc.cancelAttachment).mockResolvedValue(undefined);
   vi.mocked(ipc.retryAttachment).mockResolvedValue(undefined);
 });
@@ -189,7 +189,7 @@ describe('an attachment card', () => {
     expect(ui.noticeText).toBe('LocalMe could not read its own database.');
   });
 
-  it('previews an image from fileSrc once it is here', async () => {
+  it('never previews a picture: the gallery draws images', async () => {
     const { wrapper } = await mountCard({
       kind: 'image',
       name: 'cat.png',
@@ -197,65 +197,48 @@ describe('an attachment card', () => {
       state: 'complete',
     });
 
-    const preview = wrapper.find('.attachment__preview img');
-    expect(preview.exists()).toBe(true);
-    expect(preview.attributes('src')).toBe('file:///pics/cat.png');
-    expect(preview.attributes('alt')).toBe('cat.png');
-  });
-
-  it('opens the picture in the viewer rather than in another application', async () => {
-    const { wrapper } = await mountCard({
-      kind: 'image',
-      name: 'cat.png',
-      path: '/pics/cat.png',
-      state: 'complete',
-    });
-
-    await wrapper.get('button[aria-label="Open cat.png"]').trigger('click');
-
-    const dialog = wrapper.get<HTMLDialogElement>('dialog.viewer');
-    expect(dialog.element.open).toBe(true);
-    expect(wrapper.get('.viewer__image').attributes('src')).toBe('file:///pics/cat.png');
-    expect(ipc.openAttachment).not.toHaveBeenCalled();
-
-    await wrapper.get('button[aria-label="Close the viewer"]').trigger('click');
-    expect(wrapper.find('dialog.viewer').exists()).toBe(false);
-  });
-
-  it('does not preview a file, an image without a path, or an unfinished image', async () => {
-    const { wrapper: file } = await mountCard({ kind: 'file', state: 'complete' });
-    expect(file.find('.attachment__preview').exists()).toBe(false);
-
-    const { wrapper: noPath } = await mountCard({
-      kind: 'image',
-      path: null,
-      state: 'complete',
-    });
-    expect(noPath.find('.attachment__preview').exists()).toBe(false);
-
-    const { wrapper: unfinished } = await mountCard({
-      kind: 'image',
-      path: '/pics/cat.png',
-      state: 'sending',
-      transferred: 1,
-    });
-    expect(unfinished.find('.attachment__preview').exists()).toBe(false);
-
-    // The file chip is what these fall back to.
-    expect(file.find('.attachment__glyph').exists()).toBe(true);
-  });
-
-  it('stops showing a preview the web view could not load, keeping the chip', async () => {
-    const { wrapper } = await mountCard({
-      kind: 'image',
-      path: '/pics/cat.png',
-      state: 'complete',
-    });
-
-    await wrapper.find('.attachment__preview img').trigger('error');
-
-    expect(wrapper.find('.attachment__preview').exists()).toBe(false);
+    expect(wrapper.find('img').exists()).toBe(false);
     expect(wrapper.find('.attachment__glyph').exists()).toBe(true);
-    expect(wrapper.find('.attachment__name').text()).toBe('notes.txt');
+  });
+
+  it('offers a download for an incoming file that was not fetched yet', async () => {
+    const { wrapper } = await mountCard({
+      direction: 'incoming',
+      state: 'offered',
+      path: null,
+      id: 'a-9',
+    });
+
+    expect(wrapper.find('.attachment__meta').text()).toContain('Not downloaded');
+    expect(wrapper.find('button[aria-label="Download…"]').exists()).toBe(true);
+    expect(wrapper.find('button[aria-label="Open"]').exists()).toBe(false);
+    expect(wrapper.find('button[aria-label="Save as…"]').exists()).toBe(false);
+    expect(wrapper.find('button[aria-label="Show in folder"]').exists()).toBe(false);
+
+    await wrapper.find('button[aria-label="Download…"]').trigger('click');
+    await flushPromises();
+    expect(ipc.downloadAttachment).toHaveBeenCalledWith('a-9');
+  });
+
+  it('says nothing when the download dialog is dismissed', async () => {
+    const { wrapper, ui } = await mountCard({
+      direction: 'incoming',
+      state: 'offered',
+      path: null,
+    });
+    vi.mocked(ipc.downloadAttachment).mockResolvedValue(null);
+
+    await wrapper.find('button[aria-label="Download…"]').trigger('click');
+    await flushPromises();
+    expect(ui.notice).toBeNull();
+  });
+
+  it('waits quietly on the sending side of an offered file', async () => {
+    const { wrapper } = await mountCard({ direction: 'outgoing', state: 'offered' });
+
+    expect(wrapper.find('.attachment__meta').text()).toContain('Waiting to be downloaded');
+    expect(wrapper.find('button[aria-label="Download…"]').exists()).toBe(false);
+    expect(wrapper.find('button[aria-label="Cancel the transfer"]').exists()).toBe(false);
+    expect(wrapper.find('.attachment__progress').exists()).toBe(false);
   });
 });
