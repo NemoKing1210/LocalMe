@@ -2623,7 +2623,8 @@ mod tests {
         let ok = resolve_files(&peer, message_id, &[small], now).unwrap();
         assert_eq!(ok.len(), 1);
         assert_eq!(ok[0].size, 2);
-        assert_eq!(ok[0].state, AttachmentState::Queued);
+        // A document is announced, not streamed: the recipient asks before any byte moves.
+        assert_eq!(ok[0].state, AttachmentState::Offered);
     }
 
     // ---------------------------------------------------------------------------------
