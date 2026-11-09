@@ -16,9 +16,11 @@ import MdMenu from '@/ui/MdMenu.vue';
 import MessageBubble from './MessageBubble.vue';
 
 // The bubble renders attachment cards, which run host commands through the IPC boundary; a real
-// `invoke` must never fire from a test.
+// `invoke` must never fire from a test. The gallery and the media list also turn stored paths into
+// renderable sources, which needs no web view here.
 vi.mock('@/ipc', async (importOriginal) => ({
   ...(await importOriginal<typeof IpcModule>()),
+  fileSrc: (path: string) => `file://${path}`,
 }));
 
 const i18nApi = useI18n();
@@ -74,6 +76,91 @@ describe('MessageBubble', () => {
     expect(wrapper.findAll('.attachment__name').map((name) => name.text())).toEqual([
       'one.txt',
       'two.txt',
+    ]);
+  });
+
+  it('groups pictures, playable media and documents into one of each', async () => {
+    const wrapper = await mountView(MessageBubble, {
+      props: {
+        message: makeMessage({
+          body: null,
+          attachments: [
+            makeAttachment({
+              id: 'img-1',
+              kind: 'image',
+              name: 'one.png',
+              path: '/tmp/one.png',
+            }),
+            makeAttachment({
+              id: 'img-2',
+              kind: 'image',
+              name: 'two.png',
+              path: '/tmp/two.png',
+            }),
+            makeAttachment({
+              id: 'vid-1',
+              kind: 'video',
+              name: 'clip.mp4',
+              path: '/tmp/clip.mp4',
+            }),
+            makeAttachment({ id: 'aud-1', kind: 'audio', name: 'a.mp3', path: '/tmp/a.mp3' }),
+            makeAttachment({ id: 'aud-2', kind: 'audio', name: 'b.mp3', path: '/tmp/b.mp3' }),
+            makeAttachment({ id: 'doc-1', kind: 'file', name: 'notes.txt' }),
+          ],
+        }),
+        showStatus: true,
+      },
+    });
+
+    expect(wrapper.findAll('.gallery')).toHaveLength(1);
+    expect(wrapper.findAll('.gallery__tile')).toHaveLength(2);
+    expect(wrapper.findAll('.media-list')).toHaveLength(1);
+    expect(wrapper.findAll('.media')).toHaveLength(3);
+    expect(wrapper.findAll('.attachment')).toHaveLength(1);
+    expect(wrapper.find('.attachment__name').text()).toBe('notes.txt');
+  });
+
+  it('renders pictures without any file card or media list', async () => {
+    const wrapper = await mountView(MessageBubble, {
+      props: {
+        message: makeMessage({
+          body: null,
+          attachments: [
+            makeAttachment({ id: 'img-1', kind: 'image', name: 'one.png', path: '/tmp/one.png' }),
+          ],
+        }),
+        showStatus: true,
+      },
+    });
+
+    expect(wrapper.findAll('.gallery')).toHaveLength(1);
+    expect(wrapper.find('.attachment').exists()).toBe(false);
+    expect(wrapper.find('.media-list').exists()).toBe(false);
+  });
+
+  it('keeps the message order inside each group', async () => {
+    const wrapper = await mountView(MessageBubble, {
+      props: {
+        message: makeMessage({
+          body: null,
+          attachments: [
+            makeAttachment({ id: 'aud-1', kind: 'audio', name: 'first.mp3', path: '/tmp/f.mp3' }),
+            makeAttachment({ id: 'img-1', kind: 'image', name: 'first.png', path: '/tmp/f.png' }),
+            makeAttachment({ id: 'aud-2', kind: 'audio', name: 'second.mp3', path: '/tmp/s.mp3' }),
+            makeAttachment({ id: 'img-2', kind: 'image', name: 'second.png', path: '/tmp/s.png' }),
+          ],
+        }),
+        showStatus: true,
+      },
+    });
+
+    expect(wrapper.findAll('.gallery__open img').map((img) => img.attributes('alt'))).toEqual([
+      'first.png',
+      'second.png',
+    ]);
+    expect(wrapper.findAll('.media__name').map((name) => name.text())).toEqual([
+      'first.mp3',
+      'second.mp3',
     ]);
   });
 

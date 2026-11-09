@@ -11,6 +11,8 @@ import MdMenu from '@/ui/MdMenu.vue';
 import type { IconName } from '@/ui/icons';
 
 import AttachmentCard from './AttachmentCard.vue';
+import ImageGallery from './ImageGallery.vue';
+import MediaList from './MediaList.vue';
 
 const props = defineProps<{
   message: Message;
@@ -40,6 +42,22 @@ const GLYPHS: Record<MessageStatus, { readonly icon: IconName; readonly key: Mes
 const DELAYED_AFTER_MS = 5_000;
 
 const outgoing = computed(() => props.message.direction === 'outgoing');
+
+/**
+ * The message's files, split by what the reader does with them: pictures are looked at, sound and
+ * video are played, and everything else is a document. Each group keeps the order it was sent in.
+ */
+const images = computed(() =>
+  props.message.attachments.filter((attachment) => attachment.kind === 'image'),
+);
+const media = computed(() =>
+  props.message.attachments.filter(
+    (attachment) => attachment.kind === 'audio' || attachment.kind === 'video',
+  ),
+);
+const files = computed(() =>
+  props.message.attachments.filter((attachment) => attachment.kind === 'file'),
+);
 
 /** `null` for a message that is not ours and for `received`: both say nothing. */
 const status = computed<{ readonly icon: IconName; readonly label: string } | null>(() => {
@@ -136,7 +154,9 @@ function onMenuSelect(id: string): void {
     @contextmenu.prevent="onContextMenu"
   >
     <div v-if="message.attachments.length > 0" class="bubble__files">
-      <AttachmentCard v-for="file in message.attachments" :key="file.id" :attachment="file" />
+      <ImageGallery v-if="images.length > 0" :attachments="images" />
+      <MediaList v-if="media.length > 0" :attachments="media" />
+      <AttachmentCard v-for="file in files" :key="file.id" :attachment="file" />
     </div>
     <p v-if="message.body !== null" class="md-typescale-body-medium bubble__body" data-selectable>
       {{ message.body }}
