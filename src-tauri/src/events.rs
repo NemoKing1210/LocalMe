@@ -57,8 +57,9 @@ pub fn spawn_forwarder<R: Runtime>(app: &AppHandle<R>) {
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
                         tracing::warn!(skipped, "the interface fell behind the event stream");
                         // A completion may have been in the skipped window: reconcile the saves
-                        // the user already confirmed rather than lose them silently.
-                        reconcile_pending_saves(&app, &state);
+                        // the user already confirmed rather than lose them silently. This runs
+                        // before the next event is read, so no completion can slip past it.
+                        reconcile_pending_saves(&app, &state).await;
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
                 },
@@ -103,23 +104,31 @@ fn handle<R: Runtime>(app: &AppHandle<R>, state: &Arc<AppState>, event: CoreEven
             NoticeLevel::Error => tracing::error!(notice = %message, "core notice"),
             NoticeLevel::Info => tracing::info!(notice = %message, "core notice"),
         },
-        CoreEvent::Attachment { attachment, .. } => match attachment.state {
-            AttachmentState::Complete => {
-                if let Some(target) = state.take_pending_save(attachment.id) {
-                    copy_and_report(app, attachment, target);
-                }
+        CoreEvent::Attachment { attachment, .. } => {
+            if let Some(target) = take_destination(state, attachment) {
+                copy_and_report(app, attachment, target);
             }
-            // A cancelled or failed transfer forgets the destination the user chose: asking
-            // again later must reopen the dialog rather than copy to an old choice.
-            AttachmentState::Cancelled | AttachmentState::Failed => {
-                let _ = state.take_pending_save(attachment.id);
-            }
-            _ => {}
-        },
+        }
         CoreEvent::MessageStatus { .. } | CoreEvent::Stopped => {}
     }
 
     emit_core(app, state, &event);
+}
+
+/// The destination a completion event should copy to, if the user chose one.
+///
+/// A complete transfer takes its destination exactly once, so a duplicated event cannot copy
+/// the same file twice. A cancelled or failed one discards it: asking again has to reopen the
+/// dialog rather than copy to a place the user chose before changing their mind.
+fn take_destination(state: &AppState, attachment: &Attachment) -> Option<PathBuf> {
+    match attachment.state {
+        AttachmentState::Complete => state.take_pending_save(attachment.id),
+        AttachmentState::Cancelled | AttachmentState::Failed => {
+            let _ = state.take_pending_save(attachment.id);
+            None
+        }
+        _ => None,
+    }
 }
 
 /// Copies a completed download to the path the user chose, off the event loop, and reports the
@@ -171,26 +180,47 @@ fn emit_saved<R: Runtime>(app: &AppHandle<R>, id: AttachmentId, path: Option<&Pa
     }
 }
 
+/// What a pending destination found after a lag needs: the file is complete, the transfer is
+/// still running, or the attachment is gone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReconcileAction {
+    Copy,
+    Keep,
+    Drop,
+}
+
+fn reconcile_action(attachment: Option<&Attachment>) -> ReconcileAction {
+    match attachment {
+        Some(attachment) if attachment.state == AttachmentState::Complete => ReconcileAction::Copy,
+        Some(_) => ReconcileAction::Keep,
+        None => ReconcileAction::Drop,
+    }
+}
+
 /// After the event stream lagged: copy the saves that completed in the skipped window, and put
 /// the rest back to wait for their own completion event.
-fn reconcile_pending_saves<R: Runtime>(app: &AppHandle<R>, state: &Arc<AppState>) {
-    let app = app.clone();
-    let state = state.clone();
-    tauri::async_runtime::spawn(async move {
-        for (id, target) in state.take_all_pending_saves() {
-            match state.session.attachment(id).await {
-                Ok(Some(attachment)) if attachment.state == AttachmentState::Complete => {
-                    copy_and_report(&app, &attachment, target);
+///
+/// Runs inline, before the forwarder reads another event. A task would let a completion be
+/// handled while this is still reading its row: the event would find the pending map drained,
+/// this would re-insert the destination, and no later event would ever copy it.
+async fn reconcile_pending_saves<R: Runtime>(app: &AppHandle<R>, state: &Arc<AppState>) {
+    for (id, target) in state.take_all_pending_saves() {
+        match state.session.attachment(id).await {
+            Ok(found) => match reconcile_action(found.as_ref()) {
+                ReconcileAction::Copy => {
+                    if let Some(attachment) = found {
+                        copy_and_report(app, &attachment, target);
+                    }
                 }
-                Ok(Some(_)) => state.set_pending_save(id, target),
-                Ok(None) => {}
-                Err(error) => {
-                    tracing::warn!(%error, %id, "a waiting save could not be reconciled");
-                    state.set_pending_save(id, target);
-                }
+                ReconcileAction::Keep => state.set_pending_save(id, target),
+                ReconcileAction::Drop => {}
+            },
+            Err(error) => {
+                tracing::warn!(%error, %id, "a waiting save could not be reconciled");
+                state.set_pending_save(id, target);
             }
         }
-    });
+    }
 }
 
 fn emit_core<R: Runtime>(app: &AppHandle<R>, state: &AppState, event: &CoreEvent) {
@@ -272,10 +302,115 @@ pub fn emit_open_settings<R: Runtime>(app: &AppHandle<R>) {
 mod tests {
     use super::*;
     use crate::state::test_support;
+    use localme_core::domain::ids::MessageId;
+    use localme_core::domain::{AttachmentKind, Direction, FileName, UnixMillis};
 
-    /// Only `window_is_visible` is reachable without an `AppHandle`; the rest of the module
-    /// emits through one, and the `tauri::test` mock runtime is deliberately not enabled (its
-    /// test binary fails to start on Windows), so it cannot be built here.
+    /// A received document in the state under test, with the fields the decisions read.
+    fn attachment(state: AttachmentState) -> Attachment {
+        Attachment {
+            id: AttachmentId::generate(),
+            message_id: MessageId::generate(),
+            peer: DeviceId::generate(),
+            direction: Direction::Incoming,
+            name: FileName::sanitise("report.pdf"),
+            size: 10,
+            kind: AttachmentKind::File,
+            state,
+            transferred: 0,
+            sha256: None,
+            created_at: UnixMillis(1),
+            path: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_completed_transfer_takes_the_chosen_destination_exactly_once() {
+        let (state, _dir) = test_support::state().await;
+        let complete = attachment(AttachmentState::Complete);
+        state.set_pending_save(complete.id, PathBuf::from("/saved/report.pdf"));
+
+        assert_eq!(
+            take_destination(&state, &complete),
+            Some(PathBuf::from("/saved/report.pdf"))
+        );
+        // A duplicated event must not copy the same file to the same place twice.
+        assert_eq!(take_destination(&state, &complete), None);
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_or_failed_transfer_forgets_the_destination() {
+        let (state, _dir) = test_support::state().await;
+
+        let cancelled = attachment(AttachmentState::Cancelled);
+        state.set_pending_save(cancelled.id, PathBuf::from("/saved/report.pdf"));
+        assert_eq!(take_destination(&state, &cancelled), None);
+
+        let failed = attachment(AttachmentState::Failed);
+        state.set_pending_save(failed.id, PathBuf::from("/saved/report.pdf"));
+        assert_eq!(take_destination(&state, &failed), None);
+
+        // Nothing is left to copy behind the user's back.
+        assert!(state.take_all_pending_saves().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_transfer_in_progress_keeps_its_destination() {
+        let (state, _dir) = test_support::state().await;
+        let receiving = attachment(AttachmentState::Receiving);
+        state.set_pending_save(receiving.id, PathBuf::from("/saved/report.pdf"));
+
+        assert_eq!(take_destination(&state, &receiving), None);
+        assert_eq!(
+            state.take_all_pending_saves(),
+            vec![(receiving.id, PathBuf::from("/saved/report.pdf"))]
+        );
+    }
+
+    #[test]
+    fn a_lagged_pending_save_is_copied_only_once_the_file_is_complete() {
+        assert_eq!(
+            reconcile_action(Some(&attachment(AttachmentState::Complete))),
+            ReconcileAction::Copy
+        );
+        assert_eq!(
+            reconcile_action(Some(&attachment(AttachmentState::Receiving))),
+            ReconcileAction::Keep
+        );
+        // The row is gone: the destination has nothing to be copied from.
+        assert_eq!(reconcile_action(None), ReconcileAction::Drop);
+    }
+
+    /// The payload is what the interface reads; the emit itself needs an `AppHandle`, so the
+    /// shape is pinned here instead.
+    #[test]
+    fn the_saved_event_carries_the_id_and_an_optional_path() {
+        let id = AttachmentId::generate();
+
+        let saved = serde_json::to_value(AttachmentSaved {
+            attachment_id: &id,
+            path: Some("/saved/report.pdf"),
+        })
+        .expect("the payload serialises");
+        assert_eq!(
+            saved,
+            serde_json::json!({ "attachmentId": id.to_string(), "path": "/saved/report.pdf" })
+        );
+
+        let failed = serde_json::to_value(AttachmentSaved {
+            attachment_id: &id,
+            path: None,
+        })
+        .expect("the payload serialises");
+        assert_eq!(
+            failed,
+            serde_json::json!({ "attachmentId": id.to_string(), "path": null })
+        );
+    }
+
+    /// Only `window_is_visible` and the two decision helpers are reachable without an
+    /// `AppHandle`; the rest of the module emits through one, and the `tauri::test` mock runtime
+    /// is deliberately not enabled (its test binary fails to start on Windows), so it cannot be
+    /// built here.
     #[test]
     fn the_event_names_are_the_ones_the_interface_listens_for() {
         assert_eq!(SETTINGS_EVENT, "settings_changed");

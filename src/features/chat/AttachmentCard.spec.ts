@@ -233,6 +233,53 @@ describe('an attachment card', () => {
     expect(ui.notice).toBeNull();
   });
 
+  it('asks where to save again when an incoming document failed', async () => {
+    const { wrapper } = await mountCard({
+      direction: 'incoming',
+      kind: 'file',
+      state: 'failed',
+      path: null,
+      id: 'a-10',
+    });
+
+    const recovery = wrapper.find('.attachment__retry');
+    expect(recovery.text()).toContain('Download…');
+
+    await recovery.trigger('click');
+    await flushPromises();
+    expect(ipc.downloadAttachment).toHaveBeenCalledWith('a-10');
+    expect(ipc.retryAttachment).not.toHaveBeenCalled();
+  });
+
+  it('still retries a media transfer without asking where to save it', async () => {
+    const { wrapper } = await mountCard({
+      direction: 'incoming',
+      kind: 'audio',
+      state: 'failed',
+      id: 'a-11',
+    });
+
+    expect(wrapper.find('.attachment__retry').text()).toContain('Send it again');
+    await wrapper.find('.attachment__retry').trigger('click');
+    await flushPromises();
+    expect(ipc.retryAttachment).toHaveBeenCalledWith('a-11');
+    expect(ipc.downloadAttachment).not.toHaveBeenCalled();
+  });
+
+  it('never asks the sender where to save their own document', async () => {
+    const { wrapper } = await mountCard({
+      direction: 'outgoing',
+      kind: 'file',
+      state: 'failed',
+      id: 'a-12',
+    });
+
+    expect(wrapper.find('.attachment__retry').text()).toContain('Send it again');
+    await wrapper.find('.attachment__retry').trigger('click');
+    await flushPromises();
+    expect(ipc.retryAttachment).toHaveBeenCalledWith('a-12');
+  });
+
   it('waits quietly on the sending side of an offered file', async () => {
     const { wrapper } = await mountCard({ direction: 'outgoing', state: 'offered' });
 

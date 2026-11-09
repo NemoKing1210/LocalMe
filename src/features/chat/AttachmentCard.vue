@@ -39,6 +39,17 @@ const retryable = computed(
 const downloadable = computed(
   () => props.attachment.state === 'offered' && props.attachment.direction === 'incoming',
 );
+/**
+ * A document whose transfer stopped has no destination any more: the recovery is another
+ * Download…, which asks where to save before fetching, not a plain resume that would leave the
+ * user with no copy.
+ */
+const asksAgain = computed(
+  () =>
+    retryable.value &&
+    props.attachment.direction === 'incoming' &&
+    props.attachment.kind === 'file',
+);
 
 const percent = computed(() => {
   if (props.attachment.size === 0) return 100;
@@ -141,10 +152,12 @@ function download(): void {
       v-if="retryable"
       type="button"
       class="md-typescale-label-large attachment__retry"
-      @click="run(() => ipc.retryAttachment(attachment.id))"
+      @click="asksAgain ? download() : run(() => ipc.retryAttachment(attachment.id))"
     >
-      <MdIcon name="refresh" :size="16" />
-      <span>{{ i18n.t('chat.attachmentRetry') }}</span>
+      <MdIcon :name="asksAgain ? 'download' : 'refresh'" :size="16" />
+      <span>
+        {{ i18n.t(asksAgain ? 'chat.attachmentDownload' : 'chat.attachmentRetry') }}
+      </span>
     </button>
   </article>
 </template>

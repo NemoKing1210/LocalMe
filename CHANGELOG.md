@@ -12,7 +12,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - **Files arrive only when asked for.** A received document is announced with its name and size
   but is not transferred; hovering or focusing its card reveals **Download…**, which asks where
   to save it and fetches it only then. The chosen destination is forgotten if the download is
-  cancelled, and a request made while the peer is away is fulfilled when it reconnects.
+  cancelled, and a request made while the peer is away is fulfilled when it reconnects. A failed
+  or cancelled download offers **Download…** again and asks where to save before fetching.
 - **Pictures arrive as a gallery.** Several images in one message form a mosaic of tiles; one is
   shown large. Every tile still opens the full viewer and keeps open / save as / show in folder.
 - **Sound and video play in the conversation.** Audio and video are received immediately and
