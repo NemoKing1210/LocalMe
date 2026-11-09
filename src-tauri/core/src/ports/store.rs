@@ -193,6 +193,14 @@ pub trait Store: Send + Sync + 'static {
         device_id: DeviceId,
     ) -> impl Future<Output = Result<Vec<ChatMessage>, StorageError>> + Send;
 
+    /// Incoming attachments that were requested but have received nothing: what a reconnect
+    /// must ask for again. An interrupted transfer with bytes on disk resumes on its own and is
+    /// not included.
+    fn incoming_attachments_without_bytes(
+        &self,
+        device_id: DeviceId,
+    ) -> impl Future<Output = Result<Vec<AttachmentId>, StorageError>> + Send;
+
     /// How many bytes are known to have arrived. Written on every acknowledgement, so a crash
     /// loses at most one window of progress.
     fn set_attachment_progress(

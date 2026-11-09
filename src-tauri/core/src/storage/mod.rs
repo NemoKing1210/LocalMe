@@ -141,6 +141,10 @@ enum Request {
         device_id: DeviceId,
         reply: Reply<Vec<ChatMessage>>,
     },
+    IncomingWithoutBytes {
+        device_id: DeviceId,
+        reply: Reply<Vec<AttachmentId>>,
+    },
     SetAttachmentProgress {
         id: AttachmentId,
         transferred: u64,
@@ -409,6 +413,9 @@ fn dispatch(conn: &mut Connection, files: &Path, request: Request) {
         Request::UnfinishedAttachments { device_id, reply } => {
             let _ = reply.send(messages_with_unfinished_attachments(conn, files, device_id));
         }
+        Request::IncomingWithoutBytes { device_id, reply } => {
+            let _ = reply.send(incoming_attachments_without_bytes(conn, device_id));
+        }
         Request::SetAttachmentProgress {
             id,
             transferred,
@@ -676,6 +683,12 @@ impl AttachmentRow {
             ),
             Direction::Incoming => None,
         };
+        // The name is authoritative for the kind — the protocol derives it from the name too —
+        // but the stored column is still validated, so a corrupted row is reported rather than
+        // silently reinterpreted.
+        AttachmentKind::from_db(&self.kind)
+            .map_err(|error| invalid_row(format!("attachment kind: {error}")))?;
+        let kind = AttachmentKind::of(&name);
         Ok(Attachment {
             id,
             message_id: parse_message_id(&self.message_id)?,
@@ -684,8 +697,7 @@ impl AttachmentRow {
             name,
             size: u64::try_from(self.size)
                 .map_err(|_| invalid_row(format!("attachment size {}", self.size)))?,
-            kind: AttachmentKind::from_db(&self.kind)
-                .map_err(|error| invalid_row(format!("attachment kind: {error}")))?,
+            kind,
             state,
             transferred: u64::try_from(self.transferred).unwrap_or(0),
             sha256: parse_sha256(self.sha256)?,
@@ -1158,7 +1170,7 @@ fn messages_with_unfinished_attachments(
              WHERE m.peer_id = ?1 AND m.outgoing = 1 \
                AND EXISTS (SELECT 1 FROM attachments a \
                             WHERE a.message_id = m.id AND a.outgoing = 1 \
-                              AND a.state IN ('queued', 'sending')) \
+                              AND a.state IN ('queued', 'sending', 'offered')) \
              ORDER BY m.sent_at_ms, m.id"
         ))
         .map_err(sqlite_error)?;
@@ -1173,6 +1185,32 @@ fn messages_with_unfinished_attachments(
         .collect::<Result<Vec<ChatMessage>, StorageError>>()?;
     load_attachments(conn, files, &mut messages)?;
     Ok(messages)
+}
+
+/// Incoming attachments that were requested but have received nothing: what a reconnect must ask
+/// for again. A transfer that has bytes on disk resumes on its own and is not listed.
+fn incoming_attachments_without_bytes(
+    conn: &Connection,
+    device_id: DeviceId,
+) -> Result<Vec<AttachmentId>, StorageError> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id FROM attachments \
+             WHERE peer_id = ?1 AND outgoing = 0 AND state = 'receiving' \
+               AND transferred = 0 AND path IS NULL \
+             ORDER BY created_at_ms, id",
+        )
+        .map_err(sqlite_error)?;
+    let rows = stmt
+        .query_map(params![device_id.to_string()], |row| {
+            row.get::<_, String>(0)
+        })
+        .map_err(sqlite_error)?;
+    rows.map(|row| {
+        let raw = row.map_err(sqlite_error)?;
+        parse_attachment_id(&raw)
+    })
+    .collect()
 }
 
 fn read_attachment(
@@ -1560,6 +1598,14 @@ impl Store for SqliteStore {
         device_id: DeviceId,
     ) -> Result<Vec<ChatMessage>, StorageError> {
         self.call(|reply| Request::UnfinishedAttachments { device_id, reply })
+            .await
+    }
+
+    async fn incoming_attachments_without_bytes(
+        &self,
+        device_id: DeviceId,
+    ) -> Result<Vec<AttachmentId>, StorageError> {
+        self.call(|reply| Request::IncomingWithoutBytes { device_id, reply })
             .await
     }
 
@@ -2536,6 +2582,82 @@ mod tests {
             "a complete incoming file reports the path it landed on"
         );
         assert_eq!(complete.sha256, Some(digest));
+    }
+
+    #[tokio::test]
+    async fn an_offered_attachment_counts_as_unfinished() {
+        let (_dir, store) = open_store();
+        let peer = profile(43, "Offered");
+        store.upsert_peer_seen(&peer, None, Some(1)).await.unwrap();
+
+        let mut message = outgoing(peer.device_id, 1, MessageStatus::Delivered);
+        let file = attachment_for(1, &message, "report.pdf", AttachmentState::Offered, None);
+        message.attachments = vec![file];
+        store.insert_message(&message).await.unwrap();
+
+        let unfinished = store
+            .messages_with_unfinished_attachments(peer.device_id)
+            .await
+            .unwrap();
+        assert_eq!(
+            unfinished.iter().map(|m| m.id).collect::<Vec<_>>(),
+            vec![message.id],
+            "an offered document must be re-announced after a reconnect"
+        );
+    }
+
+    #[tokio::test]
+    async fn incoming_attachments_without_bytes_lists_only_zero_byte_receiving_rows() {
+        let (_dir, store) = open_store();
+        let peer = profile(44, "Bytes");
+        store.upsert_peer_seen(&peer, None, Some(1)).await.unwrap();
+
+        let mut message = incoming(peer.device_id, 1, true);
+        message.attachments = vec![
+            attachment_for(1, &message, "waiting.bin", AttachmentState::Receiving, None),
+            attachment_for(2, &message, "running.bin", AttachmentState::Receiving, None),
+            attachment_for(3, &message, "announced.bin", AttachmentState::Offered, None),
+        ];
+        store.insert_message(&message).await.unwrap();
+        store
+            .set_attachment_progress(message.attachments[1].id, 10)
+            .await
+            .unwrap();
+
+        let ids = store
+            .incoming_attachments_without_bytes(peer.device_id)
+            .await
+            .unwrap();
+        assert_eq!(
+            ids,
+            vec![message.attachments[0].id],
+            "only a requested transfer that has received nothing is asked for again"
+        );
+    }
+
+    #[test]
+    fn a_row_stored_as_file_reads_back_with_the_kind_its_name_implies() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = raw_connection(&dir);
+        let (device, message) = seed_message(&conn);
+        let id = AttachmentId::generate();
+        conn.execute(
+            "INSERT INTO attachments \
+               (id, message_id, peer_id, outgoing, name, size, kind, state, transferred, \
+                sha256, path, created_at_ms) \
+             VALUES (?1, ?2, ?3, 0, 'clip.mp3', 10, 'file', 'receiving', 0, NULL, NULL, 1)",
+            params![id.to_string(), message, device],
+        )
+        .unwrap();
+
+        let stored = read_attachment(&conn, Path::new("."), id)
+            .unwrap()
+            .expect("stored");
+        assert_eq!(
+            stored.kind,
+            AttachmentKind::Audio,
+            "the name is authoritative for the kind; the column is only validated"
+        );
     }
 
     #[tokio::test]

@@ -2223,9 +2223,33 @@ mod tests {
                 .filter(|m| {
                     m.attachments.iter().any(|a| {
                         a.direction == Direction::Outgoing
-                            && matches!(a.state, AttachmentState::Queued | AttachmentState::Sending)
+                            && matches!(
+                                a.state,
+                                AttachmentState::Queued
+                                    | AttachmentState::Sending
+                                    | AttachmentState::Offered
+                            )
                     })
                 })
+                .collect())
+        }
+
+        async fn incoming_attachments_without_bytes(
+            &self,
+            device_id: DeviceId,
+        ) -> Result<Vec<AttachmentId>, StorageError> {
+            fail_guard!(self.lock().fail.unfinished);
+            let g = self.lock();
+            Ok(g.attachments
+                .values()
+                .filter(|a| {
+                    a.peer == device_id
+                        && a.direction == Direction::Incoming
+                        && a.state == AttachmentState::Receiving
+                        && a.transferred == 0
+                        && a.path.is_none()
+                })
+                .map(|a| a.id)
                 .collect())
         }
 
