@@ -1291,6 +1291,130 @@ async fn an_interrupted_transfer_resumes_from_where_the_recipient_stopped() {
     reopened.shutdown().await;
 }
 
+/// A document is announced but not streamed; a picture in the same message arrives unasked.
+///
+/// This is the whole of the deferred-download promise at the integration level: the recipient's
+/// disk grows for a picture on its own, and for a document only after someone asks for it.
+#[tokio::test]
+async fn a_document_waits_for_a_request_and_an_image_does_not() {
+    let anna = Instance::start("anna").await;
+    let boris = Instance::start("boris").await;
+    anna.discover(&boris, "boris").await;
+    eventually(
+        "boris to appear online for anna",
+        Duration::from_secs(10),
+        || async {
+            anna.peer(boris.device_id())
+                .await
+                .is_some_and(|peer| peer.online)
+        },
+    )
+    .await;
+
+    let document_source = anna._data_dir.path().join("notes.txt");
+    let image_source = anna._data_dir.path().join("photo.png");
+    std::fs::write(&document_source, b"the whole document").expect("write the document");
+    std::fs::write(&image_source, b"\x89PNG\r\n\x1a\nnot really a picture")
+        .expect("write the picture");
+
+    let sent = anna
+        .core
+        .session
+        .send_message(boris.device_id(), None, vec![document_source, image_source])
+        .await
+        .expect("the message is accepted");
+    assert_eq!(sent.attachments.len(), 2);
+    let document = sent.attachments[0].id;
+    let image = sent.attachments[1].id;
+    let anna_id = anna.device_id();
+
+    // The picture is meant to be seen, so it travels without being asked for.
+    eventually(
+        "the picture to arrive unasked",
+        Duration::from_secs(30),
+        || async {
+            boris
+                .core
+                .session
+                .history(anna_id, None, 10)
+                .await
+                .map(|page| {
+                    page.iter()
+                        .flat_map(|message| message.attachments.iter())
+                        .any(|attachment| {
+                            attachment.id == image && attachment.state == AttachmentState::Complete
+                        })
+                })
+                .unwrap_or(false)
+        },
+    )
+    .await;
+
+    // The document has only been described: its name and size, and no bytes.
+    eventually("the offer to arrive", Duration::from_secs(10), || async {
+        boris
+            .core
+            .session
+            .history(anna_id, None, 10)
+            .await
+            .map(|page| {
+                page.iter()
+                    .flat_map(|message| message.attachments.iter())
+                    .any(|attachment| attachment.id == document)
+            })
+            .unwrap_or(false)
+    })
+    .await;
+    let page = boris
+        .core
+        .session
+        .history(anna_id, None, 10)
+        .await
+        .expect("history");
+    let offered = page
+        .iter()
+        .flat_map(|message| message.attachments.iter())
+        .find(|attachment| attachment.id == document)
+        .expect("the document");
+    assert_eq!(offered.state, AttachmentState::Offered);
+    assert!(
+        offered.path.is_none(),
+        "an offer must not have written anything to disk"
+    );
+
+    // Asking for it starts the transfer, and it completes into the recipient's storage.
+    boris
+        .core
+        .session
+        .download_attachment(document)
+        .await
+        .expect("the request is accepted");
+    eventually(
+        "the document to arrive after a request",
+        Duration::from_secs(30),
+        || async {
+            boris
+                .core
+                .session
+                .history(anna_id, None, 10)
+                .await
+                .map(|page| {
+                    page.iter()
+                        .flat_map(|message| message.attachments.iter())
+                        .any(|attachment| {
+                            attachment.id == document
+                                && attachment.state == AttachmentState::Complete
+                        })
+                })
+                .unwrap_or(false)
+        },
+    )
+    .await;
+
+    anna.core.shutdown().await;
+    boris.core.shutdown().await;
+}
+
 /// Both peers dial at once, which is what actually happens on a LAN.
 ///
 /// Exactly one of the two connections survives the tie-break, and the loser's goodbye must not

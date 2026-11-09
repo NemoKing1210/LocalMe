@@ -5,6 +5,20 @@ All notable changes to LocalMe are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.0] - 2026-11-10
+
+### Added
+
+- **Files arrive only when asked for.** A received document is announced with its name and size
+  but is not transferred; hovering or focusing its card reveals **Download…**, which asks where
+  to save it and fetches it only then. The chosen destination is forgotten if the download is
+  cancelled, and a request made while the peer is away is fulfilled when it reconnects.
+- **Pictures arrive as a gallery.** Several images in one message form a mosaic of tiles; one is
+  shown large. Every tile still opens the full viewer and keeps open / save as / show in folder.
+- **Sound and video play in the conversation.** Audio and video are received immediately and
+  listed with inline players, with the same open / save / reveal actions; a format the platform
+  cannot decode falls back to those actions instead of a broken player.
+
 ## [0.13.0] - 2026-11-09
 
 ### Added

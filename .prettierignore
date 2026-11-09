@@ -9,3 +9,4 @@ package-lock.json
 # Local development artifacts, as in .gitignore
 .local-instances/
 *.local
+.superpowers/

@@ -246,7 +246,7 @@ allowed to pretend they can talk.
 | `file_done` | sender → recipient | `attachment, sha256` | the last chunk is out; the digest of the whole file |
 | `file_ack` | recipient → sender | `attachment, received, state` | the recipient's position, and whether the file is stored |
 | `file_cancel` | both | `attachment, reason` | the transfer is over and will not resume by itself |
-| `file_request` | recipient → sender | `attachment` | "send me this file": a retry after a failure |
+| `file_request` | recipient → sender | `attachment` | ask for a file that has not been downloaded (also a retry) |
 | `profile` | both | `nickname, avatar_seed` | nickname change, re-broadcast to all live sessions |
 | `goodbye` | both | `reason` | graceful shutdown; recipient goes offline immediately |
 | `error` | both | `code, message` | recoverable protocol error, then close |
@@ -474,10 +474,25 @@ cancelled attachment and answered with `file_cancel{too_large}`, so the message 
 the user sees what someone tried to send — and the link stays up. A malformed attachment list,
 by contrast, is a broken peer and closes the connection (§5.5).
 
+**Documents wait for a request; pictures and playable media do not.** An attachment is one of
+`image`, `audio`, `video` or `file`, derived from its sanitised name on both ends. The first three
+are meant to be seen or played, so they stream as soon as they are announced. A `file` is stored
+on the recipient as `offered`: the name, the size and the digest are known, but no byte moves.
+The card then shows **Download…**, and the host's `download_attachment` command asks the platform
+where to save the file and sends `file_request`; the sender revives the row to `queued` and
+streams it. A `file_request` for a `complete` row is ignored, and a disconnect re-sends the
+request for every offered row that has received nothing, so a download asked for while the peer
+was away is fulfilled when it returns. When the transfer completes, the host copies the file from
+internal storage to the chosen path (the internal copy stays) and emits
+`attachment_saved { attachmentId, path }` — `path: null` meaning the copy failed. That event,
+not the command's return value, is what the interface reports.
+
 **Transfers are visible while they happen.** The session emits an `attachment` event with the
 whole row on every acknowledgement, on completion and on failure, and the interface renders it
-on the file's own card in the bubble: a progress bar, the state, and the actions (open, save,
-show in folder, cancel, retry).
+beside the file: a progress bar, the state, and the actions (open, save as, show in folder,
+download, cancel, retry). Pictures form a gallery of tiles, audio and video a list with inline
+players, and documents one card each; a card's actions appear on hover or focus, and are always
+visible on a touch screen.
 
 ---
 
@@ -587,8 +602,8 @@ CREATE TABLE attachments (
   outgoing      INTEGER NOT NULL,
   name          TEXT NOT NULL,            -- sanitised: a safe path component, never a path
   size          INTEGER NOT NULL,         -- what the sender announced; checked again on write
-  kind          TEXT NOT NULL,            -- image|file, derived from the name
-  state         TEXT NOT NULL,            -- queued|sending|receiving|complete|cancelled|failed
+  kind          TEXT NOT NULL,            -- image|audio|video|file, derived from the name
+  state         TEXT NOT NULL,            -- offered|queued|sending|receiving|complete|cancelled|failed
   transferred   INTEGER NOT NULL DEFAULT 0,
   sha256        TEXT,                     -- the whole-file digest, once one is known
   path          TEXT,                     -- outgoing: the source; incoming: derived from id
@@ -682,7 +697,7 @@ one mailbox so every state change is sequential. Outputs are `CoreEvent`s on a b
 
 Commands: `SendMessage` (text and/or files), `LoadHistory`, `MarkRead`, `ForgetPeer`,
 `ListPeers`, `GetProfile`, `SetNickname`, `SetNotifyMuted`, `Attachment`, `CancelAttachment`,
-`RetryAttachment`, `Shutdown`.
+`RetryAttachment`, `DownloadAttachment`, `Shutdown`.
 
 The transfer pump is not a task of its own. A file is written from the session loop, eight
 chunks per turn, on a deadline the token bucket sets — so the actor stays single-threaded and
