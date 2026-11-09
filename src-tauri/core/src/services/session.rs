@@ -356,6 +356,8 @@ impl PeerEntry {
             last_seen_ms: self.stored.last_seen_ms,
             unread: self.stored.unread,
             notify_muted: self.stored.notify_muted,
+            pinned: self.stored.pinned,
+            pin_rank: self.stored.pin_rank,
             last_activity_ms: self.last_activity_ms,
             last_message: self.stored.last_message.clone(),
         }

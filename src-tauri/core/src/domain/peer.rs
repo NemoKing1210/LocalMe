@@ -87,6 +87,10 @@ pub struct PeerView {
     pub last_seen_ms: Option<i64>,
     pub unread: u32,
     pub notify_muted: bool,
+    /// Whether this conversation stays in the block above the rest of the list.
+    pub pinned: bool,
+    /// Position inside the pinned block, ascending. `None` when the row is not pinned.
+    pub pin_rank: Option<i64>,
     /// Newest of `last_seen_ms` and the last message timestamp, in milliseconds.
     ///
     /// Carried explicitly rather than recomputed in the front end so "last activity" cannot
@@ -111,18 +115,29 @@ impl PeerView {
         self.last_activity_ms.unwrap_or(i64::MIN)
     }
 
-    /// Unread first, then online, then most recent activity, then nickname **ascending**.
-    /// The last term is not cosmetic: without it the order is not total, and two devices
-    /// receiving the same events in a different order would show a different list.
+    /// Pinned first, ordered by their manual rank; then the unpinned block: unread first,
+    /// online, most recent activity, nickname **ascending**, device id. The final identifier
+    /// term is not cosmetic: without it the order is not total, and two devices receiving the
+    /// same events in a different order would show a different list.
     pub fn sort_for_display(peers: &mut [Self]) {
-        peers.sort_by(|a, b| {
-            let a_unread = u8::from(a.unread > 0);
-            let b_unread = u8::from(b.unread > 0);
-            b_unread
-                .cmp(&a_unread)
-                .then_with(|| b.online.cmp(&a.online))
-                .then_with(|| b.activity().cmp(&a.activity()))
-                .then_with(|| a.nickname.as_str().cmp(b.nickname.as_str()))
+        peers.sort_by(|a, b| match (a.pinned, b.pinned) {
+            (true, true) => a
+                .pin_rank
+                .unwrap_or(i64::MAX)
+                .cmp(&b.pin_rank.unwrap_or(i64::MAX))
+                .then_with(|| a.device_id.cmp(&b.device_id)),
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            (false, false) => {
+                let a_unread = u8::from(a.unread > 0);
+                let b_unread = u8::from(b.unread > 0);
+                b_unread
+                    .cmp(&a_unread)
+                    .then_with(|| b.online.cmp(&a.online))
+                    .then_with(|| b.activity().cmp(&a.activity()))
+                    .then_with(|| a.nickname.as_str().cmp(b.nickname.as_str()))
+                    .then_with(|| a.device_id.cmp(&b.device_id))
+            }
         });
     }
 
@@ -155,7 +170,15 @@ mod tests {
             notify_muted: false,
             last_activity_ms: activity,
             last_message: None,
+            pinned: false,
+            pin_rank: None,
         }
+    }
+
+    fn pinned(mut peer: PeerView, rank: i64) -> PeerView {
+        peer.pinned = true;
+        peer.pin_rank = Some(rank);
+        peer
     }
 
     #[test]
@@ -212,6 +235,46 @@ mod tests {
         PeerView::sort_for_display(&mut backward);
         assert_eq!(forward, backward);
         assert_eq!(forward.first().map(|p| p.nickname.as_str()), Some("alice"));
+    }
+
+    #[test]
+    fn pinned_rows_sort_above_unread_and_online_rows() {
+        let mut peers = vec![
+            peer(1, "unread-online", true, 4, Some(9_000)),
+            pinned(peer(2, "pinned-offline", false, 0, Some(1_000)), 0),
+        ];
+        PeerView::sort_for_display(&mut peers);
+        assert_eq!(peers.first().unwrap().nickname.as_str(), "pinned-offline");
+    }
+
+    #[test]
+    fn pinned_rows_keep_their_manual_rank_above_activity() {
+        let mut peers = vec![
+            pinned(peer(1, "second", true, 9, Some(9_000)), 1),
+            pinned(peer(2, "first", false, 0, Some(1_000)), 0),
+        ];
+        PeerView::sort_for_display(&mut peers);
+        let order: Vec<&str> = peers.iter().map(|p| p.nickname.as_str()).collect();
+        assert_eq!(order, vec!["first", "second"]);
+    }
+
+    #[test]
+    fn equal_pin_ranks_fall_back_to_the_device_id() {
+        let mut forward = vec![
+            pinned(peer(7, "b", true, 0, None), 0),
+            pinned(peer(8, "a", true, 0, None), 0),
+        ];
+        let mut backward = vec![
+            pinned(peer(8, "a", true, 0, None), 0),
+            pinned(peer(7, "b", true, 0, None), 0),
+        ];
+        PeerView::sort_for_display(&mut forward);
+        PeerView::sort_for_display(&mut backward);
+        assert_eq!(forward, backward);
+        assert_eq!(
+            forward.first().unwrap().device_id,
+            DeviceId::from_uuid(uuid::Uuid::from_u128(7))
+        );
     }
 
     #[test]

@@ -88,6 +88,8 @@ mod tests {
             notify_muted: false,
             last_activity_ms: None,
             last_message: None,
+            pinned: false,
+            pin_rank: None,
         }
     }
 
