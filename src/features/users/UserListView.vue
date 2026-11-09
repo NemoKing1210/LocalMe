@@ -127,6 +127,10 @@ function stopListening(): void {
 }
 
 function onRowPointerDown(peer: Peer, event: PointerEvent): void {
+  // Every click is preceded by its own press, so a new press retires the suppression the last
+  // drop left behind. The click that ends a drag lands on the list rather than a row, so no row
+  // handler sees it; clearing here is what keeps it from eating this press's click.
+  suppressClick = false;
   if (event.button !== 0 || !peer.pinned || !canReorder.value) return;
 
   // The trailing menu button owns its own presses; a drag must not start from it.
@@ -134,7 +138,6 @@ function onRowPointerDown(peer: Peer, event: PointerEvent): void {
   if (target instanceof Element && target.closest('.md-list-item__trailing') !== null) return;
 
   stopListening();
-  suppressClick = false;
   drag.value = {
     deviceId: peer.deviceId,
     pointerId: event.pointerId,
@@ -210,7 +213,11 @@ function dragOffset(peer: Peer): string | undefined {
 
   const index = order.indexOf(peer.deviceId);
   if (index === -1) return undefined;
-  return `translateY(${state.lastY - (state.listTop + index * ROW_HEIGHT + ROW_HEIGHT / 2)}px)`;
+  // The row lives in the scrolled content, so its on-screen centre is the list's top minus the
+  // scroll offset: the pointer has to be measured from there, not from the unscrolled top.
+  const scrollTop = scroll.value?.scrollTop ?? 0;
+  const centre = state.listTop - scrollTop + index * ROW_HEIGHT + ROW_HEIGHT / 2;
+  return `translateY(${state.lastY - centre}px)`;
 }
 
 function onMove(peer: Peer, delta: number): void {

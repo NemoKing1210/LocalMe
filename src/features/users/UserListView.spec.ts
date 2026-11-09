@@ -278,6 +278,54 @@ describe('UserListView', () => {
     expect(ipc.reorderPinnedPeers).toHaveBeenCalledWith(['device-b', 'device-a']);
   });
 
+  it('keeps the dragged row under the pointer when the list is scrolled', async () => {
+    const { wrapper } = await mountList([
+      pinnedRow('device-a', 'Ann', 0),
+      pinnedRow('device-b', 'Ben', 1),
+    ]);
+    wrapper.get('.users__scroll').element.scrollTop = 100;
+    const first = wrapper.findAll('.users__row')[0]!.element;
+
+    first.dispatchEvent(
+      new PointerEvent('pointerdown', { bubbles: true, button: 0, pointerId: 1, clientY: 10 }),
+    );
+    window.dispatchEvent(new PointerEvent('pointermove', { pointerId: 1, clientY: 90 }));
+    await flushPromises();
+
+    // Row centres live in content space: listTop - scrollTop + index * 72 + 36. After the move
+    // the dragged row sits at index 1, so its centre is 8 and the pointer is 82 pixels below it.
+    expect(wrapper.findAll('.users__row')[1]!.attributes('style')).toContain('translateY(82px)');
+    wrapper.unmount();
+  });
+
+  it('does not swallow the first click after a drag', async () => {
+    const { wrapper, router } = await mountList([
+      pinnedRow('device-a', 'Ann', 0),
+      pinnedRow('device-b', 'Ben', 1),
+      makePeer({ deviceId: 'device-c', nickname: 'Cid', pinned: false }),
+    ]);
+    const rows = wrapper.findAll('.users__row');
+
+    rows[0]!.element.dispatchEvent(
+      new PointerEvent('pointerdown', { bubbles: true, button: 0, pointerId: 1, clientY: 10 }),
+    );
+    window.dispatchEvent(new PointerEvent('pointermove', { pointerId: 1, clientY: 90 }));
+    window.dispatchEvent(new PointerEvent('pointerup', { pointerId: 1, clientY: 90 }));
+    await flushPromises();
+
+    // The click that ends a drag lands on the list, not on a row, so the suppression flag must
+    // not survive into the next gesture — every new click is preceded by its own press.
+    rows[2]!.element.dispatchEvent(
+      new PointerEvent('pointerdown', { bubbles: true, button: 0, pointerId: 2, clientY: 250 }),
+    );
+    window.dispatchEvent(new PointerEvent('pointerup', { pointerId: 2, clientY: 250 }));
+    await rows[2]!.get('.md-list-item__row').trigger('click');
+    await flushPromises();
+
+    expect(router.currentRoute.value.name).toBe('chat');
+    expect(router.currentRoute.value.params.deviceId).toBe('device-c');
+  });
+
   it('leaves a press without movement as a normal click', async () => {
     const { wrapper, router } = await mountList([pinnedRow('device-a', 'Ann', 0)]);
 
