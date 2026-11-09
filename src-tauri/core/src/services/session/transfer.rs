@@ -115,9 +115,11 @@ impl<C: Clock, S: Store> Session<C, S> {
         }
 
         // A row whose transfer had ended is revived: the sender is trying again, and the fastest
-        // way to agree on where to continue is to let it send and correct it.
+        // way to agree on where to continue is to let it send and correct it. An offered row is
+        // revived too: a sender that streams without being asked is welcome, and the row must
+        // stop claiming nothing has been requested.
         let mut attachment = row;
-        if attachment.state.is_finished() {
+        if attachment.state.is_finished() || attachment.state == AttachmentState::Offered {
             if let Some(entry) = self.peers.get_mut(&peer) {
                 entry.incoming.remove(&id);
             }
@@ -228,11 +230,22 @@ impl<C: Clock, S: Store> Session<C, S> {
         };
 
         let mut attachment = row;
-        if attachment.state.is_finished() {
+        if attachment.state.is_finished() || attachment.state == AttachmentState::Offered {
             if let Some(entry) = self.peers.get_mut(&peer) {
                 entry.incoming.remove(&id);
             }
             attachment.state = AttachmentState::Receiving;
+            attachment.transferred = 0;
+            if self
+                .store
+                .set_attachment_state(id, AttachmentState::Receiving)
+                .await
+                .is_err()
+            {
+                return;
+            }
+            self.persist_attachment_progress(id, 0).await;
+            self.emit_attachment(peer, attachment.clone());
         }
         if !self.open_part_file(peer, &attachment).await {
             return;
@@ -376,7 +389,9 @@ impl<C: Clock, S: Store> Session<C, S> {
         if row.peer != peer || row.direction != Direction::Outgoing {
             return;
         }
-        if row.state.is_finished() {
+        // A complete file is not sent again; anything else — including a failed or cancelled
+        // transfer — is revived, because asking again is how a retry works.
+        if row.state == AttachmentState::Complete {
             return;
         }
         if let Some(entry) = self.peers.get_mut(&peer)

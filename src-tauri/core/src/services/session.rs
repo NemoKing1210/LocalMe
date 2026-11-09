@@ -4078,7 +4078,9 @@ mod tests {
     async fn on_file_request_queues_only_valid_outgoing_rows() {
         let mut h = harness();
         let peer = did(2);
+        let other_peer = did(3);
         h.add_peer(peer, "bob");
+        h.add_peer(other_peer, "carol");
         h.give_link(peer);
 
         // Unknown row.
@@ -4100,6 +4102,34 @@ mod tests {
         h.session.on_file_request(peer, id).await;
         assert_eq!(h.store.state_of(id), Some(AttachmentState::Queued));
 
+        // A failed transfer is revived: asking again is exactly how a retry works.
+        let failed = AttachmentId::generate();
+        h.store.seed_attachment(attachment_row(
+            failed,
+            MessageId::generate(),
+            peer,
+            Direction::Outgoing,
+            AttachmentState::Failed,
+            4,
+            None,
+        ));
+        h.session.on_file_request(peer, failed).await;
+        assert_eq!(h.store.state_of(failed), Some(AttachmentState::Queued));
+
+        // A file that already arrived is not sent a second time.
+        let complete = AttachmentId::generate();
+        h.store.seed_attachment(attachment_row(
+            complete,
+            MessageId::generate(),
+            peer,
+            Direction::Outgoing,
+            AttachmentState::Complete,
+            4,
+            None,
+        ));
+        h.session.on_file_request(peer, complete).await;
+        assert_eq!(h.store.state_of(complete), Some(AttachmentState::Complete));
+
         // Wrong direction row is ignored.
         let wrong = AttachmentId::generate();
         h.store.seed_attachment(attachment_row(
@@ -4113,6 +4143,66 @@ mod tests {
         ));
         h.session.on_file_request(peer, wrong).await;
         assert_eq!(h.store.state_of(wrong), Some(AttachmentState::Failed));
+
+        // Another peer's row is ignored.
+        let foreign = AttachmentId::generate();
+        h.store.seed_attachment(attachment_row(
+            foreign,
+            MessageId::generate(),
+            other_peer,
+            Direction::Outgoing,
+            AttachmentState::Failed,
+            4,
+            None,
+        ));
+        h.session.on_file_request(peer, foreign).await;
+        assert_eq!(h.store.state_of(foreign), Some(AttachmentState::Failed));
+    }
+
+    #[tokio::test]
+    async fn a_chunk_for_an_offered_row_turns_it_into_a_receiving_row() {
+        let mut h = harness();
+        let peer = did(2);
+        h.add_peer(peer, "bob");
+        h.give_link(peer);
+        let id = AttachmentId::generate();
+        h.store.seed_attachment(attachment_row(
+            id,
+            MessageId::generate(),
+            peer,
+            Direction::Incoming,
+            AttachmentState::Offered,
+            4,
+            None,
+        ));
+
+        // A sender of an older version streams without waiting to be asked; the bytes are
+        // welcome, and the row must stop claiming nothing has been requested.
+        h.session.on_file_chunk(peer, id, 0, vec![0_u8; 4]).await;
+
+        assert_eq!(h.store.state_of(id), Some(AttachmentState::Receiving));
+    }
+
+    #[tokio::test]
+    async fn file_done_for_an_offered_row_turns_it_into_a_receiving_row() {
+        let mut h = harness();
+        let peer = did(2);
+        h.add_peer(peer, "bob");
+        h.give_link(peer);
+        let id = AttachmentId::generate();
+        h.store.seed_attachment(attachment_row(
+            id,
+            MessageId::generate(),
+            peer,
+            Direction::Incoming,
+            AttachmentState::Offered,
+            4,
+            None,
+        ));
+
+        h.session.on_file_done(peer, id, Sha256::of(b"data")).await;
+
+        assert_eq!(h.store.state_of(id), Some(AttachmentState::Receiving));
     }
 
     #[tokio::test]
