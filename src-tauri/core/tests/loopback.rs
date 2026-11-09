@@ -1083,7 +1083,7 @@ async fn a_file_arrives_with_its_message_and_lands_byte_for_byte() {
     // off-by-one in the stitching would show up as a missing or duplicated byte.
     let size = FILE_CHUNK_BYTES * 3 + 777;
     let bytes: Vec<u8> = (0..size).map(|index| (index % 251) as u8).collect();
-    let source = anna._data_dir.path().join("holiday.bin");
+    let source = anna._data_dir.path().join("holiday.png");
     std::fs::write(&source, &bytes).expect("write the source");
 
     let sent = anna
@@ -1130,7 +1130,7 @@ async fn a_file_arrives_with_its_message_and_lands_byte_for_byte() {
         .find(|attachment| attachment.id == file)
         .expect("the attachment");
     assert_eq!(attachment.size, size as u64);
-    assert_eq!(attachment.name.as_str(), "holiday.bin");
+    assert_eq!(attachment.name.as_str(), "holiday.png");
     let stored = attachment.path.clone().expect("the recipient's copy");
     assert_eq!(
         std::fs::read(&stored).expect("read the received file"),
@@ -1139,7 +1139,7 @@ async fn a_file_arrives_with_its_message_and_lands_byte_for_byte() {
     );
     assert!(
         !std::path::Path::new(&stored)
-            .with_file_name("holiday.part.bin")
+            .with_file_name("holiday.part.png")
             .exists(),
         "the part file must be gone once the transfer is complete"
     );
@@ -1191,7 +1191,7 @@ async fn an_interrupted_transfer_resumes_from_where_the_recipient_stopped() {
     // deliberately below the inbound budget, so this takes a few seconds — which is the point.
     let size = 12 * 1024 * 1024;
     let bytes: Vec<u8> = (0..size).map(|index| (index % 251) as u8).collect();
-    let source = anna._data_dir.path().join("big.bin");
+    let source = anna._data_dir.path().join("big.png");
     std::fs::write(&source, &bytes).expect("write the source");
 
     let sent = anna
