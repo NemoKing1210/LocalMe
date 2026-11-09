@@ -1298,8 +1298,13 @@ impl<C: Clock, S: Store> Session<C, S> {
             let state = if meta.size > MAX_ATTACHMENT_BYTES {
                 refused.push(meta.id);
                 AttachmentState::Cancelled
-            } else {
+            } else if meta.kind.downloads_automatically() {
+                // A picture, a song or a clip is wanted as soon as it is announced.
                 AttachmentState::Receiving
+            } else {
+                // A document waits for the recipient to ask, so nothing is written to disk
+                // until they do.
+                AttachmentState::Offered
             };
             attachments.push(Attachment {
                 id: meta.id,
@@ -1828,15 +1833,24 @@ fn resolve_files(
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_default();
         let name = FileName::sanitise(&raw);
+        let kind = name.kind();
+        // A document is announced first and streamed only once the recipient asks for it; a
+        // picture, a song or a clip is sent straight away, because it is meant to be seen or
+        // played rather than stored.
+        let state = if kind.downloads_automatically() {
+            AttachmentState::Queued
+        } else {
+            AttachmentState::Offered
+        };
         attachments.push(Attachment {
             id: AttachmentId::generate(),
             message_id,
             peer: *peer,
             direction: Direction::Outgoing,
-            kind: name.kind(),
+            kind,
             name,
             size,
-            state: AttachmentState::Queued,
+            state,
             transferred: 0,
             sha256: None,
             created_at: now,
@@ -3799,6 +3813,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_sent_document_is_offered_and_sent_media_is_queued() {
+        let mut h = harness();
+        let peer = did(2);
+        h.add_peer(peer, "bob");
+        let notes = h._dir.path().join("notes.txt");
+        let picture = h._dir.path().join("picture.png");
+        std::fs::write(&notes, b"hello").unwrap();
+        std::fs::write(&picture, b"\x89PNG").unwrap();
+
+        let message = h
+            .session
+            .send_message(peer, None, vec![notes, picture])
+            .await
+            .unwrap();
+
+        assert_eq!(message.attachments.len(), 2);
+        // A document waits for the recipient to ask for it; a picture is announced and sent.
+        assert_eq!(
+            h.store.state_of(message.attachments[0].id),
+            Some(AttachmentState::Offered)
+        );
+        assert_eq!(
+            h.store.state_of(message.attachments[1].id),
+            Some(AttachmentState::Queued)
+        );
+    }
+
+    #[tokio::test]
+    async fn an_incoming_document_is_offered_and_media_is_receiving() {
+        let mut h = harness();
+        let peer = did(2);
+        h.add_peer(peer, "bob");
+        h.give_link(peer);
+        let document = AttachmentId::generate();
+        let song = AttachmentId::generate();
+
+        h.session
+            .on_frame(
+                peer,
+                Frame::Chat {
+                    id: MessageId::generate(),
+                    text: None,
+                    attachments: vec![
+                        AttachmentMeta::new(document, FileName::sanitise("notes.txt"), 5),
+                        AttachmentMeta::new(song, FileName::sanitise("song.mp3"), 5),
+                    ],
+                },
+            )
+            .await;
+
+        assert_eq!(h.store.state_of(document), Some(AttachmentState::Offered));
+        assert_eq!(h.store.state_of(song), Some(AttachmentState::Receiving));
+    }
+
+    #[tokio::test]
     async fn on_frame_chat_ack_marks_delivered_and_tolerates_failure() {
         let mut h = harness();
         let peer = did(2);
@@ -4398,6 +4467,39 @@ mod tests {
         h.session.peers.get_mut(&peer).unwrap().transfer = None;
         h.session.maybe_start_transfer(peer).await;
         assert_eq!(h.store.state_of(second), Some(AttachmentState::Failed));
+    }
+
+    #[tokio::test]
+    async fn maybe_start_transfer_does_not_start_an_offered_file() {
+        let mut h = harness();
+        let peer = did(2);
+        h.add_peer(peer, "bob");
+        h.give_link(peer);
+        let id = AttachmentId::generate();
+        let message_id = MessageId::generate();
+        let mut msg = message(
+            message_id,
+            peer,
+            Direction::Outgoing,
+            MessageStatus::Delivered,
+            1,
+        );
+        msg.attachments = vec![attachment_row(
+            id,
+            message_id,
+            peer,
+            Direction::Outgoing,
+            AttachmentState::Offered,
+            4,
+            Some("src.bin".to_owned()),
+        )];
+        h.store.seed_message(msg);
+
+        h.session.maybe_start_transfer(peer).await;
+
+        // An offer is not a transfer: the bytes leave only once the recipient asks.
+        assert_eq!(h.store.state_of(id), Some(AttachmentState::Offered));
+        assert!(h.session.peers[&peer].transfer.is_none());
     }
 
     #[tokio::test]
