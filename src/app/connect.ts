@@ -17,6 +17,7 @@ export const HANDLED_EVENTS = {
   message: true,
   message_status: true,
   attachment: true,
+  attachment_saved: true,
   settings_changed: true,
   state_snapshot: true,
   open_chat: true,
@@ -56,6 +57,16 @@ export async function connectCoreEvents(): Promise<() => void> {
     // is one replacement rather than a reconciliation.
     onCoreEvent('attachment', (payload) => {
       chat.applyAttachment(payload.attachment);
+    }),
+
+    // The host reports the copy itself, because the command returns as soon as the transfer
+    // starts — so this is the only place a save is announced, and it is announced once.
+    onCoreEvent('attachment_saved', (payload) => {
+      if (payload.path === null) {
+        ui.fail('chat.attachmentSaveFailed');
+      } else {
+        ui.notify('chat.attachmentSaved', { path: payload.path });
+      }
     }),
 
     onCoreEvent('settings_changed', (payload) => {

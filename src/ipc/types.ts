@@ -10,11 +10,11 @@ export type MessageDirection = 'incoming' | 'outgoing';
 
 export type MessageStatus = 'queued' | 'sending' | 'delivered' | 'received';
 
-/** An image the interface can show instead of a file chip. */
-export type AttachmentKind = 'image' | 'file';
+/** What a file is, as far as the interface is concerned: pictures and playable media are drawn. */
+export type AttachmentKind = 'image' | 'audio' | 'video' | 'file';
 
 export type AttachmentState =
-  'queued' | 'sending' | 'receiving' | 'complete' | 'cancelled' | 'failed';
+  'offered' | 'queued' | 'sending' | 'receiving' | 'complete' | 'cancelled' | 'failed';
 
 export interface Attachment {
   readonly id: AttachmentId;
@@ -228,6 +228,12 @@ export interface CoreEventMap {
     readonly deliveredAt: UnixMillis | null;
   };
   attachment: { readonly peer: DeviceId; readonly attachment: Attachment };
+  /** The result of copying a requested download to the path the user chose. */
+  attachment_saved: {
+    readonly attachmentId: AttachmentId;
+    /** `null` when the copy failed. */
+    readonly path: string | null;
+  };
   notice: { readonly level: NoticeLevel; readonly message: string };
   stopped: null;
   settings_changed: Settings;

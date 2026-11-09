@@ -102,6 +102,11 @@ export const en = {
   'chat.attachmentReceiving': 'Receiving {percent}%',
   'chat.attachmentFailed': 'The file did not arrive',
   'chat.attachmentCancelled': 'Transfer cancelled',
+  'chat.attachmentDownload': 'Download…',
+  'chat.attachmentNotDownloaded': 'Not downloaded',
+  'chat.attachmentAwaitingDownload': 'Waiting to be downloaded',
+  'chat.attachmentSaveFailed': 'The file could not be saved',
+  'chat.attachmentCannotPreview': 'This file cannot be played here',
   'chat.attachmentSaved': 'Saved to {path}',
 
   'settings.title': 'Settings',

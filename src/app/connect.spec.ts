@@ -147,6 +147,18 @@ describe('connectCoreEvents', () => {
     expect(chat.messages[0]?.attachments[0]?.transferred).toBe(1024);
   });
 
+  it('reports a saved file and a failed save', () => {
+    const ui = useUiStore();
+
+    handler('attachment_saved')({ attachmentId: 'attachment-1', path: 'C:/tmp/notes.txt' });
+    expect(ui.notice?.key).toBe('chat.attachmentSaved');
+    expect(ui.notice?.params).toEqual({ path: 'C:/tmp/notes.txt' });
+
+    handler('attachment_saved')({ attachmentId: 'attachment-2', path: null });
+    expect(ui.notice?.key).toBe('chat.attachmentSaveFailed');
+    expect(ui.notice?.tone).toBe('error');
+  });
+
   it('applies settings that changed', () => {
     const settings = useSettingsStore();
     const next = makeSettings({ appearance: { theme: 'dark', accent: '#123456' }, locale: 'ru' });

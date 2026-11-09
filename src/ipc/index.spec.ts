@@ -36,6 +36,7 @@ import {
   completeOnboarding,
   diagnostics,
   discardPastedFile,
+  downloadAttachment,
   fileSrc,
   forgetPeer,
   getSettings,
@@ -266,6 +267,12 @@ const commandCases: readonly CommandCase[] = [
     title: 'saveAttachment',
     run: () => saveAttachment(ATTACHMENT_ID),
     command: 'save_attachment',
+    args: { attachmentId: ATTACHMENT_ID },
+  },
+  {
+    title: 'downloadAttachment',
+    run: () => downloadAttachment(ATTACHMENT_ID),
+    command: 'download_attachment',
     args: { attachmentId: ATTACHMENT_ID },
   },
   {

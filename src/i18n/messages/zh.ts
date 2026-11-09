@@ -101,6 +101,11 @@ export const zh: MessageCatalog = {
   'chat.attachmentReceiving': '正在接收 {percent}%',
   'chat.attachmentFailed': '文件未送达',
   'chat.attachmentCancelled': '传输已取消',
+  'chat.attachmentDownload': '下载…',
+  'chat.attachmentNotDownloaded': '未下载',
+  'chat.attachmentAwaitingDownload': '等待下载',
+  'chat.attachmentSaveFailed': '无法保存该文件',
+  'chat.attachmentCannotPreview': '此文件无法在此播放',
   'chat.attachmentSaved': '已保存到 {path}',
 
   'settings.title': '设置',

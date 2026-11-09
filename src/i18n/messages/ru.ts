@@ -104,6 +104,11 @@ export const ru: MessageCatalog = {
   'chat.attachmentReceiving': 'Получение {percent}%',
   'chat.attachmentFailed': 'Файл не дошёл',
   'chat.attachmentCancelled': 'Передача отменена',
+  'chat.attachmentDownload': 'Скачать…',
+  'chat.attachmentNotDownloaded': 'Не скачано',
+  'chat.attachmentAwaitingDownload': 'Ожидает скачивания',
+  'chat.attachmentSaveFailed': 'Не удалось сохранить файл',
+  'chat.attachmentCannotPreview': 'Этот файл здесь не воспроизводится',
   'chat.attachmentSaved': 'Сохранено в {path}',
 
   'settings.title': 'Настройки',

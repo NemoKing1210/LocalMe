@@ -104,6 +104,11 @@ export const pt: MessageCatalog = {
   'chat.attachmentReceiving': 'Recebendo {percent}%',
   'chat.attachmentFailed': 'O arquivo não chegou',
   'chat.attachmentCancelled': 'Transferência cancelada',
+  'chat.attachmentDownload': 'Baixar…',
+  'chat.attachmentNotDownloaded': 'Não baixado',
+  'chat.attachmentAwaitingDownload': 'Aguardando download',
+  'chat.attachmentSaveFailed': 'Não foi possível salvar o arquivo',
+  'chat.attachmentCannotPreview': 'Este arquivo não pode ser reproduzido aqui',
   'chat.attachmentSaved': 'Salvo em {path}',
 
   'settings.title': 'Definições',

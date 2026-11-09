@@ -27,6 +27,7 @@ const ui = useUiStore();
 
 /** A record so a new host state is a compile error here rather than a silently blank card. */
 const LABELS: Record<AttachmentState, MessageKey | null> = {
+  offered: 'chat.attachmentNotDownloaded',
   queued: 'chat.attachmentQueued',
   sending: 'chat.attachmentSending',
   receiving: 'chat.attachmentReceiving',

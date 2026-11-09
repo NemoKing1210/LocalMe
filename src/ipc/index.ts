@@ -160,6 +160,16 @@ export function saveAttachment(id: AttachmentId): Promise<string | null> {
   return call('save_attachment', { attachmentId: id });
 }
 
+/**
+ * Asks the host to fetch a file that was only announced, saving it where the user chooses.
+ *
+ * Returns the chosen path, or `null` when the dialog was dismissed. The report that the copy
+ * happened arrives later, through the `attachment_saved` event.
+ */
+export function downloadAttachment(id: AttachmentId): Promise<string | null> {
+  return call('download_attachment', { attachmentId: id });
+}
+
 export function cancelAttachment(id: AttachmentId): Promise<void> {
   return call('cancel_attachment', { attachmentId: id });
 }
