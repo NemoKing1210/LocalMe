@@ -22,6 +22,11 @@ use crate::protocol::limits::{MAX_ATTACHMENT_BYTES, MAX_FILE_NAME_CHARS};
 pub enum AttachmentKind {
     /// A raster image, so the bubble can show it instead of a file chip.
     Image,
+    /// A sound file the interface can play in place.
+    Audio,
+    /// A video file the interface can play in place.
+    Video,
+    /// Anything else: announced, but fetched only when the recipient asks.
     File,
 }
 
@@ -30,6 +35,8 @@ impl AttachmentKind {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Image => "image",
+            Self::Audio => "audio",
+            Self::Video => "video",
             Self::File => "file",
         }
     }
@@ -37,6 +44,8 @@ impl AttachmentKind {
     pub fn from_db(value: &str) -> Result<Self, DomainError> {
         match value {
             "image" => Ok(Self::Image),
+            "audio" => Ok(Self::Audio),
+            "video" => Ok(Self::Video),
             "file" => Ok(Self::File),
             other => Err(DomainError::InvalidId {
                 kind: "attachment kind",
@@ -45,10 +54,18 @@ impl AttachmentKind {
         }
     }
 
-    /// Image formats a web view renders without a plugin.
+    /// Whether the bytes come as soon as the offer does, because the interface renders them
+    /// inline.
+    #[must_use]
+    pub const fn downloads_automatically(self) -> bool {
+        matches!(self, Self::Image | Self::Audio | Self::Video)
+    }
+
+    /// Image, sound and video formats a web view renders without a plugin.
     ///
     /// SVG is deliberately absent: it is the one image format that is also a document, and a
-    /// preview must never be able to execute anything.
+    /// preview must never be able to execute anything. Video containers the web views cannot
+    /// decode are absent too: a broken player is worse than an ordinary download.
     #[must_use]
     pub fn of(name: &FileName) -> Self {
         let extension = name
@@ -63,6 +80,16 @@ impl AttachmentKind {
             .any(|image| extension.eq_ignore_ascii_case(image))
         {
             Self::Image
+        } else if ["mp3", "wav", "ogg", "oga", "m4a", "aac", "flac", "opus"]
+            .iter()
+            .any(|audio| extension.eq_ignore_ascii_case(audio))
+        {
+            Self::Audio
+        } else if ["mp4", "m4v", "webm", "ogv", "mov"]
+            .iter()
+            .any(|video| extension.eq_ignore_ascii_case(video))
+        {
+            Self::Video
         } else {
             Self::File
         }
@@ -275,11 +302,15 @@ impl<'de> Deserialize<'de> for Sha256 {
 
 /// Where an attachment is in its transfer.
 ///
-/// `Queued`/`Sending` belong to the sender, `Receiving` to the recipient, and the last three are
-/// terminal for both. Stored as text, so a future state is a migration rather than a code change.
+/// `Offered` is the deferred state: the metadata has been announced, and a document's bytes
+/// start moving only once the recipient asks for them. `Queued`/`Sending` belong to the sender,
+/// `Receiving` to the recipient, and the last three are terminal for both. Stored as text, so a
+/// future state is a migration rather than a code change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum AttachmentState {
+    /// Announced, waiting for the recipient to download it.
+    Offered,
     /// The metadata is stored, the transfer has not started.
     Queued,
     Sending,
@@ -296,6 +327,7 @@ impl AttachmentState {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::Offered => "offered",
             Self::Queued => "queued",
             Self::Sending => "sending",
             Self::Receiving => "receiving",
@@ -307,6 +339,7 @@ impl AttachmentState {
 
     pub fn from_db(value: &str) -> Result<Self, DomainError> {
         match value {
+            "offered" => Ok(Self::Offered),
             "queued" => Ok(Self::Queued),
             "sending" => Ok(Self::Sending),
             "receiving" => Ok(Self::Receiving),
@@ -502,6 +535,52 @@ mod tests {
     }
 
     #[test]
+    fn audio_and_video_have_their_own_extensions() {
+        for name in [
+            "a.mp3", "b.WAV", "c.ogg", "d.oga", "e.m4a", "f.aac", "g.flac", "h.opus",
+        ] {
+            assert_eq!(
+                FileName::sanitise(name).kind(),
+                AttachmentKind::Audio,
+                "{name}"
+            );
+        }
+        for name in ["a.mp4", "b.M4V", "c.webm", "d.ogv", "e.mov"] {
+            assert_eq!(
+                FileName::sanitise(name).kind(),
+                AttachmentKind::Video,
+                "{name}"
+            );
+        }
+        for name in ["a.svg", "b.pdf", "c.tar.gz", "no-extension"] {
+            assert_eq!(
+                FileName::sanitise(name).kind(),
+                AttachmentKind::File,
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn only_pictures_and_playable_media_arrive_unasked() {
+        assert!(AttachmentKind::Image.downloads_automatically());
+        assert!(AttachmentKind::Audio.downloads_automatically());
+        assert!(AttachmentKind::Video.downloads_automatically());
+        assert!(!AttachmentKind::File.downloads_automatically());
+    }
+
+    #[test]
+    fn offered_round_trips_and_is_not_in_flight() {
+        assert_eq!(AttachmentState::Offered.as_str(), "offered");
+        assert_eq!(
+            AttachmentState::from_db("offered").expect("parses"),
+            AttachmentState::Offered
+        );
+        assert!(!AttachmentState::Offered.is_in_flight());
+        assert!(!AttachmentState::Offered.is_finished());
+    }
+
+    #[test]
     fn progress_is_clamped() {
         let mut attachment = Attachment {
             id: AttachmentId::generate(),
@@ -535,15 +614,17 @@ mod tests {
     #[test]
     fn attachment_kind_labels_and_parsing_round_trip() {
         assert_eq!(AttachmentKind::Image.as_str(), "image");
+        assert_eq!(AttachmentKind::Audio.as_str(), "audio");
+        assert_eq!(AttachmentKind::Video.as_str(), "video");
         assert_eq!(AttachmentKind::File.as_str(), "file");
-        assert_eq!(
-            AttachmentKind::from_db("image").expect("image"),
-            AttachmentKind::Image
-        );
-        assert_eq!(
-            AttachmentKind::from_db("file").expect("file"),
-            AttachmentKind::File
-        );
+        for (label, kind) in [
+            ("image", AttachmentKind::Image),
+            ("audio", AttachmentKind::Audio),
+            ("video", AttachmentKind::Video),
+            ("file", AttachmentKind::File),
+        ] {
+            assert_eq!(AttachmentKind::from_db(label).expect(label), kind);
+        }
         assert!(AttachmentKind::from_db("movie").is_err());
     }
 

@@ -23,7 +23,7 @@ pub struct FilePick {
     /// chip the user sees is the name the recipient gets.
     pub name: String,
     pub size: u64,
-    /// `"image"` or `"file"`.
+    /// `"image"`, `"audio"`, `"video"` or `"file"`.
     pub kind: &'static str,
     /// `None` when the file can be attached; otherwise a code the interface translates.
     pub problem: Option<&'static str>,
@@ -100,6 +100,8 @@ fn describe(path: &Path) -> FilePick {
 fn classify(path: &Path, name: FileName, size: u64) -> FilePick {
     let kind = match name.kind() {
         AttachmentKind::Image => "image",
+        AttachmentKind::Audio => "audio",
+        AttachmentKind::Video => "video",
         AttachmentKind::File => "file",
     };
     FilePick {
@@ -276,6 +278,19 @@ mod tests {
         assert_eq!(
             classify(path, FileName::sanitise("doc.txt"), 1).kind,
             "file"
+        );
+    }
+
+    #[test]
+    fn audio_and_video_are_described_with_their_own_kinds() {
+        let path = Path::new("/tmp/clip.webm");
+        assert_eq!(
+            classify(path, FileName::sanitise("song.mp3"), 1).kind,
+            "audio"
+        );
+        assert_eq!(
+            classify(path, FileName::sanitise("clip.webm"), 1).kind,
+            "video"
         );
     }
 
