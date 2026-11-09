@@ -1,6 +1,6 @@
 [package]
 name = "localme"
-version = "0.12.0"
+version = "0.12.1"
 edition = "2024"
 rust-version = "1.85"
 description = "LocalMe — a zero-configuration messenger for the local network"
@@ -70,6 +70,10 @@ tempfile = "3.23.0"
 custom-protocol = ["tauri/custom-protocol"]
 
 [target.'cfg(windows)'.dependencies]
+# The login entry is written directly instead of through the autostart plugin, whose `auto-launch`
+# crate stores the executable path unquoted — an installation under a path with a space would not
+# start. See `src/autostart.rs`.
+winreg = "0.55"
 # The WebView2 settings object, for the one piece of browser policy a page cannot express — see
 # `src/webview.rs`. `webview2-com` is pinned to the revision `wry` already links, because the
 # controller handle `with_webview` hands out is that crate's type, not a lookalike.

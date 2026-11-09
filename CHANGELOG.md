@@ -5,6 +5,26 @@ All notable changes to LocalMe are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.1] - 2026-11-09
+
+### Fixed
+
+- **Autostart could be registered from a development build.** `npm run tauri dev` (and a release
+  build pointed at a test `LOCALME_DATA_DIR`) wrote its own executable into the login entry, so a
+  machine could try to start `target\debug\localme.exe` at sign-in. Only a packaged build manages
+  the entry now; `LOCALME_NO_AUTOSTART` is an explicit opt-out.
+- **A stale autostart path was never repaired.** The stored setting was overwritten from whatever
+  the platform reported, so an entry left pointing at an old or moved executable stayed broken.
+  The setting is now the user's intent and the startup reconciliation rewrites the registration,
+  including one left with the old `--minimized` argument.
+- **Autostart did not work from an installation path containing a space.** The plugin's
+  `auto-launch` crate stores the executable path unquoted; Windows then split it at the first
+  space. The login value is written directly on Windows, with the path quoted.
+- **Uninstalling left the login entry behind.** The NSIS uninstaller now removes both the
+  `HKCU\…\Run` value and its Task Manager startup-approval record.
+- A refused autostart change no longer saves the new value first: the switch and the settings
+  document keep the previous value when the platform rejects the registration.
+
 ## [0.12.0] - 2026-11-09
 
 ### Added

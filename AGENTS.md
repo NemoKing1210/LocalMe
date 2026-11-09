@@ -21,7 +21,7 @@ Typical user loop:
 4. History, presence, unread counts and settings persist across restarts.
 
 UI languages: English, Russian, Spanish, German, French, Portuguese and Chinese. Identifier:
-`dev.localme.desktop`. Version: `0.12.0`. Changelog: [CHANGELOG.md](CHANGELOG.md). Design notes:
+`dev.localme.desktop`. Version: `0.12.1`. Changelog: [CHANGELOG.md](CHANGELOG.md). Design notes:
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Stack (accurate)
@@ -201,8 +201,9 @@ a tray-resident instance at ~0 % CPU.
   **5353/UDP** (mDNS).
 - Single instance: a second launch focuses the first window. `LOCALME_DATA_DIR` overrides the data
   directory _and_ lifts the guard, which is how the two-instance check is done on one machine.
-- Close-to-tray, start-minimised and autostart are settings (`tauri-plugin-autostart`,
-  `--minimized`).
+- Close-to-tray, start-minimised and autostart are settings; the host writes the login entry
+  itself on Windows (`HKCU\…\Run`, a quoted executable path, stale paths repaired) and uses
+  `tauri-plugin-autostart` elsewhere. Debug builds and `LOCALME_DATA_DIR` runs never touch it.
 
 ## Domain rules (do not break)
 

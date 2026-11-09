@@ -832,12 +832,22 @@ variant the front end subscribes to.
   setting, so it cannot be turned on by accident in a normal installation.
 * **Close to tray** — `WindowEvent::CloseRequested` is intercepted when the setting is on;
   the window is hidden and the app keeps running. When the setting is off, close quits.
-* **Autostart** — `tauri-plugin-autostart`. The registration carries no launch argument: whether
-  a start is tray-only is the `start_minimized` *setting*, read once the settings document has
-  loaded, so the switch the user sees is the switch that decides. The `--minimized` command-line
-  flag still forces it for a one-off launch. A tray-only start is only honoured when the tray
-  actually exists (`AppState::tray_available`), because hiding the only window on a desktop
-  without a tray would leave the application unreachable.
+* **Autostart** — the stored `system.autostart` setting is the user's intent and the startup
+  reconciliation makes the platform registration match it, rewriting an entry that points at
+  another executable (the app was moved or reinstalled, or an older build left its own path
+  there). On Windows the value is written directly to the per-user `Run` key, quoted, because
+  the `auto-launch` crate behind the plugin stores the path
+  bare and an install under a path with a space would never start; macOS and Linux keep the
+  plugin, whose `enable` rewrites the LaunchAgent or desktop entry and repairs a stale path the
+  same way. Only a packaged build manages the entry: a debug build would register
+  `target\debug\localme.exe`, and a `LOCALME_DATA_DIR` run is a two-instance test, so both leave
+  it alone (`LOCALME_NO_AUTOSTART` is a further opt-out). The NSIS hook in
+  `src-tauri/installer-hooks.nsh` deletes the value on uninstall. The registration carries no
+  launch argument: whether a start is tray-only is the `start_minimized` *setting*, read once the
+  settings document has loaded, so the switch the user sees is the switch that decides. The
+  `--minimized` command-line flag still forces it for a one-off launch. A tray-only start is only
+  honoured when the tray actually exists (`AppState::tray_available`), because hiding the only
+  window on a desktop without a tray would leave the application unreachable.
 * **Tray** — `TrayIconBuilder` with a menu rebuilt on every change: a status line with the unread
   count, Open, a Conversations submenu (the recent conversations, each carrying its unread count,
   plus "All conversations"), Mark all as read, checked switches for notifications, close-to-tray
@@ -1277,7 +1287,7 @@ deletes the file and fails the transfer rather than being retried.
 | Firewall prompt | on first `bind`; documented in README (ports 47820/TCP, 47821/UDP, 5353/UDP) | app-level prompt on first inbound | depends on distro firewall |
 | Tray | notification area; hidden by default in Win11 (documented) | menu bar icon | requires a StatusNotifier/AppIndicator host; on GNOME, an extension |
 | Notification click → open chat | supported by `tauri-plugin-notification` actions | supported | support depends on the notification daemon; documented fallback: unread badge + tray |
-| Autostart | `HKCU\…\Run` via plugin | LaunchAgent via plugin | `.desktop` in `~/.config/autostart` via plugin |
+| Autostart | `HKCU\…\Run` written directly (quoted path, stale path repaired) | LaunchAgent via plugin | `.desktop` in `~/.config/autostart` via plugin |
 
 Notification-click behaviour could not be verified on all three platforms from one machine;
 the README states which behaviour is verified and which is platform-dependent by design,
