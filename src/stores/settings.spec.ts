@@ -59,7 +59,7 @@ describe('the settings store', () => {
     expect(settings.document).toBeNull();
     expect(settings.theme).toBe('system');
     expect(settings.accent).toBe('#6750A4');
-    expect(settings.locale).toBe('en');
+    expect(settings.locale).toBe('auto');
     expect(settings.notifications).toBeNull();
     expect(settings.system).toBeNull();
     expect(settings.onboarded).toBe(false);
@@ -84,6 +84,35 @@ describe('the settings store', () => {
     expect(useI18n().locale.value).toBe('ru');
     expect(theme.state.mode).toBe('dark');
     expect(theme.state.accent).toBe('#ABCDEF');
+  });
+
+  it('resolves the automatic locale against the system language', () => {
+    vi.stubGlobal('navigator', { languages: ['de-DE', 'en-US'], language: 'de-DE' });
+    const settings = useSettingsStore();
+
+    try {
+      settings.apply(makeSettings({ locale: 'auto' }));
+
+      // The stored choice stays `auto` for the settings screen; the interface speaks German.
+      expect(settings.locale).toBe('auto');
+      expect(useI18n().locale.value).toBe('de');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('falls back to English when the system language is not supported', () => {
+    vi.stubGlobal('navigator', { languages: ['fi-FI'], language: 'fi-FI' });
+    const settings = useSettingsStore();
+
+    try {
+      settings.apply(makeSettings({ locale: 'auto' }));
+
+      expect(settings.locale).toBe('auto');
+      expect(useI18n().locale.value).toBe('en');
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('loads the settings from the host and applies them', async () => {

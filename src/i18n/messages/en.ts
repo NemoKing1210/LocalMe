@@ -169,6 +169,8 @@ export const en = {
   'settings.historyCleared': 'Deleted {count} messages.',
   'settings.notificationsPerPeerHelp':
     'Individual people can be muted from the ⋮ menu in the list.',
+  'locale.auto': 'System language',
+  'locale.autoHint': 'Follows the system language, or English when it is not one of these.',
   'locale.en': 'English',
   'locale.ru': 'Русский',
   'locale.es': 'Español',

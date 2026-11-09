@@ -1092,6 +1092,13 @@ Portuguese and Chinese. `LOCALES` is the list, `src/ipc/types.ts` mirrors it for
 document, and `Locale` in `localme-core` is what the file stores; adding a language is a
 catalogue plus those three entries.
 
+The stored choice is a `LocalePreference`: one of those languages, or `auto`. `auto` is resolved
+in the web view, because the host has no reliable system-language signal of its own: the
+preferred tags from `navigator.languages` are matched by base language in order, and the first
+supported one wins; when none is supported the interface falls back to English. The store keeps
+the preference (`settings.locale`) apart from the language actually rendered (`i18n.locale`), and
+re-resolves `auto` when the operating system reports a `languagechange`.
+
 Number, date and relative-time formatting goes through `Intl`, and so do the units: file sizes
 and day counts are formatted with `Intl.NumberFormat({ style: 'unit' })`, so «14 дней», "14 Tg."
 and "14 days" are the runtime's translations rather than seven hand-written forms. Plural forms

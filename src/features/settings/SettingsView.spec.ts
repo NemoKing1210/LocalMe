@@ -428,6 +428,23 @@ describe('the settings view', () => {
       expect(wrapper.text()).toContain('Deutsch');
     });
 
+    it('offers the system language and saves it', async () => {
+      const { wrapper, pinia } = await mountSettings();
+      const automatic = must(
+        wrapper
+          .findAll('input[type="radio"]')
+          .find((input) => input.attributes('value') === 'auto'),
+        'the automatic radio',
+      );
+      expect(wrapper.text()).toContain('System language');
+
+      await automatic.trigger('change');
+      await flushPromises();
+
+      expect(savedSettings().locale).toBe('auto');
+      expect(useSettingsStore(pinia).locale).toBe('auto');
+    });
+
     it('ignores a locale the host does not know', async () => {
       const { wrapper } = await mountSettings();
       must(wrapper.findComponent(MdRadioGroup), 'the language group').vm.$emit(

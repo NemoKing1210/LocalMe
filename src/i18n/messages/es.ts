@@ -175,6 +175,8 @@ export const es: MessageCatalog = {
   'settings.historyCleared': 'Se han eliminado {count} mensajes.',
   'settings.notificationsPerPeerHelp':
     'Puedes silenciar a personas concretas desde el menú ⋮ de la lista.',
+  'locale.auto': 'Idioma del sistema',
+  'locale.autoHint': 'Sigue el idioma del sistema o usa el inglés si no está disponible.',
   'locale.en': 'English',
   'locale.ru': 'Русский',
   'locale.es': 'Español',

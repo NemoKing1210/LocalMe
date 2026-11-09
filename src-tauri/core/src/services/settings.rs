@@ -29,9 +29,14 @@ pub const DEFAULT_LOG_RETENTION_DAYS: u32 = 14;
 /// The front end keeps the other half of this list in `src/i18n/locales.ts`; a variant added
 /// here without a catalogue there would let the user pick a language the interface cannot speak,
 /// so `messages.spec.ts` fails when a locale in that list has no label of its own.
+///
+/// [`Locale::Auto`] is a preference rather than a language: the web view resolves it against the
+/// operating system's language list, falling back to English. Only the front end can do that,
+/// because only it knows the system language; the host stores the choice untouched.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Locale {
+    Auto,
     En,
     Ru,
     Es,
@@ -46,6 +51,7 @@ impl Locale {
     #[must_use]
     pub const fn tag(self) -> &'static str {
         match self {
+            Self::Auto => "auto",
             Self::En => "en",
             Self::Ru => "ru",
             Self::Es => "es",
@@ -182,7 +188,7 @@ impl Default for Settings {
             version: SETTINGS_VERSION,
             onboarded: false,
             appearance: AppearanceSettings::default(),
-            locale: Locale::En,
+            locale: Locale::Auto,
             notifications: NotificationSettings::default(),
             system: SystemSettings::default(),
             logging: LoggingSettings::default(),
@@ -403,7 +409,7 @@ mod tests {
             !settings.onboarded,
             "a fresh install has not been onboarded"
         );
-        assert_eq!(settings.locale, Locale::En);
+        assert_eq!(settings.locale, Locale::Auto);
         assert_eq!(settings.appearance.theme, ThemeMode::System);
         assert_eq!(settings.appearance.accent, "#6750A4");
         assert!(settings.notifications.enabled);
@@ -421,6 +427,7 @@ mod tests {
         // The tag is what the front end and `Intl` see, and what the settings file holds; a
         // variant whose tag did not survive serialisation would silently reset the language.
         let locales = [
+            Locale::Auto,
             Locale::En,
             Locale::Ru,
             Locale::Es,

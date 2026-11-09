@@ -103,8 +103,11 @@ export interface KnownDevice {
 
 export type ThemeMode = 'system' | 'light' | 'dark';
 
-/** Interface language. Mirrors the `Locale` enum in `localme-core`. */
+/** A language the interface can speak. Mirrors the language variants in `localme-core`. */
 export type Locale = 'en' | 'ru' | 'es' | 'de' | 'fr' | 'pt' | 'zh';
+
+/** The stored language choice: a concrete language, or `auto` to follow the system. */
+export type LocalePreference = Locale | 'auto';
 
 export interface AppearanceSettings {
   theme: ThemeMode;
@@ -134,7 +137,7 @@ export interface Settings {
   version: number;
   onboarded: boolean;
   appearance: AppearanceSettings;
-  locale: Locale;
+  locale: LocalePreference;
   notifications: NotificationSettings;
   system: SystemSettings;
   logging: LoggingSettings;

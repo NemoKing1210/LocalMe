@@ -164,6 +164,8 @@ export const zh: MessageCatalog = {
   'settings.saveFailed': '无法保存该设置。',
   'settings.historyCleared': '已删除 {count} 条消息。',
   'settings.notificationsPerPeerHelp': '可以在列表的 ⋮ 菜单中单独静音某位联系人。',
+  'locale.auto': '系统语言',
+  'locale.autoHint': '跟随系统语言；若不受支持则使用英语。',
   'locale.en': 'English',
   'locale.ru': 'Русский',
   'locale.es': 'Español',

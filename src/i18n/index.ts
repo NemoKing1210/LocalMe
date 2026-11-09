@@ -29,8 +29,15 @@ export {
   formatDays,
   formatRelativeTime,
 } from './format';
-export { LOCALES, normalizeLocale, FALLBACK_LOCALE } from './locales';
-export type { Locale } from './locales';
+export {
+  AUTO_LOCALE,
+  LOCALES,
+  normalizeLocale,
+  resolveLocale,
+  systemLanguages,
+  FALLBACK_LOCALE,
+} from './locales';
+export type { Locale, LocalePreference } from './locales';
 export type { MessageKey, MessageParams } from './messages/types';
 
 const CATALOGS: Record<Locale, MessageCatalog> = { en, ru, es, de, fr, pt, zh };

@@ -21,7 +21,7 @@ Typical user loop:
 4. History, presence, unread counts and settings persist across restarts.
 
 UI languages: English, Russian, Spanish, German, French, Portuguese and Chinese. Identifier:
-`dev.localme.desktop`. Version: `0.9.3`. Changelog: [CHANGELOG.md](CHANGELOG.md). Design notes:
+`dev.localme.desktop`. Version: `0.10.0`. Changelog: [CHANGELOG.md](CHANGELOG.md). Design notes:
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Stack (accurate)
@@ -263,7 +263,8 @@ obvious change. Keep existing comments true or delete them; never comment out co
   row mounting, and leave no transform at rest on a list row — see the note in `UserListView.vue`.
 - **String:** add the key to `src/i18n/messages/en.ts` (the source of truth for `MessageKey`) and to
   **every** other catalogue; `npm run test` fails when one is missing. A new language is a catalogue
-  plus an entry in `src/i18n/locales.ts`, `src/ipc/types.ts` and `Locale` in `localme-core`.
+  plus an entry in `src/i18n/locales.ts`, `src/ipc/types.ts` and `Locale` in `localme-core`
+  (`auto` is a preference there, not a language: the web view resolves it against the system).
 - **UI control:** add an `Md*` component in `src/ui/` using the tokens from `src/theme/tokens.css`;
   do not import a component library.
 - **File-type icon:** add the extension to `BY_EXTENSION` in `src/ui/fileIcons.ts` and import the

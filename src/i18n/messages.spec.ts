@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { setLocale, translate } from './index';
 import { de } from './messages/de';
@@ -8,7 +8,7 @@ import { fr } from './messages/fr';
 import { pt } from './messages/pt';
 import { ru } from './messages/ru';
 import { zh } from './messages/zh';
-import { LOCALES, normalizeLocale } from './locales';
+import { LOCALES, normalizeLocale, detectLocale, resolveLocale, systemLanguages } from './locales';
 
 function placeholders(template: string): string[] {
   return [...template.matchAll(/\{(\w+)\}/g)].map((match) => match[1] ?? '').sort();
@@ -134,6 +134,10 @@ describe('message catalogues', () => {
 });
 
 describe('locale selection', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it('falls back to English for anything it does not know', () => {
     expect(normalizeLocale(undefined)).toBe('en');
     expect(normalizeLocale(null)).toBe('en');
@@ -150,5 +154,39 @@ describe('locale selection', () => {
     expect(normalizeLocale('de-DE')).toBe('de');
     expect(normalizeLocale('pt-BR')).toBe('pt');
     expect(normalizeLocale('zh-Hans-CN')).toBe('zh');
+  });
+
+  it('picks the first supported language from the system list', () => {
+    expect(detectLocale(['ru-RU', 'en-US'])).toBe('ru');
+    expect(detectLocale(['fi-FI', 'de-DE'])).toBe('de');
+    expect(detectLocale(['fi-FI', 'xx', 'pt-BR'])).toBe('pt');
+  });
+
+  it('falls back to English when no system language is supported', () => {
+    expect(detectLocale([])).toBe('en');
+    expect(detectLocale(['fi-FI'])).toBe('en');
+    expect(detectLocale(['xx-YY', ''])).toBe('en');
+  });
+
+  it('resolves the automatic preference against the system list', () => {
+    expect(resolveLocale('auto', ['pt-BR'])).toBe('pt');
+    expect(resolveLocale('auto', ['fi-FI'])).toBe('en');
+    expect(resolveLocale('auto', [])).toBe('en');
+    // A named language ignores the system: the user's choice wins.
+    expect(resolveLocale('de', ['ru-RU'])).toBe('de');
+    expect(resolveLocale('en', ['ru-RU'])).toBe('en');
+  });
+
+  it('reads the system language list, with the single tag as a fallback', () => {
+    vi.stubGlobal('navigator', { languages: ['de-DE', 'en-US'], language: 'de-DE' });
+    expect(systemLanguages()).toEqual(['de-DE', 'en-US']);
+
+    vi.stubGlobal('navigator', { language: 'ru-RU' });
+    expect(systemLanguages()).toEqual(['ru-RU']);
+    expect(resolveLocale('auto')).toBe('ru');
+
+    vi.stubGlobal('navigator', { language: '' });
+    expect(systemLanguages()).toEqual([]);
+    expect(resolveLocale('auto')).toBe('en');
   });
 });

@@ -176,6 +176,8 @@ export const fr: MessageCatalog = {
   'settings.historyCleared': '{count} messages supprimés.',
   'settings.notificationsPerPeerHelp':
     'Tu peux mettre des personnes en sourdine depuis le menu ⋮ de la liste.',
+  'locale.auto': 'Langue du système',
+  'locale.autoHint': 'Suit la langue du système, ou l’anglais à défaut.',
   'locale.en': 'English',
   'locale.ru': 'Русский',
   'locale.es': 'Español',

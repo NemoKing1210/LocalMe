@@ -173,6 +173,8 @@ export const ru: MessageCatalog = {
   'settings.historyCleared': 'Удалено сообщений: {count}.',
   'settings.notificationsPerPeerHelp':
     'Отдельным пользователям можно отключить уведомления в меню ⋮ в списке.',
+  'locale.auto': 'Системный язык',
+  'locale.autoHint': 'Следует языку системы, а если он не поддерживается — английскому.',
   'locale.en': 'English',
   'locale.ru': 'Русский',
   'locale.es': 'Español',

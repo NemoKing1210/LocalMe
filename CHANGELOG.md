@@ -5,6 +5,15 @@ All notable changes to LocalMe are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] - 2026-11-09
+
+### Added
+
+- **Automatic language.** The interface can now follow the operating system's language instead
+  of a fixed choice, and switches with it while LocalMe is running. Languages the interface does
+  not ship fall back to English. New installs start in this mode; a language picked by hand stays
+  picked.
+
 ## [0.9.3] - 2026-11-09
 
 ### Changed
