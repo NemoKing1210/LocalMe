@@ -48,17 +48,17 @@ describe('translate', () => {
 
   it('selects the plural form the language actually uses', () => {
     setLocale('en');
-    expect(translate('users.unread', { count: 1 })).toContain('1');
+    expect(translate('settings.logSummary', { count: 1, size: '1 MB' })).toContain('1');
 
     setLocale('ru');
-    expect(translate('users.unread', { count: 2 })).toBe('2 непрочитанных сообщения');
-    expect(translate('users.unread', { count: 5 })).toBe('5 непрочитанных сообщений');
-    expect(translate('users.unread', { count: 1 })).toBe('1 непрочитанное сообщение');
+    expect(translate('settings.logSummary', { count: 2, size: '2 MB' })).toBe('2 файла · 2 MB');
+    expect(translate('settings.logSummary', { count: 5, size: '5 MB' })).toBe('5 файлов · 5 MB');
+    expect(translate('settings.logSummary', { count: 1, size: '1 MB' })).toBe('1 файл · 1 MB');
   });
 
   it('falls back to the base key when the selected plural category has no variant', () => {
     setLocale('en');
-    const withCount = translate('users.unread', { count: 5 });
+    const withCount = translate('settings.logSummary', { count: 5, size: '5 MB' });
     // English has only the `one` variant, so the plural path must not blank the message.
     expect(withCount).not.toBe('');
     expect(withCount).toContain('5');

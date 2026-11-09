@@ -20,6 +20,9 @@ export default defineConfigWithVueTs(
       'tools/**',
       'scripts/**',
       'docs/**',
+      // Local development artifacts, as in .gitignore.
+      '.local-instances/**',
+      '*.local',
     ],
   },
   {

@@ -2,22 +2,13 @@ import type { MessageCatalog } from './types';
 
 export const es: MessageCatalog = {
   'app.name': 'LocalMe',
-  'app.tagline': 'Mensajes en tu red local',
 
   'common.cancel': 'Cancelar',
-  'common.confirm': 'Confirmar',
-  'common.close': 'Cerrar',
-  'common.save': 'Guardar',
   'common.delete': 'Eliminar',
-  'common.search': 'Buscar',
   'common.retry': 'Reintentar',
   'common.back': 'Atrás',
   'common.loading': 'Cargando…',
-  'common.you': 'Tú',
   'common.dismiss': 'Descartar',
-  'common.more': 'Más',
-  'common.options': 'Opciones',
-  'common.clear': 'Borrar',
 
   'onboarding.title': 'Bienvenido a LocalMe',
   'onboarding.subtitle':
@@ -39,21 +30,14 @@ export const es: MessageCatalog = {
   'users.clearSearch': 'Borrar búsqueda',
   'users.searchEmpty': 'Nadie coincide con «{query}».',
   'users.online': 'en línea',
-  'users.offline': 'desconectado',
   'users.lastSeen': 'visto por última vez {relative}',
   'users.neverSeen': 'nunca se ha conectado',
-  'users.unread': '{count} mensajes sin leer',
-  'users.unread.one': '{count} mensaje sin leer',
-  'users.unread.many': '{count} de mensajes sin leer',
   'users.forget': 'Olvidar…',
   'users.muted': 'Notificaciones silenciadas',
-  'users.openChatWith': 'Conversación con {name}',
   'users.actionsFor': 'Acciones para {name}',
   'users.mute': 'Silenciar notificaciones',
   'users.unmute': 'Activar notificaciones',
-  'users.you': 'Tú ({name})',
   'users.youPreview': 'Tú: {body}',
-  'users.count': 'Personas: {count}',
 
   'forget.title': '¿Olvidar a {name}?',
   'forget.body':
@@ -67,7 +51,6 @@ export const es: MessageCatalog = {
   'chat.composerOfflineHint': '{name} no está en línea. Los mensajes se enviarán cuando vuelva.',
   'chat.send': 'Enviar',
   'chat.tooLong': 'El mensaje supera los {max} caracteres.',
-  'chat.composerHint': 'Enter envía, Shift+Enter inserta un salto de línea',
   'chat.statusQueued': 'Pendiente de envío',
   'chat.statusSending': 'Enviando…',
   'chat.statusDelivered': 'Entregado',
@@ -123,6 +106,15 @@ export const es: MessageCatalog = {
   'settings.themeDark': 'Oscuro',
   'settings.accent': 'Color de acento',
   'settings.accentHelp': 'Cambia toda la paleta, no solo un botón.',
+  'settings.accentName.baseline': 'Base',
+  'settings.accentName.indigo': 'Índigo',
+  'settings.accentName.teal': 'Turquesa',
+  'settings.accentName.green': 'Verde',
+  'settings.accentName.amber': 'Ámbar',
+  'settings.accentName.orange': 'Naranja',
+  'settings.accentName.red': 'Rojo',
+  'settings.accentName.pink': 'Rosa',
+  'settings.accentName.slate': 'Pizarra',
 
   'settings.language': 'Idioma de la interfaz',
 
@@ -136,6 +128,8 @@ export const es: MessageCatalog = {
 
   'settings.autostart': 'Iniciar LocalMe al iniciar sesión',
   'settings.startMinimized': 'Iniciar minimizado en la bandeja del sistema',
+  'settings.startMinimizedHelp':
+    'Un inicio con el sistema se queda en la bandeja en lugar de abrir una ventana.',
   'settings.closeToTray': 'Seguir en ejecución en la bandeja al cerrar la ventana',
   'settings.closeToTrayHelp':
     'Si lo desactivas, cerrar la ventana cierra LocalMe y dejarás de recibir mensajes.',
@@ -177,8 +171,6 @@ export const es: MessageCatalog = {
   'settings.aboutArchitecture': 'Mensajería para red local',
   'settings.aboutLicense': 'Con licencia MIT.',
   'settings.aboutDiagnostics': 'Diagnóstico',
-  'settings.devicesKnown': 'Conocidos',
-  'settings.devicesForgotten': 'Olvidados',
   'settings.saveFailed': 'No se pudo guardar ese ajuste.',
   'settings.historyCleared': 'Se han eliminado {count} mensajes.',
   'settings.notificationsPerPeerHelp':
@@ -205,9 +197,6 @@ export const es: MessageCatalog = {
   'tray.openLogs': 'Abrir la carpeta de registros',
 
   'notification.newMessage': 'Mensaje nuevo',
-  'notification.newMessageCount': '{count} mensajes nuevos',
-  'notification.newMessageCount.one': '{count} mensaje nuevo',
-  'notification.newMessageCount.many': '{count} de mensajes nuevos',
 
   'error.storage': 'LocalMe no ha podido leer su propia base de datos.',
   'error.discovery': 'LocalMe no ha podido buscar otros dispositivos en esta red.',

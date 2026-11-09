@@ -8,7 +8,9 @@
 //! Two invariants hold the design together:
 //!
 //! * **The file on disk is the authority on how much has arrived.** A `transferred` column can
-//!   be one acknowledgement behind; the length of the part file cannot.
+//!   be one acknowledgement behind; the length of the part file cannot. The sender keeps the
+//!   furthest position the recipient has reported (`OutgoingTransfer::confirmed`) for the same
+//!   reason: that position only ever grows, so a smaller one is a stale acknowledgement.
 //! * **An incoming file is append-only.** A chunk that does not continue the file exactly is
 //!   refused, and the refusal reports the real position, which is what lets the sender rewind.
 
@@ -81,6 +83,14 @@ pub struct OutgoingTransfer {
     pub acked: u64,
     /// Bytes handed to the socket, which is where the next read starts.
     pub sent: u64,
+    /// The furthest position the recipient has ever reported.
+    ///
+    /// Its file is append-only, so a *smaller* position can only be an older acknowledgement that
+    /// arrived after a newer one — honouring it would drag the stream backwards and re-send a
+    /// whole window the recipient already has, refusing every chunk of it. Without this the two
+    /// ends can trade corrections for long enough to trip the recipient's inbound rate limit,
+    /// which closes the connection and restarts the transfer.
+    pub confirmed: u64,
     /// Set once the last chunk is out and [`OutgoingTransfer::done`] has been sent.
     pub finished: bool,
     file: Option<File>,
@@ -96,6 +106,7 @@ impl OutgoingTransfer {
             path,
             acked: transferred,
             sent: transferred,
+            confirmed: transferred,
             finished: false,
             file: None,
             position: transferred,
@@ -128,12 +139,26 @@ impl OutgoingTransfer {
     /// Moves the cursor to `offset`, which is what a recipient's correction asks for. The next
     /// read re-opens the file if the offset is behind the current position.
     pub fn rewind(&mut self, offset: u64) {
-        self.sent = offset.min(self.attachment.size);
-        self.acked = self.acked.min(offset);
-        self.finished = false;
-        if self.position > self.sent {
-            self.file = None;
+        // The recipient's file only grows, so a position behind the furthest one it has reported
+        // is a stale acknowledgement, not a correction.
+        let offset = offset.max(self.confirmed);
+        self.confirmed = offset;
+        let target = offset.min(self.attachment.size);
+        if target < self.sent {
+            // A real step back: the last chunk has to be sent again, and a cursor that was ahead
+            // of it is re-opened.
+            self.finished = false;
+            if self.position > target {
+                self.file = None;
+            }
         }
+        self.sent = target;
+        // Everything below the reported position is on the recipient's disk, so it is confirmed
+        // by definition. Measuring the window from anything older is a stall waiting to happen:
+        // at the end of a file the sender would sit with a full window it can never empty, and a
+        // full window means the pump sends nothing at all — not even the `file_done` that would
+        // finish the transfer.
+        self.acked = target;
     }
 
     /// Reads the next chunk, up to [`FILE_CHUNK_BYTES`], or `None` when the end is reached.
@@ -351,6 +376,85 @@ mod tests {
         transfer.rewind(FILE_CHUNK_BYTES as u64);
         let chunk = transfer.read_chunk().expect("read").expect("a chunk");
         assert_eq!(chunk, bytes[FILE_CHUNK_BYTES..FILE_CHUNK_BYTES * 2]);
+    }
+
+    #[test]
+    fn a_stale_correction_cannot_drag_the_stream_backwards() {
+        // The recipient's part file is append-only, so a correction behind a position it has
+        // already reported is an older acknowledgement. Acting on it would re-send chunks the
+        // recipient already has, refused one by one, until the refusal storm trips its inbound
+        // rate limit and the connection dies.
+        let dir = tempfile::tempdir().expect("temp dir");
+        let bytes: Vec<u8> = (0..(FILE_CHUNK_BYTES * 3) as u32)
+            .map(|i| i as u8)
+            .collect();
+        let path = write_source(dir.path(), &bytes);
+        let mut transfer = OutgoingTransfer::new(
+            attachment(AttachmentState::Sending, bytes.len() as u64, 0),
+            path,
+        );
+
+        transfer.rewind(FILE_CHUNK_BYTES as u64);
+        assert_eq!(transfer.sent, FILE_CHUNK_BYTES as u64);
+        transfer.rewind(0);
+        assert_eq!(
+            transfer.sent, FILE_CHUNK_BYTES as u64,
+            "a stale correction must not move the stream back"
+        );
+
+        let chunk = transfer.read_chunk().expect("read").expect("a chunk");
+        assert_eq!(chunk, bytes[FILE_CHUNK_BYTES..FILE_CHUNK_BYTES * 2]);
+    }
+
+    #[test]
+    fn a_correction_ahead_of_the_stream_is_honoured() {
+        // The other direction is the useful one: the recipient is further along than we thought,
+        // and the bytes it already has must not be sent again.
+        let dir = tempfile::tempdir().expect("temp dir");
+        let bytes: Vec<u8> = (0..(FILE_CHUNK_BYTES * 3) as u32)
+            .map(|i| i as u8)
+            .collect();
+        let path = write_source(dir.path(), &bytes);
+        let mut transfer = OutgoingTransfer::new(
+            attachment(AttachmentState::Sending, bytes.len() as u64, 0),
+            path,
+        );
+
+        transfer.rewind(FILE_CHUNK_BYTES as u64 * 2);
+        assert_eq!(transfer.sent, FILE_CHUNK_BYTES as u64 * 2);
+
+        let chunk = transfer.read_chunk().expect("read").expect("a chunk");
+        assert_eq!(chunk, bytes[FILE_CHUNK_BYTES * 2..]);
+    }
+
+    #[test]
+    fn a_correction_at_the_end_of_the_file_leaves_the_sender_able_to_finish() {
+        // The deadlock this pins: with the window measured from a stale acknowledgement, a sender
+        // whose whole file is already on the recipient's disk has `sent == size` and a full
+        // window, so `wants_chunk` is false, the pump sends nothing, and the `file_done` that
+        // would finish the transfer is never sent — neither end ever speaks again.
+        let dir = tempfile::tempdir().expect("temp dir");
+        // The source is never read: only the window arithmetic matters here.
+        let path = write_source(dir.path(), &[0_u8; 16]);
+        let size = FILE_WINDOW_BYTES + FILE_CHUNK_BYTES as u64;
+        let mut source = attachment(AttachmentState::Sending, size, 0);
+        source.sha256 = Some(Sha256::of(b"anything"));
+        let mut transfer = OutgoingTransfer::new(source, path);
+        transfer.sent = size;
+        transfer.acked = 0;
+        assert!(!transfer.wants_chunk(), "the stale window is full");
+
+        transfer.rewind(size);
+        assert_eq!(transfer.sent, size);
+        assert_eq!(
+            transfer.acked, size,
+            "the whole file is on the recipient's disk"
+        );
+        assert!(transfer.is_complete());
+        assert!(
+            transfer.wants_chunk(),
+            "the finishing `file_done` must still be able to go out"
+        );
     }
 
     #[test]

@@ -6,14 +6,11 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 
 use crate::error::{ProtocolError, TransportError};
-use crate::protocol::limits::PROTOCOL_VERSION;
-use crate::protocol::{Frame, FrameDecoder, decode, encode, peek_version};
+use crate::protocol::limits::{PROTOCOL_VERSION, READ_CHUNK_BYTES};
+use crate::protocol::{Frame, FrameDecoder, decode_versioned, encode};
 
-/// Size of the scratch buffer used per read.
-///
-/// The decoder rejects an oversized frame on its length prefix before anything proportional
-/// is allocated, so this stays independent of the frame size cap.
-const READ_CHUNK: usize = 8 * 1024;
+/// Scratch buffer size, shared with the decoder's buffer bound in `limits`.
+const READ_CHUNK: usize = READ_CHUNK_BYTES;
 
 #[derive(Debug)]
 pub struct FrameReader {
@@ -45,16 +42,17 @@ impl FrameReader {
     pub async fn next(&mut self) -> Result<Option<Frame>, TransportError> {
         loop {
             if let Some(payload) = self.decoder.next_frame()? {
-                // Version check before the full decode: a peer on another version may not
-                // even parse, and "malformed" would be misleading where "wrong version" is meant.
-                let announced = peek_version(&payload)?;
+                // The version is read from the same parse that validates the frame: a peer on
+                // another version may not even parse, and "malformed" would be misleading where
+                // "wrong version" is meant.
+                let (announced, frame) = decode_versioned(&payload)?;
                 if announced != PROTOCOL_VERSION {
                     return Err(TransportError::Protocol(ProtocolError::VersionMismatch {
                         got: announced,
                         supported: PROTOCOL_VERSION,
                     }));
                 }
-                return Ok(Some(decode(&payload)?));
+                return Ok(Some(frame));
             }
 
             let read = self.inner.read(self.scratch.as_mut_slice()).await?;

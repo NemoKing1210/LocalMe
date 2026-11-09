@@ -5,6 +5,91 @@ All notable changes to LocalMe are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.3] - 2026-11-09
+
+### Changed
+
+- **The composer is quieter.** The line spelling out Enter and Shift+Enter is gone; the keyboard
+  still works the same, and the footer now appears only to warn about length or show the counter
+
+## [0.9.2] - 2026-10-03
+
+### Added
+
+- **A settings screen that is one screen per concern** — profile, appearance, language,
+  notifications, system, data, logging and about are their own components, so a change in one
+  cannot disturb another
+- **Error messages in the interface's own language** — a failure the host can name is now shown
+  as the sentence from the catalogue, chosen by the host's own error tag, instead of the English
+  text the wire carries
+- Friendly names for the accent swatches, read out by a screen reader (`settings.accentName.*`)
+
+### Fixed
+
+- **History paging loaded the wrong page.** The host returns a page newest-first and the store
+  treated its first row as the oldest, so "load earlier messages" re-fetched what was already on
+  screen and never reached the beginning of a conversation
+- **An interrupted file transfer could stall for ever, or trip the rate limit and start over.**
+  An acknowledgement is a statement of what is on the recipient's disk, and the sender was
+  treating it as an opinion: a stale one could drag the stream backwards, so the sender re-sent a
+  window the recipient already had — every chunk refused, fast enough that the refusal traffic hit
+  the recipient's inbound rate limit and dropped the connection. And because the window stayed
+  measured from an older acknowledgement, a sender whose file was already complete on the
+  recipient's disk had a full window and sent nothing at all: not even the `file_done` that
+  finishes the transfer. Corrections now only ever move the stream forward, and the reported
+  position becomes the window's floor
+- **A nickname of 28 characters or more made a device unreachable.** The avatar seed derived from
+  the device id and the nickname could exceed the seed's own limit, so the peer was dropped by
+  discovery and refused at the handshake
+- **`start_minimized` did nothing.** The setting was stored and shown but never read; a start with
+  the system always stayed in the tray and a normal start always showed the window
+- **A lowered log retention did not take effect until the next day**, because the startup prune
+  had already stamped the day
+- The remembered address of a peer is no longer wiped by a rename or a re-discovery, so the
+  preferred dial address survives
+- A message whose identifier belongs to another conversation is no longer acknowledged as
+  delivered while being dropped
+- A peer cannot open an unbounded number of part files: at most 16 transfers may arrive at once
+- The window is only hidden at startup when the tray exists — a tray-only start on a desktop
+  without a tray would have left no way back
+- Attachment state and progress writes that fail are logged instead of discarded silently
+- The ready signal is sent once, after the first paint, instead of twice
+
+### Changed
+
+- A failed startup is written to the daily log file as well as the browser console, with its
+  stack: the error screen is exactly what a user reports, and until now it left no trace in the
+  log they can open from the settings screen
+- **File transfers no longer block the session.** Chunk reads, chunk writes and the inspection of
+  a file about to be sent run on the blocking pool, so a slow disk cannot stall message delivery,
+  acknowledgements or presence for every peer
+- **The outbox drains in batches**: one query for a batch of waiting messages and one transaction
+  to mark them in flight, instead of a query and a round trip per message
+- **Frames are encoded and decoded once.** The version check and the frame decode share a single
+  JSON parse, the encoder writes into one buffer, and the decoder no longer copies the whole
+  remainder of its buffer for every frame
+- One clock for the whole interface: every row shares one timer and one visibility listener
+- The file picker and the save dialog are asynchronous, so a modal dialog no longer freezes the
+  window, the tray and every other command while it is open
+- The file-transfer state machine lives in `services/session/transfer.rs` beside the actor, and
+  the chunk and completion handlers share one validator
+- Every discovery cache is bounded, and the beacon decodes a limited number of datagrams per
+  second, so one host on the network cannot grow them without bound
+- Stored timestamps are validated on the wire: a message id must be a UUIDv7
+- The bundle is split by library, keeping the entry chunk under the audit threshold
+
+### Removed
+
+- Seven commands and two events nothing called: `mark_read`, `is_autostart_enabled`,
+  `show_window`, `hide_window`, `quit` and the `own_profile`/`onboarding_complete` events
+- Unused icons, unused catalogue strings (and the plural families that went with them), and the
+  store fields no component read
+- The `process` plugin, the unused `thiserror` dependency in the host crate and six npm packages
+  no module imports
+- Most of `capabilities/default.json`: the web view is granted what it invokes (`core:default`
+  and `os:allow-hostname`), and nothing for the notifications, dialogs, autostart and window
+  policy that Rust drives directly
+
 ## [0.9.1] - 2026-10-02
 
 ### Added

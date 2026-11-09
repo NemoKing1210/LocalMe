@@ -10,7 +10,7 @@
 //! length instead of stalling.
 
 use crate::error::ProtocolError;
-use crate::protocol::limits::{LENGTH_PREFIX_BYTES, MAX_FRAME_BYTES};
+use crate::protocol::limits::{LENGTH_PREFIX_BYTES, MAX_FRAME_BYTES, READ_CHUNK_BYTES};
 
 /// # Errors
 ///
@@ -34,11 +34,14 @@ pub fn encode_frame(payload: &[u8]) -> Result<Vec<u8>, ProtocolError> {
 
 /// Incremental decoder: feed it bytes, pull whole frames out.
 ///
-/// The buffer never holds more than one frame plus a partial prefix, and a partial frame stays
+/// The buffer never holds more than one frame plus one read chunk, and a partial frame stays
 /// in the buffer across calls.
 #[derive(Debug, Default)]
 pub struct FrameDecoder {
     buffer: Vec<u8>,
+    /// Read cursor: everything before it has been handed out. The buffer shifts only in `push`,
+    /// once per read rather than once per frame, so a burst of small frames stays linear.
+    start: usize,
 }
 
 impl FrameDecoder {
@@ -49,15 +52,21 @@ impl FrameDecoder {
 
     #[must_use]
     pub fn buffered(&self) -> usize {
-        self.buffer.len()
+        self.buffer.len() - self.start
     }
 
     /// # Errors
     ///
     /// Returns [`ProtocolError::FrameSize`] if the declared length of the frame at the head of
-    /// the buffer is invalid, or if the buffer exceeds what a valid frame plus its prefix could
+    /// the buffer is invalid, or if the buffer exceeds what a valid frame plus one read could
     /// occupy.
     pub fn push(&mut self, bytes: &[u8]) -> Result<(), ProtocolError> {
+        // Drop the bytes already handed out: this is the only place the buffer shifts, so
+        // decoding a batch of frames does not move the remainder per frame.
+        if self.start > 0 {
+            self.buffer.drain(..self.start);
+            self.start = 0;
+        }
         self.buffer.extend_from_slice(bytes);
 
         // Validate the claimed length as soon as the prefix is complete: this is where a
@@ -76,7 +85,11 @@ impl FrameDecoder {
             }
         }
 
-        if self.buffer.len() > MAX_FRAME_BYTES + LENGTH_PREFIX_BYTES {
+        // A single read can complete the head frame and still carry the first bytes of the next
+        // one, so the bound allows one frame plus one whole read chunk. A peer that declares a
+        // legal length and then floods is still cut off before the buffer can grow further,
+        // because the reader decodes and drains the head frame before reading again.
+        if self.buffer.len() > MAX_FRAME_BYTES + LENGTH_PREFIX_BYTES + READ_CHUNK_BYTES {
             return Err(ProtocolError::FrameSize {
                 len: self.buffer.len(),
                 max: MAX_FRAME_BYTES,
@@ -91,15 +104,19 @@ impl FrameDecoder {
     /// which cannot happen after a successful [`FrameDecoder::push`] but is checked rather
     /// than assumed.
     pub fn next_frame(&mut self) -> Result<Option<Vec<u8>>, ProtocolError> {
-        if self.buffer.len() < LENGTH_PREFIX_BYTES {
+        let remaining = self.buffered();
+        if remaining < LENGTH_PREFIX_BYTES {
             return Ok(None);
         }
-        let Some(prefix) = self.buffer.get(..LENGTH_PREFIX_BYTES) else {
+        let Some(prefix) = self
+            .buffer
+            .get(self.start..self.start + LENGTH_PREFIX_BYTES)
+        else {
             return Ok(None);
         };
         let declared =
             u32::from_be_bytes(prefix.try_into().map_err(|_| ProtocolError::FrameSize {
-                len: self.buffer.len(),
+                len: remaining,
                 max: MAX_FRAME_BYTES,
             })?) as usize;
         if declared == 0 || declared > MAX_FRAME_BYTES {
@@ -109,16 +126,21 @@ impl FrameDecoder {
             });
         }
         let total = LENGTH_PREFIX_BYTES + declared;
-        if self.buffer.len() < total {
+        if remaining < total {
             return Ok(None);
         }
 
-        // `drain` keeps the remaining bytes (the start of the next frame) in place.
-        let frame: Vec<u8> = self
+        // Copy the payload and advance the cursor; the rest of the buffer stays where it is
+        // until the next `push`, which compacts once. The range is known to be in bounds — it was
+        // compared against `buffered()` above — but it is read through `get` rather than indexed.
+        let Some(frame) = self
             .buffer
-            .drain(..total)
-            .skip(LENGTH_PREFIX_BYTES)
-            .collect();
+            .get(self.start + LENGTH_PREFIX_BYTES..self.start + total)
+        else {
+            return Ok(None);
+        };
+        let frame = frame.to_vec();
+        self.start += total;
         Ok(Some(frame))
     }
 }
@@ -241,19 +263,39 @@ mod tests {
     }
 
     #[test]
-    fn the_buffer_cannot_grow_past_one_frame() {
-        // A peer that declares a legal length and then floods must be cut off once the
-        // buffer holds more than a legal frame plus its prefix.
+    fn the_buffer_cannot_grow_past_one_frame_plus_a_read() {
+        // A peer that declares a legal length and then floods must be cut off once the buffer
+        // holds more than one frame plus the largest single read.
         let mut decoder = FrameDecoder::new();
         let declared = u32::try_from(MAX_FRAME_BYTES).expect("fits");
         decoder.push(&declared.to_be_bytes()).expect("push");
         decoder
-            .push(&vec![0u8; MAX_FRAME_BYTES])
-            .expect("exactly one frame is legal");
-        let err = decoder
-            .push(&[0u8; 8])
-            .expect_err("an extra frame's worth is not");
+            .push(&vec![0u8; MAX_FRAME_BYTES + READ_CHUNK_BYTES])
+            .expect("one frame plus one read is legal");
+        let err = decoder.push(&[0u8; 1]).expect_err("one byte more is not");
         assert!(matches!(err, ProtocolError::FrameSize { .. }));
+    }
+
+    #[test]
+    fn a_max_frame_followed_by_another_frame_in_one_read_is_accepted() {
+        // The regression: one read can complete a maximum frame and carry the start of the
+        // next, so the buffer legitimately reaches `MAX_FRAME_BYTES + prefix + read`.
+        let mut buffer = encode_frame(&vec![7u8; MAX_FRAME_BYTES]).expect("max frame");
+        buffer.extend_from_slice(&framed(b"next"));
+
+        let mut decoder = FrameDecoder::new();
+        decoder.push(&buffer).expect("push");
+        assert_eq!(
+            decoder
+                .next_frame()
+                .expect("decode")
+                .map(|frame| frame.len()),
+            Some(MAX_FRAME_BYTES)
+        );
+        assert_eq!(
+            decoder.next_frame().expect("decode"),
+            Some(b"next".to_vec())
+        );
     }
 
     #[test]
@@ -294,6 +336,7 @@ mod tests {
         // impossible length rather than slicing a frame that cannot exist.
         let mut zero = FrameDecoder {
             buffer: vec![0, 0, 0, 0],
+            start: 0,
         };
         assert!(matches!(
             zero.next_frame(),
@@ -305,6 +348,7 @@ mod tests {
                 .expect("fits")
                 .to_be_bytes()
                 .to_vec(),
+            start: 0,
         };
         assert!(matches!(
             oversized.next_frame(),

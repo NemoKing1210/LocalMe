@@ -152,10 +152,6 @@ export function retryAttachment(id: AttachmentId): Promise<void> {
   return call('retry_attachment', { attachmentId: id });
 }
 
-export function markRead(peerId: DeviceId): Promise<number> {
-  return call('mark_read', { peerId });
-}
-
 export function forgetPeer(peerId: DeviceId, deleteHistory: boolean): Promise<void> {
   return call('forget_peer', { peerId, deleteHistory });
 }
@@ -196,10 +192,6 @@ export function updateSettings(settings: Settings): Promise<Settings> {
   return call('update_settings', { settings });
 }
 
-export function isAutostartEnabled(): Promise<boolean> {
-  return call('is_autostart_enabled');
-}
-
 export function setUiLabels(labels: UiLabels): Promise<void> {
   return call('set_ui_labels', { labels });
 }
@@ -211,18 +203,6 @@ export function setWindowAccent(accent: string, onAccent: string): Promise<void>
 
 export function setActiveChat(peerId: DeviceId | null): Promise<void> {
   return call('set_active_chat', { peerId });
-}
-
-export function showWindow(): Promise<void> {
-  return call('show_window');
-}
-
-export function hideWindow(): Promise<void> {
-  return call('hide_window');
-}
-
-export function quit(): Promise<void> {
-  return call('quit');
 }
 
 export function diagnostics(): Promise<Diagnostics> {

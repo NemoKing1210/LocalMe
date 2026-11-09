@@ -1,6 +1,8 @@
 import { createPinia, setActivePinia } from 'pinia';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { CommandError } from '@/ipc';
+
 import { useUiStore } from './ui';
 
 beforeEach(() => {
@@ -84,5 +86,61 @@ describe('the ui store', () => {
 
     vi.advanceTimersByTime(1_000);
     expect(ui.notice).toBeNull();
+  });
+});
+
+describe('attempt', () => {
+  it('returns the value a command resolved with, and shows nothing', async () => {
+    const ui = useUiStore();
+
+    const result = await ui.attempt(() => Promise.resolve(42), 'the thing failed');
+
+    expect(result).toEqual({ ok: true, value: 42 });
+    expect(ui.notice).toBeNull();
+  });
+
+  it('reports the failure with the sentence for the host tag, not the caller fallback', async () => {
+    const ui = useUiStore();
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const result = await ui.attempt(
+      () => Promise.reject(new CommandError({ kind: 'network', message: 'no route' })),
+      'the thing failed',
+      'error.storage',
+    );
+
+    expect(result).toEqual({ ok: false });
+    expect(ui.notice).toMatchObject({ tone: 'error', key: 'error.network' });
+    expect(logged).toHaveBeenCalledWith('[localme] the thing failed', expect.anything());
+  });
+
+  it('falls back to the caller key for a failure the host did not name', async () => {
+    const ui = useUiStore();
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    // A rejected promise with a plain error: the host never tagged it.
+    await ui.attempt(() => Promise.reject(new Error('boom')), 'the thing failed', 'error.storage');
+    expect(ui.notice?.key).toBe('error.storage');
+
+    // A tagged failure with no sentence of its own (`invalid_input` is shown on its field).
+    await ui.attempt(
+      () => Promise.reject(new CommandError({ kind: 'invalid_input', field: 'x', message: 'bad' })),
+      'the thing failed',
+      'error.storage',
+    );
+    expect(ui.notice?.key).toBe('error.storage');
+  });
+
+  it('keeps the value a command resolved with even when it is falsy', async () => {
+    const ui = useUiStore();
+
+    expect(await ui.attempt(() => Promise.resolve(0), 'the thing failed')).toEqual({
+      ok: true,
+      value: 0,
+    });
+    expect(await ui.attempt(() => Promise.resolve(undefined), 'the thing failed')).toEqual({
+      ok: true,
+      value: undefined,
+    });
   });
 });

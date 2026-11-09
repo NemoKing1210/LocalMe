@@ -3,7 +3,7 @@ import { mount } from '@vue/test-utils';
 import { describe, expect, it } from 'vitest';
 
 import MdIcon from './MdIcon.vue';
-import { ICONS } from './icons';
+import { ICONS, type IconName } from './icons';
 
 const TAG_FOR_KIND: Record<string, string> = {
   path: 'path',
@@ -74,10 +74,11 @@ describe('icon data', () => {
 
 describe('MdIcon', () => {
   it('renders every icon as a 24px SVG with one element per primitive', () => {
-    for (const name of Object.keys(ICONS)) {
+    const names = Object.keys(ICONS) as IconName[];
+    for (const name of names) {
       const wrapper = mount(MdIcon, { props: { name } });
       const svg = wrapper.get('svg');
-      const shapes = ICONS[name] ?? [];
+      const shapes: readonly { readonly kind: string }[] = ICONS[name];
 
       expect(svg.attributes('viewBox'), name).toBe('0 0 24 24');
       expect(svg.attributes('aria-hidden'), name).toBe('true');

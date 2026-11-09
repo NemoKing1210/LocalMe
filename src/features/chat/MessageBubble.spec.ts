@@ -364,14 +364,14 @@ describe('MessageBubble context menu, clipboard and entrance', () => {
       props: { message: makeMessage({ body: 'hello' }), showStatus: true },
     });
     const ui = useUiStore();
-    const fail = vi.spyOn(ui, 'fail');
     const notify = vi.spyOn(ui, 'notify');
     const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     wrapper.findComponent(MdMenu).vm.$emit('select', 'message');
     await flushPromises();
 
-    expect(fail).toHaveBeenCalledWith('error.internal');
+    // The failure is reported through the store's own notice, as an error tone.
+    expect(ui.notice?.tone).toBe('error');
     expect(notify).not.toHaveBeenCalled();
     expect(logged).toHaveBeenCalled();
   });

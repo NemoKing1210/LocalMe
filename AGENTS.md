@@ -21,7 +21,7 @@ Typical user loop:
 4. History, presence, unread counts and settings persist across restarts.
 
 UI languages: English, Russian, Spanish, German, French, Portuguese and Chinese. Identifier:
-`dev.localme.desktop`. Version: `0.9.1`. Changelog: [CHANGELOG.md](CHANGELOG.md). Design notes:
+`dev.localme.desktop`. Version: `0.9.3`. Changelog: [CHANGELOG.md](CHANGELOG.md). Design notes:
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Stack (accurate)
@@ -64,9 +64,9 @@ src/
     onboarding/            first-run nickname + avatar
     users/                 user list, search, sorting, forget
     chat/                  message list, composer, attachments, history paging
-    settings/              profile, appearance, language, notifications, system, data, logs
+    settings/              the screen (a container) + sections/ (one component per group)
   stores/                  Pinia: peers, chat, settings, ui
-  composables/             useNow, useMediaQuery, useEntrance
+  composables/             useNow, usePresence, useMediaQuery, useEntrance
   app/                     router + routes, ShellView, connect (event bridge), errors, ready
   test/                    shared test harness: mount helper, DTO factories, matchMedia, setup
 src-tauri/
@@ -91,7 +91,8 @@ src-tauri/
       discovery/           mDNS, UDP beacon, composite adapter
       transport/           TCP listener, connection, codec
       storage/             SQLite store + schema/migrations
-      services/            Session actor, file-transfer engine, Settings actor, events
+      services/            Session actor + session/transfer.rs (the file-transfer machine),
+                           attachment.rs (the byte-level work), Settings actor, events
       runtime.rs           wires concrete adapters into the actor
     tests/loopback.rs      two full instances discovering and messaging each other
 .github/
@@ -141,11 +142,11 @@ it in `src/ipc/`.
 | Command group        | Commands                                                                                                                          |
 | -------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
 | Bootstrap & peers    | `bootstrap`, `list_peers`, `known_devices`, `forget_peer`, `restore_peer`, `set_peer_muted`                                       |
-| Chat                 | `history`, `send_message`, `mark_read`, `clear_history`                                                                           |
+| Chat                 | `history`, `send_message`, `clear_history`                                                                                        |
 | Files                | `pick_files`, `inspect_files`, `open_attachment`, `reveal_attachment`, `save_attachment`, `cancel_attachment`, `retry_attachment` |
 | Profile              | `own_profile`, `set_nickname`, `complete_onboarding`                                                                              |
-| Settings & UI labels | `get_settings`, `update_settings`, `is_autostart_enabled`, `set_ui_labels`, `set_active_chat`                                     |
-| Window & lifecycle   | `show_window`, `hide_window`, `quit`, `diagnostics`                                                                               |
+| Settings & UI labels | `get_settings`, `update_settings`, `set_ui_labels`, `set_active_chat`                                                             |
+| Window & lifecycle   | `diagnostics`                                                                                                                     |
 | Logs                 | `logs_info`, `open_logs_folder`, `clear_logs`, `log_frontend`                                                                     |
 
 Host events: `peers`, `message`, `message_status`, `attachment`, `settings_changed`,
@@ -169,13 +170,17 @@ normalises it and exposes the host's own tag on `.kind` (`unknown_peer`, `networ
 
 A peer that is offline is not an error: the rows wait in SQLite and are written out, in order, when
 it is back. The drain is paced (see `OUTBOX_BURST` / `OUTBOX_RATE_PER_SECOND`) so it stays under the
-recipient's inbound rate limit, and a disconnect returns every in-flight row to `queued`
-(`requeue_pending_messages`); startup does the same for the whole database. The interface shows a
-second date — when the message was delivered — for a message that had to wait.
+recipient's inbound rate limit, it reads a batch at a time (`next_outbox_batch`, `OUTBOX_BATCH`) and
+marks the batch in flight in one transaction, and a disconnect returns every in-flight row to
+`queued` (`requeue_pending_messages`); startup does the same for the whole database. The interface
+shows a second date — when the message was delivered — for a message that had to wait.
 
 Files ride on the same message and then go their own way: the metadata is announced by the `chat`
 frame (so the bubble appears immediately, with the file cards in it), and the bytes follow as
-`file_chunk` frames paced by `FILE_SEND_RATE_PER_SECOND`. The recipient's part file is the
+`file_chunk` frames paced by `FILE_SEND_RATE_PER_SECOND`. The state machine is
+`core/src/services/session/transfer.rs`, an `impl Session` block beside the actor loop; the chunk
+read and write and the inspection of a file about to be sent run on `spawn_blocking` (`offload`),
+so the actor — which owns every peer's state — never waits on a disk. The recipient's part file is the
 authority on how much arrived — a chunk that does not continue it is refused with the real offset —
 so an interrupted transfer resumes from wherever it stopped instead of starting over, and the
 digest in `file_done` is what says the file is the file. `attachment` events carry the whole row to
@@ -266,7 +271,7 @@ obvious change. Keep existing comments true or delete them; never comment out co
   name it. Keep it cheap — an extension whose badge costs 15 KB is not worth an icon — and map to
   the nearest family rather than leaving it unhandled when the set has no badge of its own.
 - **Setting:** extend the typed `Settings` document (and its schema version), its default, the
-  settings screen, and every catalogue. A logging level or retention change is applied by the host
+  matching `features/settings/sections/` component, and every catalogue. A logging level or retention change is applied by the host
   without a restart: `events::apply_settings` calls `logging::apply`.
 - **Protocol change:** bump the envelope protocol version and update the frame table in
   `docs/ARCHITECTURE.md` §5.2.

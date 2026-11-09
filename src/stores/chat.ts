@@ -7,10 +7,19 @@ import type { Attachment, DeviceId, Message, PageCursor } from '@/ipc';
 /** How many messages one page holds. Matches the host's default. */
 const PAGE_SIZE = 50;
 
-function precedes(left: Message, right: Message): boolean {
+/**
+ * The conversation's total order: timestamp first, then identifier, so messages that share a
+ * millisecond still have one defined place. The store keeps the array in this order and the log
+ * draws it, so both must use this one comparison.
+ */
+export function compareMessages(left: Message, right: Message): number {
   return left.sentAt === right.sentAt
-    ? left.id.localeCompare(right.id) < 0
-    : left.sentAt < right.sentAt;
+    ? left.id.localeCompare(right.id)
+    : left.sentAt - right.sentAt;
+}
+
+function precedes(left: Message, right: Message): boolean {
+  return compareMessages(left, right) < 0;
 }
 
 export const useChatStore = defineStore('chat', () => {
@@ -28,14 +37,6 @@ export const useChatStore = defineStore('chat', () => {
     return oldest ? { sentAtMs: oldest.sentAt, id: oldest.id } : null;
   });
 
-  /** Messages that have not been delivered yet: waiting in the outbox or on the wire. */
-  const pendingCount = computed(
-    () =>
-      messages.value.filter(
-        (message) => message.status === 'queued' || message.status === 'sending',
-      ).length,
-  );
-
   async function open(next: DeviceId | null): Promise<void> {
     peerId.value = next;
     messages.value = [];
@@ -47,7 +48,9 @@ export const useChatStore = defineStore('chat', () => {
     try {
       const page = await ipc.history(next, null, PAGE_SIZE);
       if (peerId.value !== next) return; // the user moved on while the page was loading
-      messages.value = page;
+      // The host hands pages back newest-first; the store keeps them oldest-first so that the
+      // array order matches `precedes` and `oldestCursor` is really the oldest message.
+      messages.value = [...page].reverse();
       hasMore.value = page.length === PAGE_SIZE;
     } finally {
       loading.value = false;
@@ -66,7 +69,7 @@ export const useChatStore = defineStore('chat', () => {
       // The cursor is exclusive, so a repeated page would only happen if a message were
       // rewritten; de-duplicating by id keeps that from showing twice.
       const known = new Set(messages.value.map((message) => message.id));
-      const older = page.filter((message) => !known.has(message.id));
+      const older = page.filter((message) => !known.has(message.id)).reverse();
       messages.value = [...older, ...messages.value];
       hasMore.value = page.length === PAGE_SIZE;
     } finally {
@@ -155,7 +158,6 @@ export const useChatStore = defineStore('chat', () => {
     loading,
     hasMore,
     sending,
-    pendingCount,
     oldestCursor,
     open,
     loadOlder,

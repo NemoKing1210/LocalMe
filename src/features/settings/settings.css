@@ -1,0 +1,156 @@
+/*
+ * The settings screen's styling.
+ *
+ * Shared by the screen and its section components, so it is one ordinary stylesheet rather than
+ * a scoped block each section would have to duplicate: every rule is prefixed `settings__` and
+ * belongs to this feature.
+ */
+
+.settings {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.settings__scroll {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  flex-direction: column;
+  gap: 24px;
+  padding: 24px;
+  /* As in the message log: the pane is sized by the shell, not by the height of its content. */
+  contain: size;
+}
+
+.settings__group {
+  display: flex;
+  width: 100%;
+  max-width: 720px;
+  margin: 0 auto;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.settings__heading {
+  color: var(--md-sys-color-primary);
+}
+
+.settings__card {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px;
+  border-radius: var(--md-sys-shape-corner-medium);
+  background: var(--md-sys-color-surface-container-low);
+}
+
+.settings__row {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+
+.settings__row-text {
+  display: flex;
+  flex-direction: column;
+}
+
+.settings__help {
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.settings__mono {
+  font-family: var(--md-sys-typescale-font-family-mono);
+  overflow-wrap: anywhere;
+}
+
+.settings__profile {
+  display: flex;
+  gap: 20px;
+  align-items: flex-start;
+}
+
+.settings__profile-field {
+  flex: 1;
+  min-width: 0;
+}
+
+.settings__pairs {
+  display: grid;
+  grid-template-columns: minmax(0, auto) minmax(0, 1fr);
+  gap: 4px 16px;
+  margin: 0;
+}
+
+.settings__pairs dd {
+  margin: 0;
+}
+
+.settings__swatches {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.settings__swatch {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--md-sys-shape-corner-full);
+}
+
+.settings__swatch--active,
+.settings__custom--active {
+  box-shadow:
+    0 0 0 2px var(--md-sys-color-surface-container-low),
+    0 0 0 4px var(--md-sys-color-primary);
+}
+
+.settings__custom {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: none;
+  border-radius: var(--md-sys-shape-corner-full);
+  background: none;
+  cursor: pointer;
+  appearance: none;
+}
+
+.settings__custom::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.settings__custom::-webkit-color-swatch {
+  border: none;
+  border-radius: var(--md-sys-shape-corner-full);
+}
+
+.settings__devices {
+  display: flex;
+  flex-direction: column;
+}
+
+.settings__log-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.settings__danger {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+
+.settings__card .settings__clear {
+  color: var(--md-sys-color-error);
+}

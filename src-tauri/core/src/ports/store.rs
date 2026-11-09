@@ -3,18 +3,20 @@
 //! Two invariants implementations must hold, because the service layer relies on them:
 //!
 //! * `insert_message` is idempotent on the message identifier and reports whether the row was
-//!   new; this is the deduplication mechanism for a retransmitted frame.
+//!   new; this is the deduplication mechanism for a retransmitted frame. `message_peer` reports
+//!   which conversation the stored row belongs to, so a duplicate from a different peer is not
+//!   mistaken for a retransmission.
 //! * `forget_peer` writes the row as forgotten rather than deleting it when history is kept,
 //!   so the settings screen can still list the device.
 //! * an outgoing row moves `queued` → `sending` → `delivered`; it is never dropped because a
-//!   socket failed, so `next_outbox_message` and `requeue_pending_messages` are the only ways a
+//!   socket failed, so `next_outbox_batch` and `requeue_pending_messages` are the only ways a
 //!   waiting message changes state.
 
 use std::path::Path;
 
 use crate::domain::attachment::{Attachment, AttachmentState, Sha256};
 use crate::domain::ids::{AttachmentId, AvatarSeed, DeviceId, MessageId};
-use crate::domain::message::{ChatMessage, MessagePreview, MessageStatus};
+use crate::domain::message::{ChatMessage, MessagePreview};
 use crate::domain::nickname::Nickname;
 use crate::domain::peer::PeerProfile;
 use crate::error::StorageError;
@@ -144,6 +146,16 @@ pub trait Store: Send + Sync + 'static {
         message: &ChatMessage,
     ) -> impl Future<Output = Result<bool, StorageError>> + Send;
 
+    /// The peer a stored message belongs to, or `None` when no such row exists.
+    ///
+    /// Identifiers are generated as UUIDv7 by the sender, but they still arrive from the
+    /// network: when `insert_message` reports a duplicate, this is what tells the caller whether
+    /// it is the same conversation (a retransmission) or another peer reusing an identifier.
+    fn message_peer(
+        &self,
+        id: MessageId,
+    ) -> impl Future<Output = Result<Option<DeviceId>, StorageError>> + Send;
+
     /// Where attachment files live on this machine. One directory per attachment, named after its
     /// identifier, so a hostile file name never becomes part of a path.
     fn files_root(&self) -> &Path;
@@ -186,12 +198,6 @@ pub trait Store: Send + Sync + 'static {
         sha256: Sha256,
     ) -> impl Future<Output = Result<(), StorageError>> + Send;
 
-    fn set_message_status(
-        &self,
-        id: MessageId,
-        status: MessageStatus,
-    ) -> impl Future<Output = Result<(), StorageError>> + Send;
-
     /// Marks an outgoing message delivered and records when, in one write: the interface prints
     /// this as the second date of a message that waited.
     fn mark_message_delivered(
@@ -200,12 +206,22 @@ pub trait Store: Send + Sync + 'static {
         delivered_at_ms: i64,
     ) -> impl Future<Output = Result<(), StorageError>> + Send;
 
-    /// The oldest outgoing message still waiting for its peer, in send order. `None` means the
-    /// outbox for that conversation is empty.
-    fn next_outbox_message(
+    /// The oldest outgoing messages still waiting for their peer, in send order, at most
+    /// `limit` of them. An empty vector means the outbox for that conversation is drained.
+    ///
+    /// A batch rather than a single row: draining a backlog is a row per message, and one read
+    /// with its attachments per message is two queries and two channel round-trips each.
+    fn next_outbox_batch(
         &self,
         device_id: DeviceId,
-    ) -> impl Future<Output = Result<Option<ChatMessage>, StorageError>> + Send;
+        limit: u32,
+    ) -> impl Future<Output = Result<Vec<ChatMessage>, StorageError>> + Send;
+
+    /// Marks messages as on their way in one transaction, once they have been handed to a socket.
+    fn mark_messages_sending(
+        &self,
+        ids: Vec<MessageId>,
+    ) -> impl Future<Output = Result<(), StorageError>> + Send;
 
     /// Returns the messages that were written to a socket but never acknowledged to the outbox,
     /// reporting their identifiers so the interface can redraw them. Called when a peer goes

@@ -9,7 +9,7 @@ use localme_core::domain::peer::{PeerProfile, PeerView};
 use localme_core::domain::{Attachment, AttachmentId, AttachmentKind};
 use localme_core::ports::store::{HistoryCursor, KnownDevice};
 use localme_core::services::Settings;
-use tauri::{AppHandle, Emitter, Runtime, State};
+use tauri::{AppHandle, Runtime, State};
 use tauri_plugin_dialog::DialogExt;
 
 use crate::args::{self, PageCursor};
@@ -153,15 +153,6 @@ pub async fn send_message(
 
 /// # Errors
 ///
-/// [`ApiError::ShuttingDown`] if the core has stopped.
-#[tauri::command]
-pub async fn mark_read(state: State<'_, Arc<AppState>>, peer_id: String) -> Result<u32, ApiError> {
-    let peer = args::device_id(&peer_id)?;
-    Ok(state.session.mark_read(peer).await?)
-}
-
-/// # Errors
-///
 /// [`ApiError::InvalidInput`] for a malformed identifier.
 #[tauri::command]
 pub async fn forget_peer(
@@ -241,8 +232,7 @@ pub async fn set_nickname(
 ///
 /// [`ApiError::InvalidInput`] for a nickname that does not validate.
 #[tauri::command]
-pub async fn complete_onboarding<R: Runtime>(
-    app: AppHandle<R>,
+pub async fn complete_onboarding(
     state: State<'_, Arc<AppState>>,
     nickname: String,
 ) -> Result<PeerProfile, ApiError> {
@@ -253,7 +243,6 @@ pub async fn complete_onboarding<R: Runtime>(
     settings.onboarded = true;
     state.settings.update(settings).await?;
 
-    let _ = app.emit("onboarding_complete", ());
     Ok(profile)
 }
 
@@ -280,14 +269,6 @@ pub async fn update_settings<R: Runtime>(
     // applied here rather than read from the document at startup.
     crate::autostart::apply(&app, saved.system.autostart)?;
     Ok(saved)
-}
-
-/// # Errors
-///
-/// [`ApiError::Internal`] if the platform refused to answer.
-#[tauri::command]
-pub fn is_autostart_enabled<R: Runtime>(app: AppHandle<R>) -> Result<bool, ApiError> {
-    crate::autostart::is_enabled(&app)
 }
 
 /// # Errors
@@ -331,37 +312,6 @@ pub fn set_active_chat(
     if peer.is_some() {
         state.set_last_notified(None);
     }
-    Ok(())
-}
-
-/// # Errors
-///
-/// [`ApiError::Internal`] if the window cannot be shown.
-#[tauri::command]
-pub fn show_window<R: Runtime>(app: AppHandle<R>) -> Result<(), ApiError> {
-    window::reveal(&app);
-    Ok(())
-}
-
-/// # Errors
-///
-/// [`ApiError::Internal`] if the window cannot be hidden.
-#[tauri::command]
-pub fn hide_window<R: Runtime>(app: AppHandle<R>) -> Result<(), ApiError> {
-    window::hide(&app);
-    Ok(())
-}
-
-/// Returns immediately; the shutdown itself runs on the async runtime, and `RunEvent::Exit`
-/// performs the actual teardown.
-///
-/// # Errors
-///
-/// Never in practice; the `Result` keeps the signature uniform.
-#[tauri::command]
-pub fn quit<R: Runtime>(app: AppHandle<R>) -> Result<(), ApiError> {
-    tracing::info!("quit requested from the interface");
-    app.exit(0);
     Ok(())
 }
 
@@ -432,18 +382,27 @@ pub fn clear_logs() -> Result<u64, ApiError> {
 /// The paths never reach the interface unexamined: the name, the size and whether the file can
 /// be attached at all come from here, so the chip in the composer and the metadata the core
 /// stores cannot disagree.
+///
+/// # Errors
+///
+/// [`ApiError::Internal`] if the platform's picker could not be opened.
 #[tauri::command]
-pub fn pick_files<R: Runtime>(app: AppHandle<R>) -> Vec<FilePick> {
-    let picked = app
-        .dialog()
-        .file()
-        .blocking_pick_files()
-        .unwrap_or_default();
-    picked
+pub async fn pick_files<R: Runtime>(app: AppHandle<R>) -> Result<Vec<FilePick>, ApiError> {
+    // The plugin's picker is callback-based: bridging it through a oneshot keeps the command
+    // async, so the main thread is never held while the modal dialog is open.
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    app.dialog().file().pick_files(move |files| {
+        let _ = sender.send(files);
+    });
+    let picked = receiver.await.map_err(|_| ApiError::Internal {
+        message: "the file picker did not answer".to_owned(),
+    })?;
+    Ok(picked
+        .unwrap_or_default()
         .iter()
         .filter_map(|file| file.as_path().map(Path::to_path_buf))
-        .map(|path| files::inspect(&app, &path))
-        .collect()
+        .map(|path| files::inspect(&app, path.as_path()))
+        .collect())
 }
 
 /// Describes paths the interface already has — the ones a drop produced.
@@ -507,13 +466,20 @@ pub async fn save_attachment<R: Runtime>(
     let source = files::stored_path(attachment.path.as_deref())
         .map_err(|error| ApiError::invalid_input("attachmentId", error))?;
 
-    let Some(target) = app
-        .dialog()
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    app.dialog()
         .file()
         .set_file_name(attachment.name.as_str())
-        .blocking_save_file()
-        .and_then(|file| file.as_path().map(Path::to_path_buf))
-    else {
+        .save_file(move |file| {
+            let _ = sender.send(file);
+        });
+    let target = receiver
+        .await
+        .map_err(|_| ApiError::Internal {
+            message: "the save dialog did not answer".to_owned(),
+        })?
+        .and_then(|file| file.as_path().map(Path::to_path_buf));
+    let Some(target) = target else {
         return Ok(None);
     };
     files::copy(&source, &target).map_err(|error| ApiError::Internal {

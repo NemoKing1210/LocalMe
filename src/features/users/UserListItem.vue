@@ -8,6 +8,7 @@ import { computed, ref } from 'vue';
 import { useI18n } from '@/i18n';
 import type { Peer } from '@/ipc';
 import { useNow } from '@/composables/useNow';
+import { usePresence } from '@/composables/usePresence';
 import type { IconName } from '@/ui/icons';
 import MdAvatar from '@/ui/MdAvatar.vue';
 import MdBadge from '@/ui/MdBadge.vue';
@@ -27,14 +28,9 @@ const emit = defineEmits<{
 
 const i18n = useI18n();
 const now = useNow();
+const presenceSentence = usePresence();
 
-const presence = computed<string>(() => {
-  if (props.peer.online) return i18n.t('users.online');
-  if (props.peer.lastSeenMs === null) return i18n.t('users.neverSeen');
-  return i18n.t('users.lastSeen', {
-    relative: i18n.relative(props.peer.lastSeenMs, now.value),
-  });
-});
+const presence = computed<string>(() => presenceSentence(props.peer, now.value));
 
 const supporting = computed<string>(() => {
   const preview = props.peer.lastMessage;

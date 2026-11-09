@@ -83,7 +83,7 @@ describe('the composer', () => {
     expect(wrapper.find(SEND).attributes('disabled')).toBeDefined();
     expect(textarea.attributes('placeholder')).toBe('Message Alice');
     expect(textarea.attributes('aria-label')).toBe('Message Alice');
-    expect(wrapper.text()).toContain('Enter sends, Shift+Enter starts a new line');
+    expect(wrapper.find('.composer__footer').exists()).toBe(false);
   });
 
   it('enables sending once the draft holds non-whitespace and emits on click', async () => {

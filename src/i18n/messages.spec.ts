@@ -74,10 +74,13 @@ describe('message catalogues', () => {
 
   it('gives Russian the plural categories it actually needs', () => {
     // 1 → one, 2..4 → few, 5..20 → many. English needs only one/other; if the Russian
-    // catalogue lacked `few` or `many` the interface would say «5 непрочитанных сообщения».
+    // catalogue lacked `few` or `many` the interface would say «5 файла» for five log files.
     const russian = ru as Record<string, string>;
     for (const suffix of ['one', 'few', 'many']) {
-      expect(russian[`users.unread.${suffix}`], `users.unread.${suffix}`).toBeDefined();
+      expect(
+        russian[`settings.logSummary.${suffix}`],
+        `settings.logSummary.${suffix}`,
+      ).toBeDefined();
     }
   });
 
@@ -99,7 +102,7 @@ describe('message catalogues', () => {
 
   it('renders plurals with their number in every language', () => {
     const counts = [0, 1, 2, 5, 11, 21, 101, 1_000_000];
-    const keys = ['users.unread', 'notification.newMessageCount'] as const;
+    const keys = ['settings.logSummary'] as const;
     for (const locale of LOCALES) {
       setLocale(locale);
       for (const key of keys) {

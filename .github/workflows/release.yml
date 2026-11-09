@@ -36,7 +36,7 @@ jobs:
       create_release: ${{ steps.meta.outputs.create_release }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Setup
         uses: ./.github/actions/setup
@@ -99,7 +99,7 @@ jobs:
             target: ''
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Setup
         uses: ./.github/actions/setup
@@ -107,7 +107,8 @@ jobs:
           rust-targets: ${{ matrix.target }}
 
       - name: Import Windows certificate
-        if: runner.os == 'Windows' && env.WINDOWS_CERTIFICATE != ''
+        # `secrets` is available here; a step-level `env` is not yet in scope in its own `if`.
+        if: runner.os == 'Windows' && secrets.WINDOWS_CERTIFICATE != ''
         env:
           WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
           WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
@@ -127,7 +128,7 @@ jobs:
           Remove-Item $pfx
 
       - name: Build installers
-        uses: tauri-apps/tauri-action@v1
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}

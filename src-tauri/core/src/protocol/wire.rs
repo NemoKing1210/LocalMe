@@ -190,7 +190,7 @@ impl WireFrame {
                 text,
                 attachments,
             } => {
-                let id = id.parse::<MessageId>()?;
+                let id = parse_message_id(&id)?;
                 let text = match text {
                     Some(text) => Some(MessageBody::parse(&text)?),
                     None => None,
@@ -206,7 +206,7 @@ impl WireFrame {
                 }
             }
             WirePayload::ChatAck { id } => Frame::ChatAck {
-                id: id.parse::<MessageId>()?,
+                id: parse_message_id(&id)?,
             },
             WirePayload::FileChunk {
                 attachment,
@@ -272,6 +272,22 @@ impl WireAttachment {
             size: meta.size,
         }
     }
+}
+
+/// Parses a message id from the wire and refuses anything that is not a UUIDv7.
+///
+/// Identity and the storage tie-break both assume v7 (time-ordered, partially random), and the
+/// value is peer-chosen, so a version this application never emits is rejected at the boundary
+/// rather than trusted as an ordering key.
+fn parse_message_id(raw: &str) -> Result<MessageId, ProtocolError> {
+    let id = raw.parse::<MessageId>()?;
+    if id.as_uuid().get_version_num() == 7 {
+        return Ok(id);
+    }
+    Err(ProtocolError::Domain(DomainError::InvalidId {
+        kind: "message id (not UUIDv7)",
+        value: raw.chars().take(64).collect(),
+    }))
 }
 
 /// The attachment list of a `chat` frame.
@@ -402,6 +418,36 @@ mod tests {
             decode(&payload),
             Err(ProtocolError::Domain(DomainError::EmptyMessage))
         ));
+    }
+
+    #[test]
+    fn a_message_id_that_is_not_uuid_v7_is_refused() {
+        // The storage tie-break assumes a v7 identifier, and the value is peer-chosen.
+        let payload = serde_json::to_vec(&WireFrame {
+            v: 2,
+            payload: WirePayload::Chat {
+                id: uuid::Uuid::new_v4().to_string(),
+                text: Some("hi".to_owned()),
+                attachments: Vec::new(),
+            },
+        })
+        .expect("serialise");
+        assert!(matches!(
+            decode(&payload),
+            Err(ProtocolError::Domain(DomainError::InvalidId { .. }))
+        ));
+    }
+
+    #[test]
+    fn a_chat_ack_for_a_non_v7_id_is_refused() {
+        let payload = serde_json::to_vec(&WireFrame {
+            v: 2,
+            payload: WirePayload::ChatAck {
+                id: uuid::Uuid::new_v4().to_string(),
+            },
+        })
+        .expect("serialise");
+        assert!(decode(&payload).is_err());
     }
 
     #[test]

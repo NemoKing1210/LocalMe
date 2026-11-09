@@ -310,9 +310,11 @@ profile) are rejected by the same check, and the collision is surfaced in the lo
    wait, the second date as well.
 
 **The outbox is the queue, and it is SQLite.** Nothing is held in memory waiting for a peer:
-`next_outbox_message` reads the oldest `queued` row of the conversation and a connection that
-ends puts every `sending` row back to `queued` (`requeue_pending_messages`), so a message
-survives a disconnect, a crash and a restart. Ordering is a property of the query
+`next_outbox_batch` reads the oldest `queued` rows of the conversation (a batch, because a
+backlog is drained a row at a time and a query plus a round trip per row would dominate the
+pacing) and a connection that ends puts every `sending` row back to `queued`
+(`requeue_pending_messages`), so a message survives a disconnect, a crash and a restart. The
+rows of a batch are marked `sending` in one transaction once their frames are on their way. Ordering is a property of the query
 (`ORDER BY sent_at_ms, id`), which is the same order the conversation is drawn in, so a backlog
 arrives in the order it was written even if it is written out over several connections.
 
@@ -338,8 +340,11 @@ total.
 Deduplication happens in storage: `messages.id` is the primary key and the insert is
 `INSERT OR IGNORE`, so a retransmitted frame is a no-op and the unread counter is incremented
 only when the row was genuinely new. A duplicate still receives `chat_ack` — the sender must
-never be left waiting because *it* retried. This is also what makes the outbox safe to retry:
-a frame that was written and then repeated after a reconnect is absorbed by the recipient.
+never be left waiting because *it* retried — but only when the stored row belongs to the peer
+that sent it (`message_peer`): an identifier is sender-chosen, and a second peer reusing one must
+not be told a message it does not own was delivered, nor have its own message silently dropped.
+This is also what makes the outbox safe to retry: a frame that was written and then repeated
+after a reconnect is absorbed by the recipient.
 
 ### 5.5 Hostile-input defences
 
@@ -350,6 +355,8 @@ Every inbound frame passes through these checks before it reaches the domain:
 | frame length | `1..=64 KiB` | close connection |
 | JSON structure | must match `Envelope` | `error{code:"malformed"}`, close |
 | nickname | 1..=32 chars after trim, no control chars | `error{code:"bad_nickname"}`, close |
+| avatar seed | 1..=69 chars — 36 for the device id, a `:`, 32 for the nickname — so a derived seed is always one the receiver can parse | `error{code:"bad_avatar_seed"}`, close |
+| message id | must be a UUIDv7: it is the storage tie-break and it is sender-chosen | `error{code:"bad_id"}`, close |
 | message body | ≤ 8 000 chars, no control chars except `\n`/`\t`; absent when the message is only files | `error{code:"bad_body"}`, keep connection |
 | attachment list | ≤ 10 files, unique ids, every name sanitised into a safe path component | `error{code:"bad_attachment"}`, close |
 | file chunk | non-empty, ≤ 32 KiB, and its end inside the largest file that may be offered | `error{code:"bad_attachment"}`, close |
@@ -360,6 +367,10 @@ Every inbound frame passes through these checks before it reaches the domain:
 | concurrent peers | 128 | refuse the `hello` |
 | concurrent dials | 8, 1 per peer | queue/drop the extra |
 | handshake deadline | 10 s from accept | close |
+| incoming transfers per peer | 16 open part files; each holds a descriptor and disk space | the transfer is refused with `file_cancel{reason:"failed"}` |
+| discovery cache | 256 devices per mechanism; the least recently seen entry makes room | the new advertisement is ignored |
+| beacon datagrams decoded | 128/s over a one-second window | the datagram is dropped |
+| decoders' buffer | one frame plus one 8 KiB read, so a maximum frame followed by the start of the next in the same read is not mistaken for a flood | close connection |
 
 The rate limiter is a pure struct over `(tokens, last_refill)` with a caller-supplied `now`,
 so its behaviour is unit-tested without sleeping. Files are charged in *bytes* rather than in
@@ -404,6 +415,22 @@ recipient's real position. The sender rewinds to it and carries on. Resuming aft
 after a crash, or after the recipient's partial file has been deleted is therefore the same code
 path as the first attempt: start where you think you are and let the other end correct you.
 
+A correction is taken at face value in two ways, and both matter.
+
+**It can only move the stream forward.** The recipient's file is append-only, so a position behind
+the furthest one it has reported is an *older* acknowledgement arriving after a newer one — the
+sender keeps that furthest position (`OutgoingTransfer::confirmed`) and ignores anything behind it.
+Honouring it would drag the stream back and re-send a window the recipient already has; every
+chunk of that window is refused, and the refusals and re-sends come fast enough to trip the
+recipient's inbound rate limit, which closes the connection and starts the transfer over.
+
+**It is also the new floor for the window.** Everything below the reported position is on the
+recipient's disk, so it counts as confirmed (`acked`): the window is measured from there, not from
+an acknowledgement that is a whole window older. Measuring from the stale value is how the sender
+ends up, at the end of a file, with `sent == size` and a window it can never empty — and a full
+window means the pump sends nothing at all, not even the `file_done` that would finish the
+transfer. Neither end then says anything, and the transfer waits for ever.
+
 1. The sender stats each chosen file, takes its size from the filesystem, sanitises its name
    into a safe path component and writes the message with `status = 'queued'` — metadata and
    rows first, in one transaction.
@@ -426,6 +453,14 @@ path as the first attempt: start where you think you are and let the other end c
    transfer that can never finish is worse than a slow one. The transfer is drained from the
    session loop between messages, eight chunks per turn, so a chat message never waits for a
    file.
+
+**Nothing on the actor blocks on the disk.** A chunk read, a chunk write, the `stat` of a chosen
+file, the rename that completes a received file and the removal of an abandoned part file are
+filesystem work with unpredictable latency, and the session is a single task that owns every
+peer's state: running them inline meant one slow disk stalled delivery, acknowledgements and
+heartbeats for everybody. Each one now runs on the blocking pool (`offload`), whole-file digesting
+and verification already did, and the actor keeps answering while they happen. At most 16
+transfers may be arriving from one peer at a time, because each holds an open part file.
 
 **Files on disk.** One directory per attachment, named after its *identifier*, under
 `<data-dir>/files`: `<id>/<name>` once complete and `<id>/<name>.part` while arriving. The name
@@ -471,6 +506,13 @@ to "both sockets receive" instead of "the fallback is gone".
 Both adapters feed `CompositeDiscovery`, which de-duplicates by `(device_id, address)` and
 emits `Lost` only when the last live source for a device disappears. A peer seen by both
 mechanisms is not reported twice.
+
+**Every discovery cache is attacker-keyed and therefore bounded.** A device id arrives in a
+512-byte datagram and an mDNS service name is chosen by whoever advertises it, so the beacon's
+liveness and reply tables, the composite's live set and the mDNS service map all stop taking new
+entries at `MAX_DISCOVERY_PEERS` (256) — the least recently seen entry makes room — and the
+beacon decodes at most `MAX_BEACON_ANNOUNCES_PER_SECOND` datagrams. Without those caps one host
+on the network could grow a cache without bound by inventing ids.
 
 **Network changes.** `mdns-sd` re-announces automatically when the host's addresses change
 (its internal IP check). VPN and virtual adapters are handled by mdns-sd's per-interface
@@ -555,6 +597,9 @@ CREATE TABLE attachments (
 CREATE INDEX attachments_message ON attachments(message_id);
 CREATE INDEX attachments_outbox  ON attachments(peer_id, message_id)
   WHERE outgoing = 1 AND state IN ('queued', 'sending');
+-- Forgetting a peer with its history deletes by peer_id alone, which the partial outbox index
+-- cannot serve (it excludes incoming rows and everything not queued/sending).
+CREATE INDEX attachments_peer    ON attachments(peer_id);
 ```
 
 `messages.status` is the outbox state: every outgoing row is written as `queued` and only
@@ -579,7 +624,8 @@ migration, so a fresh database and an upgraded one take the same code path. Vers
 outbox retries. Version 3 adds `attachments` and makes `messages.body` nullable. SQLite cannot
 drop a `NOT NULL`, so that migration rebuilds `messages` (rename, create, copy, drop, recreate
 the indexes) — safe here because nothing references `messages` yet at that point in the schema's
-life; `attachments` is created after the rename.
+life; `attachments` is created after the rename. Version 4 adds `attachments_peer`, the index
+forgetting a peer with its history needs.
 
 ### 7.3 Corrupted database
 
@@ -593,7 +639,8 @@ acceptable; crashing on startup is worse.
 
 History is loaded newest-first in pages of 50 (`messages_peer_time` serves this directly).
 The chat view starts with one page and requests the next when the scroll position approaches
-the top. No offset-based deep paging: the cursor is `(sent_at_ms, id)`, which stays correct
+the top. The store normalises each page to oldest-first as it arrives, because that is the order
+the list draws and the order its `(sent_at_ms, id)` cursor is read from. No offset-based deep paging: the cursor is `(sent_at_ms, id)`, which stays correct
 while new messages arrive.
 
 ### 7.5 Forward compatibility
@@ -640,7 +687,14 @@ Commands: `SendMessage` (text and/or files), `LoadHistory`, `MarkRead`, `ForgetP
 The transfer pump is not a task of its own. A file is written from the session loop, eight
 chunks per turn, on a deadline the token bucket sets — so the actor stays single-threaded and
 ordered, a chat message never waits behind a whole file, and a transfer that has nothing to do
-costs no wakeups at all.
+costs no wakeups at all. The chunk read and write themselves are handed to a blocking task and
+come back through the same mailbox, because a disk that stalls must not hold the actor: it owns
+every peer's state, not just the transfer's.
+
+That machine lives in `services/session/transfer.rs` — an `impl Session` block beside the actor
+loop — so `session.rs` stays the message router, and the chunk and completion handlers share one
+validator (`accept_incoming_attachment`) instead of two copies of the same peer and direction
+checks.
 
 ### 8.2 Event flow for an inbound message
 
@@ -778,8 +832,12 @@ variant the front end subscribes to.
   setting, so it cannot be turned on by accident in a normal installation.
 * **Close to tray** — `WindowEvent::CloseRequested` is intercepted when the setting is on;
   the window is hidden and the app keeps running. When the setting is off, close quits.
-* **Autostart** — `tauri-plugin-autostart`, launched with `--minimized` when "start minimised
-  in tray" is enabled; the flag is parsed at startup to decide whether to show the window.
+* **Autostart** — `tauri-plugin-autostart`. The registration carries no launch argument: whether
+  a start is tray-only is the `start_minimized` *setting*, read once the settings document has
+  loaded, so the switch the user sees is the switch that decides. The `--minimized` command-line
+  flag still forces it for a one-off launch. A tray-only start is only honoured when the tray
+  actually exists (`AppState::tray_available`), because hiding the only window on a desktop
+  without a tray would leave the application unreachable.
 * **Tray** — `TrayIconBuilder` with a menu rebuilt on every change: a status line with the unread
   count, Open, a Conversations submenu (the recent conversations, each carrying its unread count,
   plus "All conversations"), Mark all as read, checked switches for notifications, close-to-tray
@@ -826,12 +884,13 @@ variant the front end subscribes to.
 
 ### 9.5 Capabilities
 
-`capabilities/default.json` grants the minimum: `core:default` (minus unused event/window
-commands), `notification:default`, `autostart:allow-enable`/`allow-disable`/`allow-is-enabled`,
-`store:default`, `os:allow-hostname`, `dialog:allow-open` and `dialog:allow-save` (the file
-picker, and only the picker: the dialog plugin returns a path, and the host does the rest),
-`process:allow-restart` for the restart path. No `shell`, no `fs`, no HTTP scope, no global
-Tauri API (`withGlobalTauri: false`).
+`capabilities/default.json` grants exactly what the *web view* invokes: `core:default` — which
+already carries the event bus the subscriptions use, the read-only window and app queries the
+interface may make, and the path/asset plumbing — plus `os:allow-hostname` for the onboarding
+default. Everything else the application does (notifications, file dialogs, autostart, the window
+and tray policy) is driven from Rust, which does not go through capabilities at all, so granting
+those plugins to the web view would only widen the blast radius of a compromised renderer for no
+behaviour. No `shell`, no `fs`, no HTTP scope, no global Tauri API (`withGlobalTauri: false`).
 
 The asset protocol is enabled with an empty static scope and a runtime grant, which is what lets
 a bubble render a picture without giving the web view a filesystem: the host adds exactly two
@@ -1063,7 +1122,19 @@ because a packaged Tauri build serves the front end from a custom protocol where
 file name.
 
 The pages themselves are lazy route components, so the settings screen is not in the bundle of a
-user who never opens it.
+user who never opens it, and the settings screen is in turn a container: each group is its own
+component under `features/settings/sections/`, sharing one `settings.css`, so a change to the
+logging controls cannot touch the notification ones.
+
+Three pieces of the front end used to exist once per call site and are now shared:
+
+* the presence sentence (`composables/usePresence.ts`), which the list, the conversation header
+  and the settings screen all render;
+* the message order (`compareMessages` in `stores/chat.ts`), which is the order the store keeps
+  the array in and the order the log draws it;
+* the host-call guard (`ui.attempt`), which logs the detail and shows one sentence — chosen from
+  the host's own error tag when the failure has a name in every catalogue, so a `network` failure
+  is not reported with a `storage` sentence, and never in English.
 
 ### 10.6 Motion
 
@@ -1096,9 +1167,12 @@ Where motion is used, and why:
   the first paint and on an engine without it.
 * **Presence** — the avatar's presence dot transitions its colour, and the dialog animates in.
 
-Motion is the largest single contributor to the main bundle, which now sits just above the
-deliberately low `chunkSizeWarningLimit` in `vite.config.ts`; the build reports it rather than
-hiding it, and the two pages are lazy chunks that a user who never opens them never downloads.
+Motion is the largest single contributor to a bundle, so it and the other libraries that every
+route loads but the application code does not — `vue`/`vue-router`/`pinia`, `@tauri-apps/api`,
+the Material colour utilities — are named as their own chunks in `vite.config.ts`. The entry
+chunk is the shell and whatever the current route adds; the libraries keep their hashes across
+updates, so the web view re-reads them from its cache, and the entry stays under the
+deliberately low `chunkSizeWarningLimit` so growth is still reported rather than hidden.
 
 ### 10.7 Tests
 

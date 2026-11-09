@@ -129,11 +129,34 @@ pub fn refresh_title<R: Runtime>(app: &AppHandle<R>, unread: u32) {
     }
 }
 
-/// With `--minimized` (an autostart launch) the window is never revealed at startup.
+/// Whether the window should stay hidden once the front end is ready.
+///
+/// The `--minimized` flag or the `start_minimized` setting asks for it; the tray has to exist for
+/// it to be honoured, because a hidden window with no tray could not be reopened.
+#[must_use]
+pub fn starts_hidden(flag: bool, setting: bool, tray_available: bool) -> bool {
+    (flag || setting) && tray_available
+}
+
+/// With the `start_minimized` setting — or the `--minimized` flag — the window is not revealed
+/// at startup. A hidden window with no tray could not be reopened, so a start is only tray-only
+/// when the tray actually exists.
 pub fn install_ready_gate<R: Runtime>(app: &AppHandle<R>) {
     let handle = app.clone();
     app.listen(READY_EVENT, move |_event| {
-        if crate::started_minimized() {
+        // Read at ready time: the tray is installed during `setup`, after this listener is bound.
+        let state = state::from_handle(&handle);
+        let tray_available = state
+            .as_ref()
+            .is_some_and(|state| state.tray_available.load(Ordering::Relaxed));
+        let hidden = starts_hidden(
+            crate::started_minimized(),
+            state
+                .as_ref()
+                .is_some_and(|state| state.settings_snapshot().system.start_minimized),
+            tray_available,
+        );
+        if hidden {
             tracing::info!("front end is ready; staying in the tray as requested");
             REVEALED.store(true, Ordering::Relaxed);
             return;
@@ -174,6 +197,20 @@ mod tests {
         assert_eq!(MAIN_WINDOW, "main");
         assert_eq!(READY_EVENT, "localme://ready");
         assert_eq!(READY_FALLBACK, Duration::from_secs(15));
+    }
+
+    #[test]
+    fn a_tray_only_start_needs_both_the_request_and_a_tray() {
+        // The flag, the setting and the tray, in every combination that matters.
+        assert!(starts_hidden(true, false, true), "the autostart flag alone");
+        assert!(starts_hidden(false, true, true), "the setting alone");
+        assert!(starts_hidden(true, true, true));
+        assert!(!starts_hidden(false, false, true), "nothing asked for it");
+        assert!(
+            !starts_hidden(true, true, false),
+            "a hidden window with no tray could not be reopened"
+        );
+        assert!(!starts_hidden(true, false, false));
     }
 
     #[test]

@@ -6,7 +6,6 @@ import { createApp } from 'vue';
 
 import App from '@/App.vue';
 import { installErrorHandlers } from '@/app/errors';
-import { signalReady } from '@/app/ready';
 import { router } from '@/app/router';
 import { i18n } from '@/i18n';
 import { initTheme } from '@/theme/useTheme';
@@ -29,5 +28,3 @@ app.use(createPinia());
 app.use(router);
 app.use(i18n);
 app.mount('#app');
-
-void signalReady();

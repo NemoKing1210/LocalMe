@@ -5,6 +5,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { ROUTE } from '@/app/routes';
 import { TWO_PANE_QUERY, useMediaQuery } from '@/composables/useMediaQuery';
 import { useNow } from '@/composables/useNow';
+import { usePresence } from '@/composables/usePresence';
 import { useI18n } from '@/i18n';
 import * as ipc from '@/ipc';
 import { useChatStore } from '@/stores/chat';
@@ -25,6 +26,7 @@ const peers = usePeerStore();
 const ui = useUiStore();
 const i18n = useI18n();
 const now = useNow();
+const presenceSentence = usePresence();
 
 const wide = useMediaQuery(TWO_PANE_QUERY);
 
@@ -39,10 +41,7 @@ const showBack = computed<boolean>(() => !wide.value);
 
 const subtitle = computed<string>(() => {
   const current = peer.value;
-  if (current === null) return '';
-  if (current.online) return i18n.t('users.online');
-  if (current.lastSeenMs === null) return i18n.t('users.neverSeen');
-  return i18n.t('users.lastSeen', { relative: i18n.relative(current.lastSeenMs, now.value) });
+  return current === null ? '' : presenceSentence(current, now.value);
 });
 
 // One watcher for both: `setActiveChat` tells the host which chat is on screen, which must not
@@ -61,21 +60,15 @@ watch(peer, (current) => {
 });
 
 async function onSend(body: string, files: readonly string[]): Promise<void> {
-  try {
-    await chat.send(body, files);
-  } catch (error) {
-    console.error('[localme] the message could not be sent', error);
-    ui.fail('error.network');
-  }
+  await ui.attempt(() => chat.send(body, files), 'the message could not be sent', 'error.network');
 }
 
 async function onLoadOlder(): Promise<void> {
-  try {
-    await chat.loadOlder();
-  } catch (error) {
-    console.error('[localme] the earlier messages could not be read', error);
-    ui.fail('error.storage');
-  }
+  await ui.attempt(
+    () => chat.loadOlder(),
+    'the earlier messages could not be read',
+    'error.storage',
+  );
 }
 
 function back(): void {

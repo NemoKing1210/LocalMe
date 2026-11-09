@@ -639,8 +639,17 @@ mod tests {
 
     fn ack(value: u128) -> Frame {
         Frame::ChatAck {
-            id: MessageId::from_uuid(uuid::Uuid::from_u128(value)),
+            id: test_message_id(value),
         }
+    }
+
+    /// A deterministic identifier that still looks like a UUIDv7, because the wire decoder
+    /// refuses a message id whose version is not 7.
+    fn test_message_id(value: u128) -> MessageId {
+        let mut bytes = uuid::Uuid::from_u128(value).into_bytes();
+        bytes[6] = (bytes[6] & 0x0f) | 0x70;
+        bytes[8] = (bytes[8] & 0x3f) | 0x80;
+        MessageId::from_uuid(uuid::Uuid::from_bytes(bytes))
     }
 
     // ---- happy path -----------------------------------------------------------------------

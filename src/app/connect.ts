@@ -1,11 +1,29 @@
 import { onCoreEvent } from '@/ipc';
-import type { Peer } from '@/ipc';
+import type { CoreEventName, Peer } from '@/ipc';
 import { router } from '@/app/router';
 import { ROUTE } from '@/app/routes';
 import { useChatStore } from '@/stores/chat';
 import { usePeerStore } from '@/stores/peers';
 import { useSettingsStore } from '@/stores/settings';
 import { useUiStore } from '@/stores/ui';
+
+/**
+ * Every host event, so one added to `CoreEventMap` is a compile error here until it is either
+ * handled below or consciously listed as ignored. Exported for the spec that checks the list and
+ * the subscriptions agree.
+ */
+export const HANDLED_EVENTS = {
+  peers: true,
+  message: true,
+  message_status: true,
+  attachment: true,
+  settings_changed: true,
+  state_snapshot: true,
+  open_chat: true,
+  open_settings: true,
+  notice: true,
+  stopped: true,
+} as const satisfies Record<CoreEventName, true>;
 
 export async function connectCoreEvents(): Promise<() => void> {
   const peers = usePeerStore();

@@ -207,7 +207,15 @@ nothing else running. The process tree is the application plus the WebView2 proc
 | Working set, whole tree                         | ~388 MB                                              |
 | Release binary on disk                          | 6.4 MB                                               |
 | Windows installers                              | 3.1 MB (MSI), 2.3 MB (NSIS)                          |
-| Front-end bundle                                | 85 KB gzipped JavaScript, 7 KB gzipped CSS           |
+| Front end, first paint                          | 182 KB gzipped JavaScript, 9 KB gzipped CSS          |
+| Front end, the settings screen                  | +5 KB gzipped JavaScript, +1 KB gzipped CSS          |
+
+The front-end figures are the `gzip` column `npm run build` prints, summed over what the first
+screen loads: the entry chunk, the library chunks it needs (`vue`, `motion`, the colour utilities,
+the Tauri API) and the route the window opens on. The settings screen and the chat screen are
+separate chunks that only a user who opens them downloads, and the libraries keep their hashes
+across releases, so the web view re-reads them from its cache after an update rather than
+re-downloading them.
 
 Two things to keep in mind when reading those numbers. Working set counts a shared page once per
 process, so summing it across a seven-process tree overstates what the machine actually gives up;

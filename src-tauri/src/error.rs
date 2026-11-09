@@ -40,6 +40,11 @@ impl ApiError {
     }
 }
 
+/// The variant's line in the host's log.
+///
+/// This is not the user-facing text: the front end builds its own sentence from the tagged
+/// fields (`describe` in `src/ipc/index.ts`), so the two are not two copies of one string and a
+/// wording change here never changes what the interface says.
 impl std::fmt::Display for ApiError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

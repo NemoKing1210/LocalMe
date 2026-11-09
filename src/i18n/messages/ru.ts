@@ -2,22 +2,13 @@ import type { MessageCatalog } from './types';
 
 export const ru: MessageCatalog = {
   'app.name': 'LocalMe',
-  'app.tagline': 'Сообщения в вашей локальной сети',
 
   'common.cancel': 'Отмена',
-  'common.confirm': 'Подтвердить',
-  'common.close': 'Закрыть',
-  'common.save': 'Сохранить',
   'common.delete': 'Удалить',
-  'common.search': 'Поиск',
   'common.retry': 'Повторить',
   'common.back': 'Назад',
   'common.loading': 'Загрузка…',
-  'common.you': 'Вы',
   'common.dismiss': 'Скрыть',
-  'common.more': 'Ещё',
-  'common.options': 'Действия',
-  'common.clear': 'Очистить',
 
   'onboarding.title': 'Добро пожаловать в LocalMe',
   'onboarding.subtitle':
@@ -39,22 +30,14 @@ export const ru: MessageCatalog = {
   'users.clearSearch': 'Очистить поиск',
   'users.searchEmpty': 'Никто не найден по запросу «{query}».',
   'users.online': 'в сети',
-  'users.offline': 'не в сети',
   'users.lastSeen': 'был(а) в сети {relative}',
   'users.neverSeen': 'ещё не был(а) в сети',
-  'users.unread': '{count} непрочитанных сообщений',
-  'users.unread.one': '{count} непрочитанное сообщение',
-  'users.unread.few': '{count} непрочитанных сообщения',
-  'users.unread.many': '{count} непрочитанных сообщений',
   'users.forget': 'Удалить',
   'users.muted': 'Уведомления отключены',
-  'users.openChatWith': 'Переписка с {name}',
   'users.actionsFor': 'Действия для {name}',
   'users.mute': 'Отключить уведомления',
   'users.unmute': 'Включить уведомления',
-  'users.you': 'Вы ({name})',
   'users.youPreview': 'Вы: {body}',
-  'users.count': 'Человек: {count}',
 
   'forget.title': 'Удалить {name}?',
   'forget.body':
@@ -68,7 +51,6 @@ export const ru: MessageCatalog = {
   'chat.composerOfflineHint': '{name} не в сети. Сообщения отправятся, когда он(а) вернётся.',
   'chat.send': 'Отправить',
   'chat.tooLong': 'Сообщение длиннее {max} символов.',
-  'chat.composerHint': 'Enter — отправить, Shift+Enter — новая строка',
   'chat.statusQueued': 'Ожидает отправки',
   'chat.statusSending': 'Отправляется…',
   'chat.statusDelivered': 'Доставлено',
@@ -124,6 +106,15 @@ export const ru: MessageCatalog = {
   'settings.themeDark': 'Тёмная',
   'settings.accent': 'Акцентный цвет',
   'settings.accentHelp': 'Меняет всю палитру, а не только одну кнопку.',
+  'settings.accentName.baseline': 'Базовый',
+  'settings.accentName.indigo': 'Индиго',
+  'settings.accentName.teal': 'Бирюзовый',
+  'settings.accentName.green': 'Зелёный',
+  'settings.accentName.amber': 'Янтарный',
+  'settings.accentName.orange': 'Оранжевый',
+  'settings.accentName.red': 'Красный',
+  'settings.accentName.pink': 'Розовый',
+  'settings.accentName.slate': 'Серый',
 
   'settings.language': 'Язык интерфейса',
 
@@ -136,6 +127,7 @@ export const ru: MessageCatalog = {
 
   'settings.autostart': 'Запускать LocalMe при входе в систему',
   'settings.startMinimized': 'Запускать свёрнутым в трей',
+  'settings.startMinimizedHelp': 'Запуск вместе с системой останется в трее, а окно не откроется.',
   'settings.closeToTray': 'Оставаться в трее при закрытии окна',
   'settings.closeToTrayHelp':
     'Если выключено, закрытие окна завершает LocalMe и вы перестаёте получать сообщения.',
@@ -177,8 +169,6 @@ export const ru: MessageCatalog = {
   'settings.aboutArchitecture': 'Мессенджер для локальной сети',
   'settings.aboutLicense': 'Распространяется по лицензии MIT.',
   'settings.aboutDiagnostics': 'Диагностика',
-  'settings.devicesKnown': 'Известно',
-  'settings.devicesForgotten': 'Забыто',
   'settings.saveFailed': 'Не удалось сохранить настройку.',
   'settings.historyCleared': 'Удалено сообщений: {count}.',
   'settings.notificationsPerPeerHelp':
@@ -205,10 +195,6 @@ export const ru: MessageCatalog = {
   'tray.openLogs': 'Открыть папку журналов',
 
   'notification.newMessage': 'Новое сообщение',
-  'notification.newMessageCount': '{count} новых сообщений',
-  'notification.newMessageCount.one': '{count} новое сообщение',
-  'notification.newMessageCount.few': '{count} новых сообщения',
-  'notification.newMessageCount.many': '{count} новых сообщений',
 
   'error.storage': 'LocalMe не удалось прочитать собственную базу данных.',
   'error.discovery': 'LocalMe не удалось найти другие устройства в этой сети.',

@@ -20,20 +20,23 @@ runs:
   steps:
     - name: Setup Node.js
       if: inputs.node == 'true'
-      uses: actions/setup-node@v6
+      uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
       with:
         node-version-file: .nvmrc
         cache: npm
 
     - name: Install Rust
       if: inputs.rust == 'true'
+      # Not pinned to a commit on purpose: this action's ref *is* the toolchain it installs
+      # (`@stable`, `@1.85`), so a SHA would stop it selecting one. `rust-toolchain.toml` pins
+      # the actual version.
       uses: dtolnay/rust-toolchain@stable
       with:
         targets: ${{ inputs.rust-targets }}
 
     - name: Cache Rust build
       if: inputs.rust == 'true'
-      uses: swatinem/rust-cache@v2
+      uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       with:
         workspaces: src-tauri -> target
         cache-on-failure: true

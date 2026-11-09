@@ -38,6 +38,23 @@ export default defineConfig({
     // silently, so it is lowered to make growth visible in CI.
     chunkSizeWarningLimit: 400,
     reportCompressedSize: true,
+    // The entry chunk is the shell plus everything every route needs; the libraries below are
+    // the bulk of it and none of them change when the application code does. Naming them as
+    // their own chunks keeps the entry under the warning threshold and lets the webview reuse
+    // them from the disk cache across updates.
+    rollupOptions: {
+      output: {
+        manualChunks(id: string): string | undefined {
+          const path = id.replace(/\\/g, '/');
+          if (!path.includes('/node_modules/')) return undefined;
+          if (path.includes('@material/material-color-utilities')) return 'palette';
+          if (/\/node_modules\/(motion-v|motion-dom|motion-utils)\//.test(path)) return 'motion';
+          if (path.includes('/node_modules/@tauri-apps/')) return 'tauri-api';
+          if (/\/node_modules\/(vue|vue-router|pinia|@vue)\//.test(path)) return 'vue';
+          return undefined;
+        },
+      },
+    },
   },
   test: {
     environment: 'node',

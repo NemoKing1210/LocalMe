@@ -111,4 +111,24 @@ describe('useNow', () => {
     flashVisibility();
     expect(now.value).toBe(frozen);
   });
+
+  it('runs one interval for however many callers share it', () => {
+    vi.setSystemTime(1_000);
+    const first = createScope();
+    const second = createScope();
+    const now = first.run(() => useNow()) as Readonly<Ref<number>>;
+    const other = second.run(() => useNow()) as Readonly<Ref<number>>;
+
+    expect(vi.getTimerCount()).toBe(1);
+
+    vi.advanceTimersByTime(TICK_MS);
+    expect(now.value).toBe(1_000 + TICK_MS);
+    expect(other.value).toBe(now.value);
+
+    // One subscriber leaving does not stop the clock for the other.
+    first.stop();
+    expect(vi.getTimerCount()).toBe(1);
+    vi.advanceTimersByTime(TICK_MS);
+    expect(other.value).toBe(1_000 + 2 * TICK_MS);
+  });
 });

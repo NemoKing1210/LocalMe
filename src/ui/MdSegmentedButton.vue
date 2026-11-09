@@ -10,6 +10,8 @@ import type { IconName } from './icons';
 
 const props = defineProps<{
   modelValue: string;
+  /** What the group is for; a radio group without a name is silent to a screen reader. */
+  label: string;
   options: readonly {
     readonly value: string;
     readonly label: string;
@@ -72,6 +74,7 @@ function onKeydown(event: KeyboardEvent): void {
     ref="group"
     class="md-segmented md-typescale-label-large"
     role="radiogroup"
+    :aria-label="label"
     @keydown="onKeydown"
   >
     <button

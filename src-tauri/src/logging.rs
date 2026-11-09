@@ -92,7 +92,9 @@ impl Logs {
     pub fn set_retention(&self, days: u32) {
         self.retention_days
             .store(clamp_retention(days), Ordering::Relaxed);
-        self.prune();
+        // Forced: the startup prune has already stamped today, and a retention the user just
+        // lowered must not wait for the next day to take effect.
+        self.prune_now();
     }
 
     #[must_use]
@@ -159,12 +161,22 @@ impl Logs {
         freed
     }
 
+    /// Prunes on the daily schedule, at most once per day.
     pub fn prune(&self) {
+        self.prune_impl(false);
+    }
+
+    /// Prunes regardless of the daily marker: a retention change takes effect at once.
+    fn prune_now(&self) {
+        self.prune_impl(true);
+    }
+
+    fn prune_impl(&self, force: bool) {
         let today = days_since_epoch(SystemTime::now());
         let today_key = date_key(today);
         if let Ok(mut last) = self.last_prune.lock() {
             // Once a day is enough: the window moves by a day at a time.
-            if *last == today_key {
+            if !force && *last == today_key {
                 return;
             }
             *last = today_key;
@@ -588,6 +600,26 @@ mod tests {
         let (dir, logs) = temporary();
         assert_eq!(logs.retention_days(), DEFAULT_LOG_RETENTION_DAYS);
         assert_eq!(logs.directory(), dir.path().join(LOG_DIRECTORY));
+    }
+
+    #[test]
+    fn a_retention_applied_after_the_daily_prune_still_takes_effect() {
+        // The regression: `init` prunes with the default retention and stamps the day, so a
+        // stored retention applied a moment later must still prune rather than wait a day.
+        let (_dir, logs) = temporary();
+        let today = days_since_epoch(SystemTime::now());
+        // Ten days old: inside the default fourteen, outside the seven applied below.
+        let old = logs.directory().join(file_name(today - 10));
+        fs::write(&old, b"old").expect("write");
+
+        logs.prune();
+        assert!(
+            old.exists(),
+            "the default retention keeps a ten-day-old file"
+        );
+
+        logs.set_retention(7);
+        assert!(!old.exists(), "a lowered retention must prune at once");
     }
 
     #[test]

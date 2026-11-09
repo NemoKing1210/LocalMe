@@ -2,22 +2,13 @@ import type { MessageCatalog } from './types';
 
 export const de: MessageCatalog = {
   'app.name': 'LocalMe',
-  'app.tagline': 'Nachrichten in deinem lokalen Netzwerk',
 
   'common.cancel': 'Abbrechen',
-  'common.confirm': 'Bestätigen',
-  'common.close': 'Schließen',
-  'common.save': 'Speichern',
   'common.delete': 'Löschen',
-  'common.search': 'Suchen',
   'common.retry': 'Erneut versuchen',
   'common.back': 'Zurück',
   'common.loading': 'Wird geladen…',
-  'common.you': 'Du',
   'common.dismiss': 'Ausblenden',
-  'common.more': 'Mehr',
-  'common.options': 'Optionen',
-  'common.clear': 'Leeren',
 
   'onboarding.title': 'Willkommen bei LocalMe',
   'onboarding.subtitle':
@@ -40,20 +31,14 @@ export const de: MessageCatalog = {
   'users.clearSearch': 'Suche leeren',
   'users.searchEmpty': 'Niemand passt zu „{query}“.',
   'users.online': 'online',
-  'users.offline': 'offline',
   'users.lastSeen': 'zuletzt gesehen {relative}',
   'users.neverSeen': 'noch nie online',
-  'users.unread': '{count} ungelesene Nachrichten',
-  'users.unread.one': '{count} ungelesene Nachricht',
   'users.forget': 'Vergessen…',
   'users.muted': 'Benachrichtigungen stummgeschaltet',
-  'users.openChatWith': 'Unterhaltung mit {name}',
   'users.actionsFor': 'Aktionen für {name}',
   'users.mute': 'Benachrichtigungen stummschalten',
   'users.unmute': 'Benachrichtigungen wieder einschalten',
-  'users.you': 'Du ({name})',
   'users.youPreview': 'Du: {body}',
-  'users.count': 'Personen: {count}',
 
   'forget.title': '{name} vergessen?',
   'forget.body':
@@ -68,7 +53,6 @@ export const de: MessageCatalog = {
     '{name} ist offline. Nachrichten werden gesendet, sobald die Person zurück ist.',
   'chat.send': 'Senden',
   'chat.tooLong': 'Diese Nachricht ist länger als {max} Zeichen.',
-  'chat.composerHint': 'Enter sendet, Shift+Enter beginnt eine neue Zeile',
   'chat.statusQueued': 'Wartet auf Versand',
   'chat.statusSending': 'Wird gesendet…',
   'chat.statusDelivered': 'Zugestellt',
@@ -124,6 +108,15 @@ export const de: MessageCatalog = {
   'settings.themeDark': 'Dunkel',
   'settings.accent': 'Akzentfarbe',
   'settings.accentHelp': 'Ändert die gesamte Farbpalette, nicht nur eine Schaltfläche.',
+  'settings.accentName.baseline': 'Basis',
+  'settings.accentName.indigo': 'Indigo',
+  'settings.accentName.teal': 'Türkis',
+  'settings.accentName.green': 'Grün',
+  'settings.accentName.amber': 'Bernstein',
+  'settings.accentName.orange': 'Orange',
+  'settings.accentName.red': 'Rot',
+  'settings.accentName.pink': 'Rosa',
+  'settings.accentName.slate': 'Schiefer',
 
   'settings.language': 'Sprache der Oberfläche',
 
@@ -137,6 +130,8 @@ export const de: MessageCatalog = {
 
   'settings.autostart': 'LocalMe bei der Anmeldung starten',
   'settings.startMinimized': 'Minimiert im Tray starten',
+  'settings.startMinimizedHelp':
+    'Ein Start mit dem System bleibt im Infobereich, statt ein Fenster zu öffnen.',
   'settings.closeToTray': 'Beim Schließen des Fensters im Tray weiterlaufen',
   'settings.closeToTrayHelp':
     'Ist das aus, beendet das Schließen des Fensters LocalMe und du erhältst keine Nachrichten mehr.',
@@ -176,8 +171,6 @@ export const de: MessageCatalog = {
   'settings.aboutArchitecture': 'Messenger für lokale Netzwerke',
   'settings.aboutLicense': 'Lizenziert unter der MIT-Lizenz.',
   'settings.aboutDiagnostics': 'Diagnose',
-  'settings.devicesKnown': 'Bekannt',
-  'settings.devicesForgotten': 'Vergessen',
   'settings.saveFailed': 'Diese Einstellung konnte nicht gespeichert werden.',
   'settings.historyCleared': '{count} Nachrichten gelöscht.',
   'settings.notificationsPerPeerHelp':
@@ -204,8 +197,6 @@ export const de: MessageCatalog = {
   'tray.openLogs': 'Protokollordner öffnen',
 
   'notification.newMessage': 'Neue Nachricht',
-  'notification.newMessageCount': '{count} neue Nachrichten',
-  'notification.newMessageCount.one': '{count} neue Nachricht',
 
   'error.storage': 'LocalMe konnte die eigene Datenbank nicht lesen.',
   'error.discovery': 'LocalMe konnte in diesem Netzwerk nicht nach anderen Geräten suchen.',

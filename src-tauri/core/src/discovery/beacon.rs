@@ -23,6 +23,7 @@ use crate::error::DiscoveryError;
 use crate::ports::discovery::{DiscoveredPeer, Discovery, DiscoveryEvent};
 use crate::protocol::limits::{
     BEACON_INTERVAL_IDLE, BEACON_INTERVAL_SETTLED, BEACON_MULTICAST_ADDR, DISCOVERY_TTL,
+    MAX_BEACON_ANNOUNCES_PER_SECOND, MAX_DISCOVERY_PEERS,
 };
 
 use super::OwnAnnouncement;
@@ -278,9 +279,26 @@ impl ReplyLimiter {
         match self.replied.get(&peer) {
             Some(last) if now.saturating_duration_since(*last) < REPLY_MIN_INTERVAL => false,
             _ => {
+                self.evict_if_full(peer);
                 self.replied.insert(peer, now);
                 true
             }
+        }
+    }
+
+    /// A peer flooding fresh ids must not grow the map past its cap: the least recently
+    /// replied-to entry makes room.
+    fn evict_if_full(&mut self, peer: DeviceId) {
+        if self.replied.len() < MAX_DISCOVERY_PEERS || self.replied.contains_key(&peer) {
+            return;
+        }
+        if let Some(oldest) = self
+            .replied
+            .iter()
+            .min_by_key(|(_, last)| **last)
+            .map(|(id, _)| *id)
+        {
+            self.replied.remove(&oldest);
         }
     }
 
@@ -298,6 +316,17 @@ struct Liveness {
 
 impl Liveness {
     fn heard(&mut self, peer: DeviceId, now: Instant) {
+        if self.last_heard.len() >= MAX_DISCOVERY_PEERS && !self.last_heard.contains_key(&peer) {
+            // A flood of fresh ids cannot grow the map: the least recently heard makes room.
+            if let Some(oldest) = self
+                .last_heard
+                .iter()
+                .min_by_key(|(_, last)| **last)
+                .map(|(id, _)| *id)
+            {
+                self.last_heard.remove(&oldest);
+            }
+        }
         self.last_heard.insert(peer, now);
     }
 
@@ -320,6 +349,36 @@ impl Liveness {
     }
 }
 
+/// Caps how many announce datagrams are decoded per second, so a flood costs a bounded amount
+/// of CPU rather than one parse per datagram. A fixed window is enough: the point is a ceiling,
+/// not fairness.
+#[derive(Debug)]
+struct InboundRate {
+    window_start: Instant,
+    seen: u32,
+}
+
+impl InboundRate {
+    fn new(now: Instant) -> Self {
+        Self {
+            window_start: now,
+            seen: 0,
+        }
+    }
+
+    fn allow(&mut self, now: Instant) -> bool {
+        if now.saturating_duration_since(self.window_start) >= Duration::from_secs(1) {
+            self.window_start = now;
+            self.seen = 0;
+        }
+        if self.seen >= MAX_BEACON_ANNOUNCES_PER_SECOND {
+            return false;
+        }
+        self.seen += 1;
+        true
+    }
+}
+
 /// Sends one datagram, logging rather than failing.
 async fn send_to(socket: &UdpSocket, payload: &[u8], target: SocketAddr) {
     if let Err(err) = socket.send_to(payload, target).await {
@@ -337,6 +396,7 @@ async fn run(
     let targets = announce_targets(port);
     let mut limiter = ReplyLimiter::default();
     let mut liveness = Liveness::default();
+    let mut inbound = InboundRate::new(Instant::now());
     // Once a peer has been heard the period stays settled even if that peer is lost: flapping
     // between the two periods would only make the traffic less predictable.
     let mut settled = false;
@@ -387,6 +447,10 @@ async fn run(
                     continue;
                 }
                 let now = Instant::now();
+                if !inbound.allow(now) {
+                    tracing::debug!("dropping an announce: the inbound budget is spent");
+                    continue;
+                }
                 match tag {
                     Tag::Announce => {
                         if !settled {
@@ -588,6 +652,46 @@ mod tests {
         assert!(
             limiter.allow(other, start),
             "the limit is per peer, not global"
+        );
+    }
+
+    #[test]
+    fn the_reply_limiter_is_bounded() {
+        let mut limiter = ReplyLimiter::default();
+        let start = Instant::now();
+        for _ in 0..(MAX_DISCOVERY_PEERS * 2) {
+            limiter.allow(DeviceId::generate(), start);
+        }
+        assert!(limiter.replied.len() <= MAX_DISCOVERY_PEERS);
+    }
+
+    #[test]
+    fn liveness_is_bounded() {
+        let mut liveness = Liveness::default();
+        let start = Instant::now();
+        let mut last = DeviceId::generate();
+        for _ in 0..(MAX_DISCOVERY_PEERS * 2) {
+            last = DeviceId::generate();
+            liveness.heard(last, start);
+        }
+        assert!(liveness.last_heard.len() <= MAX_DISCOVERY_PEERS);
+        assert!(
+            liveness.last_heard.contains_key(&last),
+            "the newest peer is the one that must survive"
+        );
+    }
+
+    #[test]
+    fn the_inbound_budget_caps_a_flood_within_the_window() {
+        let start = Instant::now();
+        let mut rate = InboundRate::new(start);
+        for _ in 0..MAX_BEACON_ANNOUNCES_PER_SECOND {
+            assert!(rate.allow(start));
+        }
+        assert!(!rate.allow(start), "the budget is spent");
+        assert!(
+            rate.allow(start + Duration::from_secs(1)),
+            "a new window starts the budget over"
         );
     }
 

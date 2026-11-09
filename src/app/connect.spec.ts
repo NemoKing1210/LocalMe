@@ -15,6 +15,7 @@ vi.mock('@/ipc', async (importOriginal) => ({
 }));
 
 import { onCoreEvent } from '@/ipc';
+import type { CoreEventName } from '@/ipc';
 import { router } from '@/app/router';
 import { ROUTE } from '@/app/routes';
 import { useChatStore } from '@/stores/chat';
@@ -23,27 +24,19 @@ import { useSettingsStore } from '@/stores/settings';
 import { useUiStore } from '@/stores/ui';
 import { FIXED_NOW, makeAttachment, makeMessage, makePeer, makeSettings } from '@/test/factories';
 
-import { connectCoreEvents } from './connect';
+import { HANDLED_EVENTS, connectCoreEvents } from './connect';
 
 /** `onCoreEvent` is generic; a concrete signature keeps the mock's calls readable in a spec. */
 type Register = (name: string, handler: (payload: unknown) => void) => Promise<() => void>;
 const onCoreEventMock = onCoreEvent as unknown as Mock<Register>;
 
-/** Every event `connectCoreEvents` subscribes to, in registration order. */
-const EVENT_NAMES = [
-  'peers',
-  'message',
-  'message_status',
-  'attachment',
-  'settings_changed',
-  'state_snapshot',
-  'open_chat',
-  'open_settings',
-  'notice',
-  'stopped',
-] as const;
+/**
+ * The module's own list, so this spec cannot pass against a stale copy: an event declared there
+ * but not subscribed is caught by the checks below.
+ */
+const EVENT_NAMES = Object.keys(HANDLED_EVENTS) as readonly CoreEventName[];
 
-function handler(name: (typeof EVENT_NAMES)[number]): (payload: unknown) => void {
+function handler(name: CoreEventName): (payload: unknown) => void {
   const registered = capture.handlers.get(name);
   if (!registered) throw new Error(`no handler registered for ${name}`);
   return registered;

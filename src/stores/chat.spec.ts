@@ -147,18 +147,6 @@ describe('the chat store', () => {
     expect(chat.oldestCursor).toEqual({ sentAtMs: 1_000, id: 'a' });
   });
 
-  it('counts everything that has not been delivered yet', async () => {
-    const chat = useChatStore();
-    await chat.open(PEER);
-
-    chat.add({ ...message('a', 1_000), status: 'queued' });
-    chat.add({ ...message('b', 2_000), status: 'sending' });
-    chat.add({ ...message('c', 3_000), status: 'queued' });
-    chat.add({ ...message('d', 4_000), status: 'delivered' });
-
-    expect(chat.pendingCount).toBe(3);
-  });
-
   it('carries the delivery time of a message that waited in the outbox', async () => {
     const chat = useChatStore();
     await chat.open(PEER);
@@ -231,7 +219,10 @@ describe('the chat store', () => {
   });
 
   it('loads the first page with the module page size and tracks a full page', async () => {
-    const page = Array.from({ length: 50 }, (_, index) => message(`m${index}`, index + 1));
+    // The host returns a page newest-first.
+    const page = Array.from({ length: 50 }, (_, index) =>
+      message(`m${index}`, index + 1),
+    ).reverse();
     vi.mocked(ipc.history).mockResolvedValue(page);
     const chat = useChatStore();
 
@@ -239,6 +230,9 @@ describe('the chat store', () => {
 
     expect(ipc.history).toHaveBeenCalledWith(PEER, null, 50);
     expect(chat.messages).toHaveLength(50);
+    // The store keeps the conversation oldest-first and its cursor on the oldest row.
+    expect(chat.messages[0]?.id).toBe('m0');
+    expect(chat.oldestCursor).toEqual({ sentAtMs: 1, id: 'm0' });
     // A full page is the signal that the host may hold older messages.
     expect(chat.hasMore).toBe(true);
   });
@@ -283,7 +277,7 @@ describe('the chat store', () => {
     const chat = useChatStore();
     await chat.open(PEER);
 
-    vi.mocked(ipc.history).mockResolvedValueOnce([message('a', 1_000), message('b', 2_000)]);
+    vi.mocked(ipc.history).mockResolvedValueOnce([message('b', 2_000), message('a', 1_000)]);
     await chat.loadOlder();
 
     expect(ipc.history).toHaveBeenLastCalledWith(PEER, { sentAtMs: 3_000, id: 'c' }, 50);

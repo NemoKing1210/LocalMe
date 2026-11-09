@@ -76,26 +76,20 @@ const size = computed(() => i18n.bytes(props.attachment.size));
  * Runs one host command, reporting a failure the way every other action does. The console keeps
  * the detail; the user gets the same sentence a failed message produces.
  */
-async function run(
-  action: () => Promise<unknown>,
-  failure: MessageKey = 'error.internal',
-): Promise<void> {
-  try {
-    await action();
-  } catch (error) {
-    console.error('[localme] the file action failed', error);
-    ui.fail(failure);
-  }
+function run(action: () => Promise<unknown>, failure: MessageKey = 'error.internal'): void {
+  void ui.attempt(action, 'the file action failed', failure);
 }
 
 async function save(): Promise<void> {
-  const target = await ipc.saveAttachment(props.attachment.id).catch((error: unknown) => {
-    console.error('[localme] the file could not be saved', error);
-    ui.fail('error.storage');
-    return null;
-  });
-  // `null` means the dialog was dismissed, which is not a failure and says nothing.
-  if (target !== null) ui.notify('chat.attachmentSaved', { path: target });
+  const saved = await ui.attempt(
+    () => ipc.saveAttachment(props.attachment.id),
+    'the file could not be saved',
+    'error.storage',
+  );
+  // A successful `null` means the dialog was dismissed, which is not a failure and says nothing.
+  if (saved.ok && saved.value !== null) {
+    ui.notify('chat.attachmentSaved', { path: saved.value });
+  }
 }
 </script>
 

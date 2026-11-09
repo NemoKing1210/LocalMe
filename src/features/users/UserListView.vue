@@ -71,11 +71,10 @@ function openSettings(): void {
 }
 
 async function onMute(peer: Peer): Promise<void> {
-  try {
-    await ipc.setPeerMuted(peer.deviceId, !peer.notifyMuted);
-  } catch {
-    ui.fail('error.internal');
-  }
+  await ui.attempt(
+    () => ipc.setPeerMuted(peer.deviceId, !peer.notifyMuted),
+    'the conversation could not be muted',
+  );
 }
 
 const forgetTarget = ref<Peer | null>(null);
@@ -85,12 +84,11 @@ async function onForgetConfirmed(deleteHistory: boolean): Promise<void> {
   forgetTarget.value = null;
   if (peer === null) return;
 
-  try {
-    await ipc.forgetPeer(peer.deviceId, deleteHistory);
-  } catch {
-    ui.fail('error.internal');
-    return;
-  }
+  const forgotten = await ui.attempt(
+    () => ipc.forgetPeer(peer.deviceId, deleteHistory),
+    'the device could not be forgotten',
+  );
+  if (!forgotten.ok) return;
 
   chat.clear(peer.deviceId);
   // The address pointed at a conversation that is now gone.

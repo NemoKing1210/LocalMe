@@ -16,8 +16,6 @@ pub use limits::{
 };
 pub use ratelimit::TokenBucket;
 
-use serde::Deserialize;
-
 use crate::domain::attachment::{AttachmentMeta, Sha256};
 use crate::domain::ids::{AttachmentId, AvatarSeed, MessageId};
 use crate::domain::message::MessageBody;
@@ -25,7 +23,7 @@ use crate::domain::nickname::Nickname;
 use crate::domain::peer::Handshake;
 use crate::error::ProtocolError;
 
-use limits::MAX_ERROR_TEXT_CHARS;
+use limits::{LENGTH_PREFIX_BYTES, MAX_ERROR_TEXT_CHARS};
 use wire::WireFrame;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -320,15 +318,28 @@ impl Frame {
 /// With the domain limits in place this is unreachable for frames we construct, but it is
 /// checked rather than assumed.
 pub fn encode(frame: &Frame) -> Result<Vec<u8>, ProtocolError> {
-    let json = serde_json::to_vec(&WireFrame::from_frame(frame))
+    // One buffer, one pass: the length prefix is reserved, the JSON is written after it, then
+    // the real length is patched in. Serialising twice and copying would be work for nothing on
+    // the hottest send path.
+    let mut out = Vec::with_capacity(256);
+    out.extend_from_slice(&[0_u8; LENGTH_PREFIX_BYTES]);
+    serde_json::to_writer(&mut out, &WireFrame::from_frame(frame))
         .map_err(|err| ProtocolError::Malformed(format!("encode failed: {err}")))?;
-    if json.is_empty() || json.len() > MAX_FRAME_BYTES {
+    let len = out.len().saturating_sub(LENGTH_PREFIX_BYTES);
+    if len == 0 || len > MAX_FRAME_BYTES {
         return Err(ProtocolError::FrameSize {
-            len: json.len(),
+            len,
             max: MAX_FRAME_BYTES,
         });
     }
-    encode_frame(&json)
+    let declared = u32::try_from(len).map_err(|_| ProtocolError::FrameSize {
+        len,
+        max: MAX_FRAME_BYTES,
+    })?;
+    if let Some(prefix) = out.get_mut(..LENGTH_PREFIX_BYTES) {
+        prefix.copy_from_slice(&declared.to_be_bytes());
+    }
+    Ok(out)
 }
 
 /// Decodes and validates one frame body: the payload that follows the length prefix.
@@ -344,6 +355,18 @@ pub fn encode(frame: &Frame) -> Result<Vec<u8>, ProtocolError> {
 /// * [`ProtocolError::Malformed`] — the payload is not a valid envelope.
 /// * [`ProtocolError::Domain`] — a field was structurally fine but semantically invalid.
 pub fn decode(payload: &[u8]) -> Result<Frame, ProtocolError> {
+    decode_versioned(payload).map(|(_version, frame)| frame)
+}
+
+/// Decodes one frame body and reports the protocol version it announced, in a single parse.
+///
+/// The version is returned rather than checked here so the connection loop can answer a
+/// mismatched peer with a precise error, without parsing the envelope twice.
+///
+/// # Errors
+///
+/// The same as [`decode`].
+pub fn decode_versioned(payload: &[u8]) -> Result<(u16, Frame), ProtocolError> {
     if payload.is_empty() || payload.len() > MAX_FRAME_BYTES {
         return Err(ProtocolError::FrameSize {
             len: payload.len(),
@@ -353,39 +376,22 @@ pub fn decode(payload: &[u8]) -> Result<Frame, ProtocolError> {
     let text = std::str::from_utf8(payload).map_err(|_| ProtocolError::NotUtf8)?;
     let wire: WireFrame =
         serde_json::from_str(text).map_err(|err| ProtocolError::Malformed(err.to_string()))?;
-    wire.into_frame()
+    let version = wire.v;
+    Ok((version, wire.into_frame()?))
 }
 
 /// Round-trips a frame through the encoder and decoder.
 ///
+/// Test-only: production never needs to decode what it just encoded.
+///
 /// # Errors
 ///
 /// Propagates encoder and decoder failures.
-pub fn round_trip(frame: &Frame) -> Result<Frame, ProtocolError> {
+#[cfg(test)]
+pub(crate) fn round_trip(frame: &Frame) -> Result<Frame, ProtocolError> {
     let encoded = encode(frame)?;
     let (_prefix, payload) = encoded.split_at(limits::LENGTH_PREFIX_BYTES);
     decode(payload)
-}
-
-/// The version an envelope announces, read cheaply from the raw text.
-///
-/// Used to answer a peer that announces an unsupported version *before* its frame is
-/// interpreted: if the schemas differ, a full decode would fail with a confusing "malformed"
-/// instead of "we do not speak your version".
-///
-/// # Errors
-///
-/// Returns [`ProtocolError::NotUtf8`] or [`ProtocolError::Malformed`].
-pub fn peek_version(payload: &[u8]) -> Result<u16, ProtocolError> {
-    #[derive(Deserialize)]
-    struct VersionOnly {
-        v: u16,
-    }
-
-    let text = std::str::from_utf8(payload).map_err(|_| ProtocolError::NotUtf8)?;
-    serde_json::from_str::<VersionOnly>(text)
-        .map(|parsed| parsed.v)
-        .map_err(|err| ProtocolError::Malformed(err.to_string()))
 }
 
 #[cfg(test)]
@@ -630,14 +636,14 @@ mod tests {
     }
 
     #[test]
-    fn peek_version_reads_the_envelope_version() {
-        assert_eq!(
-            peek_version(br#"{"v":3,"t":"heartbeat","seq":1}"#).expect("peek"),
-            3
-        );
-        assert!(peek_version(b"not json").is_err());
-        assert!(peek_version(br#"{"t":"heartbeat"}"#).is_err());
-        assert!(peek_version(&[0xff]).is_err());
+    fn decode_versioned_reads_the_envelope_version_in_one_pass() {
+        let (version, frame) =
+            decode_versioned(br#"{"v":3,"t":"heartbeat","seq":1}"#).expect("decode");
+        assert_eq!(version, 3);
+        assert_eq!(frame, Frame::Heartbeat { seq: 1 });
+        assert!(decode_versioned(b"not json").is_err());
+        assert!(decode_versioned(br#"{"t":"heartbeat"}"#).is_err());
+        assert!(decode_versioned(&[0xff]).is_err());
     }
 
     #[test]

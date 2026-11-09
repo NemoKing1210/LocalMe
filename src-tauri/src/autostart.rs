@@ -1,5 +1,6 @@
 //! Autostart registration. The operating system owns the flag, so it is not mirrored into the
-//! settings file; registration passes `--minimized` so a sign-in start does not steal focus.
+//! settings file. The registration carries no launch argument: whether a sign-in start is
+//! tray-only follows the `start_minimized` setting, read once the settings have loaded.
 
 use tauri::{AppHandle, Runtime};
 use tauri_plugin_autostart::ManagerExt;

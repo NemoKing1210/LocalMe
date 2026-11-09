@@ -1,21 +1,12 @@
 export const en = {
   'app.name': 'LocalMe',
-  'app.tagline': 'Messages on your local network',
 
   'common.cancel': 'Cancel',
-  'common.confirm': 'Confirm',
-  'common.close': 'Close',
-  'common.save': 'Save',
   'common.delete': 'Delete',
-  'common.search': 'Search',
   'common.retry': 'Retry',
   'common.back': 'Back',
   'common.loading': 'Loading…',
-  'common.you': 'You',
   'common.dismiss': 'Dismiss',
-  'common.more': 'More',
-  'common.options': 'Options',
-  'common.clear': 'Clear',
 
   'onboarding.title': 'Welcome to LocalMe',
   'onboarding.subtitle':
@@ -37,20 +28,14 @@ export const en = {
   'users.clearSearch': 'Clear search',
   'users.searchEmpty': 'Nobody matches “{query}”.',
   'users.online': 'online',
-  'users.offline': 'offline',
   'users.lastSeen': 'last seen {relative}',
   'users.neverSeen': 'never online',
-  'users.unread': '{count} unread messages',
-  'users.unread.one': '{count} unread message',
   'users.forget': 'Forget…',
   'users.muted': 'Notifications muted',
-  'users.openChatWith': 'Conversation with {name}',
   'users.actionsFor': 'Actions for {name}',
   'users.mute': 'Mute notifications',
   'users.unmute': 'Unmute notifications',
-  'users.you': 'You ({name})',
   'users.youPreview': 'You: {body}',
-  'users.count': 'People: {count}',
 
   'forget.title': 'Forget {name}?',
   'forget.body':
@@ -64,7 +49,6 @@ export const en = {
   'chat.composerOfflineHint': '{name} is offline. Messages will be sent when they are back.',
   'chat.send': 'Send',
   'chat.tooLong': 'That message is longer than {max} characters.',
-  'chat.composerHint': 'Enter sends, Shift+Enter starts a new line',
   'chat.statusQueued': 'Waiting to send',
   'chat.statusSending': 'Sending…',
   'chat.statusDelivered': 'Delivered',
@@ -120,6 +104,15 @@ export const en = {
   'settings.themeDark': 'Dark',
   'settings.accent': 'Accent colour',
   'settings.accentHelp': 'Changes the whole palette, not just one button.',
+  'settings.accentName.baseline': 'Baseline',
+  'settings.accentName.indigo': 'Indigo',
+  'settings.accentName.teal': 'Teal',
+  'settings.accentName.green': 'Green',
+  'settings.accentName.amber': 'Amber',
+  'settings.accentName.orange': 'Orange',
+  'settings.accentName.red': 'Red',
+  'settings.accentName.pink': 'Pink',
+  'settings.accentName.slate': 'Slate',
 
   'settings.language': 'Interface language',
 
@@ -132,6 +125,8 @@ export const en = {
 
   'settings.autostart': 'Start LocalMe when I sign in',
   'settings.startMinimized': 'Start minimised in the tray',
+  'settings.startMinimizedHelp':
+    'A start with the system stays in the tray instead of opening a window.',
   'settings.closeToTray': 'Keep running in the tray when the window is closed',
   'settings.closeToTrayHelp':
     'With this off, closing the window quits LocalMe and you stop receiving messages.',
@@ -170,8 +165,6 @@ export const en = {
   'settings.aboutArchitecture': 'Local network messenger',
   'settings.aboutLicense': 'Licensed under the MIT licence.',
   'settings.aboutDiagnostics': 'Diagnostics',
-  'settings.devicesKnown': 'Known',
-  'settings.devicesForgotten': 'Forgotten',
   'settings.saveFailed': 'That setting could not be saved.',
   'settings.historyCleared': 'Deleted {count} messages.',
   'settings.notificationsPerPeerHelp':
@@ -198,8 +191,6 @@ export const en = {
   'tray.openLogs': 'Open logs folder',
 
   'notification.newMessage': 'New message',
-  'notification.newMessageCount': '{count} new messages',
-  'notification.newMessageCount.one': '{count} new message',
 
   'error.storage': 'LocalMe could not read its own database.',
   'error.discovery': 'LocalMe could not look for other devices on this network.',

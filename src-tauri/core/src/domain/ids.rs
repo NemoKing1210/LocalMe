@@ -38,11 +38,8 @@ impl DeviceId {
 
     #[must_use]
     pub fn short(self) -> String {
-        let mut out = String::with_capacity(20);
-        for ch in self.0.simple().to_string().chars().take(20) {
-            out.push(ch);
-        }
-        out
+        let hex = self.0.simple().to_string();
+        hex.get(..20).unwrap_or(hex.as_str()).to_owned()
     }
 }
 
@@ -313,6 +310,16 @@ mod tests {
         let seed = AvatarSeed::derive(id, &nick);
         assert_eq!(seed.as_str(), "018f2b9c-0000-7000-8000-000000000000:Аня");
         assert!(seed.as_str().chars().count() <= MAX_AVATAR_SEED_CHARS);
+    }
+
+    #[test]
+    fn a_long_nickname_still_derives_a_parsable_seed() {
+        // The regression: the seed is re-parsed by mDNS discovery, the handshake and the storage
+        // layer, so a derived seed longer than the limit would make the device unreachable.
+        let nick = Nickname::parse(&"n".repeat(32)).expect("nickname");
+        let seed = AvatarSeed::derive(DeviceId::generate(), &nick);
+        assert_eq!(seed.as_str().chars().count(), MAX_AVATAR_SEED_CHARS);
+        assert!(AvatarSeed::parse(seed.as_str()).is_ok());
     }
 
     #[test]

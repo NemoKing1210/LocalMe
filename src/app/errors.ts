@@ -3,7 +3,12 @@ import type { App, ComponentPublicInstance } from 'vue';
 import * as ipc from '@/ipc';
 
 export interface ErrorReport {
-  readonly scope: 'vue' | 'unhandled-rejection' | 'window';
+  /**
+   * Where the failure came from. `startup` is reported by hand — a bootstrap that failed is
+   * caught in `App.vue`, so it never reaches the global handlers, and it is exactly the failure
+   * worth having in the log file when a user reports an error screen.
+   */
+  readonly scope: 'vue' | 'unhandled-rejection' | 'window' | 'startup';
   readonly message: string;
   readonly componentTrace?: string;
   readonly cause: unknown;
@@ -28,7 +33,7 @@ function stackFrames(value: unknown, limit = 6): string | undefined {
   return frames.length === 0 ? undefined : frames.join(' ← ');
 }
 
-function report(report: ErrorReport): void {
+export function reportError(report: ErrorReport): void {
   const context = [report.componentTrace, stackFrames(report.cause)]
     .filter((part): part is string => part !== undefined && part.length > 0)
     .join(' | ');
@@ -49,7 +54,7 @@ export function installErrorHandlers(app: App): void {
     instance: ComponentPublicInstance | null,
     info: string,
   ): void => {
-    report({
+    reportError({
       scope: 'vue',
       message: describe(error),
       componentTrace: instance ? `${info} in ${instance.$options.name ?? 'anonymous'}` : info,
@@ -58,7 +63,7 @@ export function installErrorHandlers(app: App): void {
   };
 
   window.addEventListener('unhandledrejection', (event: PromiseRejectionEvent): void => {
-    report({
+    reportError({
       scope: 'unhandled-rejection',
       message: describe(event.reason),
       cause: event.reason,
@@ -66,7 +71,7 @@ export function installErrorHandlers(app: App): void {
   });
 
   window.addEventListener('error', (event: ErrorEvent): void => {
-    report({
+    reportError({
       scope: 'window',
       message: event.message || describe(event.error),
       cause: event.error,

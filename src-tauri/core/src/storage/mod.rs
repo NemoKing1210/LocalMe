@@ -94,19 +94,23 @@ enum Request {
         message: ChatMessage,
         reply: Reply<bool>,
     },
-    SetMessageStatus {
+    MessagePeer {
         id: MessageId,
-        status: MessageStatus,
-        reply: Reply<()>,
+        reply: Reply<Option<DeviceId>>,
     },
     MarkMessageDelivered {
         id: MessageId,
         delivered_at_ms: i64,
         reply: Reply<()>,
     },
-    NextOutboxMessage {
+    NextOutboxBatch {
         device_id: DeviceId,
-        reply: Reply<Option<ChatMessage>>,
+        limit: u32,
+        reply: Reply<Vec<ChatMessage>>,
+    },
+    MarkMessagesSending {
+        ids: Vec<MessageId>,
+        reply: Reply<()>,
     },
     RequeuePendingMessages {
         device_id: DeviceId,
@@ -343,8 +347,8 @@ fn dispatch(conn: &mut Connection, files: &Path, request: Request) {
         Request::InsertMessage { message, reply } => {
             let _ = reply.send(insert_message(conn, &message));
         }
-        Request::SetMessageStatus { id, status, reply } => {
-            let _ = reply.send(set_message_status(conn, id, status));
+        Request::MessagePeer { id, reply } => {
+            let _ = reply.send(message_peer(conn, id));
         }
         Request::MarkMessageDelivered {
             id,
@@ -353,8 +357,15 @@ fn dispatch(conn: &mut Connection, files: &Path, request: Request) {
         } => {
             let _ = reply.send(mark_message_delivered(conn, id, delivered_at_ms));
         }
-        Request::NextOutboxMessage { device_id, reply } => {
-            let _ = reply.send(next_outbox_message(conn, files, device_id));
+        Request::NextOutboxBatch {
+            device_id,
+            limit,
+            reply,
+        } => {
+            let _ = reply.send(next_outbox_batch(conn, files, device_id, limit));
+        }
+        Request::MarkMessagesSending { ids, reply } => {
+            let _ = reply.send(mark_messages_sending(conn, &ids));
         }
         Request::RequeuePendingMessages { device_id, reply } => {
             let _ = reply.send(requeue_pending_messages(conn, device_id));
@@ -426,24 +437,30 @@ fn to_u32(value: i64) -> Result<u32, StorageError> {
         .map_err(|_| invalid_row(format!("expected a non-negative count, found {value}")))
 }
 
+/// When a peer was last heard from: the newer of what we last saw of them and their last
+/// message, and `NULL` for a peer we have neither seen nor heard from.
+///
+/// One definition, because the user list and the known-device list must order by exactly the same
+/// instant, and a change here has to move both.
+const LAST_ACTIVITY_SQL: &str = concat!(
+    "CASE WHEN p.last_seen_ms IS NULL ",
+    "AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.peer_id = p.device_id) ",
+    "THEN NULL ELSE MAX(COALESCE(p.last_seen_ms, 0), ",
+    "COALESCE((SELECT MAX(m.sent_at_ms) FROM messages m WHERE m.peer_id = p.device_id), 0)) END"
+);
+
 /// `peers` columns plus the computed `last_activity_ms` and last-message preview, in row
 /// order.
-const PEER_COLUMNS: &str = "\
-  p.device_id, p.nickname, p.avatar_seed, p.last_address, p.last_seen_ms, \
-  p.first_seen_ms, p.unread, p.notify_muted, p.forgotten, \
-  CASE \
-    WHEN p.last_seen_ms IS NULL \
-      AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.peer_id = p.device_id) \
-    THEN NULL \
-    ELSE MAX( \
-      COALESCE(p.last_seen_ms, 0), \
-      COALESCE((SELECT MAX(m.sent_at_ms) FROM messages m WHERE m.peer_id = p.device_id), 0) \
-    ) \
-  END, \
-  (SELECT m.body FROM messages m WHERE m.peer_id = p.device_id \
-    ORDER BY m.sent_at_ms DESC, m.id DESC LIMIT 1), \
-  (SELECT m.outgoing FROM messages m WHERE m.peer_id = p.device_id \
-    ORDER BY m.sent_at_ms DESC, m.id DESC LIMIT 1)";
+fn peer_columns() -> String {
+    format!(
+        "p.device_id, p.nickname, p.avatar_seed, p.last_address, p.last_seen_ms, \
+         p.first_seen_ms, p.unread, p.notify_muted, p.forgotten, {LAST_ACTIVITY_SQL}, \
+         (SELECT m.body FROM messages m WHERE m.peer_id = p.device_id \
+           ORDER BY m.sent_at_ms DESC, m.id DESC LIMIT 1), \
+         (SELECT m.outgoing FROM messages m WHERE m.peer_id = p.device_id \
+           ORDER BY m.sent_at_ms DESC, m.id DESC LIMIT 1)"
+    )
+}
 
 struct PeerRow {
     device_id: String,
@@ -785,7 +802,7 @@ fn upsert_peer_seen(
          ON CONFLICT(device_id) DO UPDATE SET \
            nickname = excluded.nickname, \
            avatar_seed = excluded.avatar_seed, \
-           last_address = excluded.last_address, \
+           last_address = COALESCE(excluded.last_address, peers.last_address), \
            last_seen_ms = CASE \
              WHEN excluded.last_seen_ms IS NULL THEN peers.last_seen_ms \
              ELSE MAX(COALESCE(peers.last_seen_ms, excluded.last_seen_ms), excluded.last_seen_ms) \
@@ -813,7 +830,7 @@ fn upsert_peer_seen(
 fn read_peer(conn: &Connection, device_id: DeviceId) -> Result<Option<StoredPeer>, StorageError> {
     let sql = format!(
         "SELECT {} FROM peers p WHERE p.device_id = ?1",
-        PEER_COLUMNS
+        peer_columns()
     );
     let raw = conn
         .query_row(&sql, params![device_id.to_string()], PeerRow::read)
@@ -825,7 +842,7 @@ fn read_peer(conn: &Connection, device_id: DeviceId) -> Result<Option<StoredPeer
 fn read_peers(conn: &Connection) -> Result<Vec<StoredPeer>, StorageError> {
     let sql = format!(
         "SELECT {} FROM peers p ORDER BY p.nickname ASC, p.device_id ASC",
-        PEER_COLUMNS
+        peer_columns()
     );
     let mut stmt = conn.prepare(&sql).map_err(sqlite_error)?;
     let rows = stmt.query_map([], PeerRow::read).map_err(sqlite_error)?;
@@ -904,24 +921,14 @@ fn forget_peer(
 }
 
 fn read_known_devices(conn: &Connection) -> Result<Vec<KnownDevice>, StorageError> {
-    let sql = "\
-        SELECT p.device_id, p.nickname, p.avatar_seed, p.forgotten, p.first_seen_ms, \
-               p.last_seen_ms, \
-               (SELECT COUNT(*) FROM messages m WHERE m.peer_id = p.device_id) \
-        FROM peers p \
-        ORDER BY \
-          CASE \
-            WHEN p.last_seen_ms IS NULL \
-              AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.peer_id = p.device_id) \
-            THEN NULL \
-            ELSE MAX( \
-              COALESCE(p.last_seen_ms, 0), \
-              COALESCE((SELECT MAX(m.sent_at_ms) FROM messages m WHERE m.peer_id = p.device_id), 0) \
-            ) \
-          END DESC, \
-          p.nickname ASC, \
-          p.device_id ASC";
-    let mut stmt = conn.prepare(sql).map_err(sqlite_error)?;
+    let sql = format!(
+        "SELECT p.device_id, p.nickname, p.avatar_seed, p.forgotten, p.first_seen_ms, \
+                p.last_seen_ms, \
+                (SELECT COUNT(*) FROM messages m WHERE m.peer_id = p.device_id) \
+         FROM peers p \
+         ORDER BY {LAST_ACTIVITY_SQL} DESC, p.nickname ASC, p.device_id ASC"
+    );
+    let mut stmt = conn.prepare(&sql).map_err(sqlite_error)?;
     let rows = stmt
         .query_map([], KnownDeviceRow::read)
         .map_err(sqlite_error)?;
@@ -989,17 +996,17 @@ fn insert_message(conn: &mut Connection, message: &ChatMessage) -> Result<bool, 
     Ok(inserted)
 }
 
-fn set_message_status(
-    conn: &Connection,
-    id: MessageId,
-    status: MessageStatus,
-) -> Result<(), StorageError> {
-    conn.execute(
-        "UPDATE messages SET status = ?2 WHERE id = ?1",
-        params![id.to_string(), status.as_str()],
-    )
-    .map_err(sqlite_error)?;
-    Ok(())
+/// The peer a stored message belongs to, or `None` when no such row exists.
+fn message_peer(conn: &Connection, id: MessageId) -> Result<Option<DeviceId>, StorageError> {
+    let raw: Option<String> = conn
+        .query_row(
+            "SELECT peer_id FROM messages WHERE id = ?1",
+            params![id.to_string()],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(sqlite_error)?;
+    raw.map(|raw| parse_device(&raw)).transpose()
 }
 
 fn mark_message_delivered(
@@ -1015,31 +1022,53 @@ fn mark_message_delivered(
     Ok(())
 }
 
-/// The oldest message still waiting for its peer. `ORDER BY sent_at_ms, id` is the conversation
-/// order the interface draws, so the outbox is drained in exactly the order the messages appear.
-fn next_outbox_message(
+/// The oldest waiting messages, at most `limit`, in the order they must go out.
+///
+/// `ORDER BY sent_at_ms, id` is the conversation order the interface draws, so the outbox is
+/// drained in exactly the order the messages appear.
+fn next_outbox_batch(
     conn: &Connection,
     files: &Path,
     device_id: DeviceId,
-) -> Result<Option<ChatMessage>, StorageError> {
-    let row = conn
-        .query_row(
-            &format!(
-                "SELECT {MESSAGE_COLUMNS} FROM messages \
-                 WHERE peer_id = ?1 AND outgoing = 1 AND status = 'queued' \
-                 ORDER BY sent_at_ms, id LIMIT 1"
-            ),
-            params![device_id.to_string()],
-            MessageRow::read,
-        )
-        .optional()
+    limit: u32,
+) -> Result<Vec<ChatMessage>, StorageError> {
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT {MESSAGE_COLUMNS} FROM messages \
+             WHERE peer_id = ?1 AND outgoing = 1 AND status = 'queued' \
+             ORDER BY sent_at_ms, id LIMIT ?2"
+        ))
         .map_err(sqlite_error)?;
-    let Some(row) = row else {
-        return Ok(None);
-    };
-    let mut message = row.into_message()?;
-    load_attachments(conn, files, std::slice::from_mut(&mut message))?;
-    Ok(Some(message))
+    let rows = stmt
+        .query_map(params![device_id.to_string(), limit], MessageRow::read)
+        .map_err(sqlite_error)?;
+    let mut messages = rows
+        .collect::<rusqlite::Result<Vec<MessageRow>>>()
+        .map_err(sqlite_error)?
+        .into_iter()
+        .map(MessageRow::into_message)
+        .collect::<Result<Vec<ChatMessage>, StorageError>>()?;
+    load_attachments(conn, files, &mut messages)?;
+    Ok(messages)
+}
+
+/// Marks messages as on their way in one transaction.
+fn mark_messages_sending(conn: &mut Connection, ids: &[MessageId]) -> Result<(), StorageError> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let tx = conn.transaction().map_err(sqlite_error)?;
+    {
+        let mut stmt = tx
+            .prepare("UPDATE messages SET status = 'sending' WHERE id = ?1")
+            .map_err(sqlite_error)?;
+        for id in ids {
+            stmt.execute(params![id.to_string()])
+                .map_err(sqlite_error)?;
+        }
+    }
+    tx.commit().map_err(sqlite_error)?;
+    Ok(())
 }
 
 /// Outgoing messages with an attachment that is not finished, oldest first.
@@ -1363,13 +1392,8 @@ impl Store for SqliteStore {
         .await
     }
 
-    async fn set_message_status(
-        &self,
-        id: MessageId,
-        status: MessageStatus,
-    ) -> Result<(), StorageError> {
-        self.call(|reply| Request::SetMessageStatus { id, status, reply })
-            .await
+    async fn message_peer(&self, id: MessageId) -> Result<Option<DeviceId>, StorageError> {
+        self.call(|reply| Request::MessagePeer { id, reply }).await
     }
 
     async fn mark_message_delivered(
@@ -1385,11 +1409,21 @@ impl Store for SqliteStore {
         .await
     }
 
-    async fn next_outbox_message(
+    async fn next_outbox_batch(
         &self,
         device_id: DeviceId,
-    ) -> Result<Option<ChatMessage>, StorageError> {
-        self.call(|reply| Request::NextOutboxMessage { device_id, reply })
+        limit: u32,
+    ) -> Result<Vec<ChatMessage>, StorageError> {
+        self.call(|reply| Request::NextOutboxBatch {
+            device_id,
+            limit,
+            reply,
+        })
+        .await
+    }
+
+    async fn mark_messages_sending(&self, ids: Vec<MessageId>) -> Result<(), StorageError> {
+        self.call(|reply| Request::MarkMessagesSending { ids, reply })
             .await
     }
 
@@ -1613,6 +1647,15 @@ mod tests {
         assert_eq!(stored.profile.avatar_seed, renamed.avatar_seed);
         assert_eq!(stored.last_address.as_deref(), Some("10.0.0.2:2"));
         assert!(!stored.forgotten);
+
+        // A rename or a discovery event carries no address; the remembered one must survive.
+        let renamed_again = profile(1, "Alice Again");
+        let stored = store
+            .upsert_peer_seen(&renamed_again, None, None)
+            .await
+            .unwrap();
+        assert_eq!(stored.last_address.as_deref(), Some("10.0.0.2:2"));
+        assert_eq!(stored.last_seen_ms, Some(2_000));
     }
 
     #[tokio::test]
@@ -1781,15 +1824,15 @@ mod tests {
             .unwrap();
 
         // Oldest first, regardless of the order the rows were written in.
-        let next = store
-            .next_outbox_message(peer.device_id)
-            .await
-            .unwrap()
-            .expect("a queued message");
-        assert_eq!(next.id, delivered.id, "the oldest row is drained first");
+        let batch = store.next_outbox_batch(peer.device_id, 10).await.unwrap();
+        assert_eq!(
+            batch.iter().map(|m| m.id).collect::<Vec<_>>(),
+            vec![delivered.id, first.id, second.id],
+            "queued rows come back oldest first"
+        );
 
         store
-            .set_message_status(delivered.id, MessageStatus::Sending)
+            .mark_messages_sending(vec![delivered.id])
             .await
             .unwrap();
         store
@@ -1798,17 +1841,16 @@ mod tests {
             .unwrap();
 
         let next = store
-            .next_outbox_message(peer.device_id)
+            .next_outbox_batch(peer.device_id, 10)
             .await
             .unwrap()
+            .into_iter()
+            .next()
             .expect("the next queued message");
         assert_eq!(next.id, first.id, "a delivered row leaves the outbox");
 
         // A connection that dies mid-send puts the in-flight row back, and only that row.
-        store
-            .set_message_status(first.id, MessageStatus::Sending)
-            .await
-            .unwrap();
+        store.mark_messages_sending(vec![first.id]).await.unwrap();
         assert_eq!(
             store
                 .requeue_pending_messages(peer.device_id)
@@ -1818,9 +1860,10 @@ mod tests {
         );
         assert_eq!(
             store
-                .next_outbox_message(peer.device_id)
+                .next_outbox_batch(peer.device_id, 10)
                 .await
                 .unwrap()
+                .first()
                 .map(|m| m.id),
             Some(first.id)
         );
@@ -1889,7 +1932,12 @@ mod tests {
             assert_eq!(status(row.0), MessageStatus::Queued, "{}", row.1);
         }
         assert_eq!(
-            store.next_outbox_message(peer).await.unwrap().map(|m| m.id),
+            store
+                .next_outbox_batch(peer, 1)
+                .await
+                .unwrap()
+                .first()
+                .map(|m| m.id),
             Some(rows[0].0),
             "the oldest unfinished row is the first to be retried"
         );
@@ -2464,9 +2512,11 @@ mod tests {
         );
 
         let next = store
-            .next_outbox_message(peer.device_id)
+            .next_outbox_batch(peer.device_id, 10)
             .await
             .unwrap()
+            .into_iter()
+            .next()
             .expect("a queued message");
         assert_eq!(next.id, waiting.id);
         assert_eq!(
@@ -2477,10 +2527,10 @@ mod tests {
 
         assert!(
             store
-                .next_outbox_message(device(98))
+                .next_outbox_batch(device(98), 10)
                 .await
                 .unwrap()
-                .is_none(),
+                .is_empty(),
             "a conversation with nothing queued has no outbox message"
         );
     }

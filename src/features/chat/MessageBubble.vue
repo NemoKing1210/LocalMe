@@ -111,15 +111,13 @@ function onContextMenu(event: MouseEvent): void {
 }
 
 async function copy(text: string): Promise<void> {
-  try {
-    // The webview's own clipboard — the one the Ctrl+C shortcut writes to — so the two paths
-    // cannot disagree about what "copied" means.
-    await navigator.clipboard.writeText(text);
-    ui.notify('chat.copied');
-  } catch (error) {
-    console.error('[localme] the text could not be copied', error);
-    ui.fail('error.internal');
-  }
+  // The webview's own clipboard — the one the Ctrl+C shortcut writes to — so the two paths
+  // cannot disagree about what "copied" means.
+  const copied = await ui.attempt(
+    () => navigator.clipboard.writeText(text),
+    'the text could not be copied',
+  );
+  if (copied.ok) ui.notify('chat.copied');
 }
 
 function onMenuSelect(id: string): void {

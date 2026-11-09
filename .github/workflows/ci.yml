@@ -21,7 +21,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Setup
         uses: ./.github/actions/setup
@@ -34,17 +34,13 @@ jobs:
       - name: Format
         run: npm run format:check
 
-      - name: Types
-        run: npm run typecheck
-
-      - name: Unit tests
-        run: npm run test
-
       # The threshold in `vite.config.ts` is what makes the number a gate rather than a report;
-      # the lcov file the step leaves behind is what a reviewer reads.
+      # the lcov file the step leaves behind is what a reviewer reads. This is the only run of
+      # the suite: coverage runs the same tests.
       - name: Unit tests with coverage
         run: npm run test:coverage
 
+      # `npm run build` type-checks first, which is why there is no separate type-check step.
       - name: Build
         run: npm run build
 
@@ -61,7 +57,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Setup
         uses: ./.github/actions/setup
@@ -101,7 +97,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Setup
         uses: ./.github/actions/setup
@@ -110,7 +106,10 @@ jobs:
           frontend: 'false'
 
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov
+        # Pinned to a commit, so the tool the tag used to imply is named explicitly.
+        uses: taiki-e/install-action@72f835688cb6c15903b796f704b01e652a2b8835 # cargo-llvm-cov
+        with:
+          tool: cargo-llvm-cov
 
       - name: Install llvm-tools
         run: rustup component add llvm-tools-preview
@@ -128,7 +127,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Setup
         uses: ./.github/actions/setup

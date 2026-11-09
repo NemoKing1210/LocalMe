@@ -19,9 +19,20 @@ pub const MAX_FRAME_BYTES: usize = 64 * 1024;
 
 pub const LENGTH_PREFIX_BYTES: usize = 4;
 
+/// Bytes a reader hands to the decoder in one call.
+///
+/// The decoder's buffer bound allows one complete frame plus one whole read, because a single
+/// read can finish a maximum-size frame and still carry the start of the next one.
+pub const READ_CHUNK_BYTES: usize = 8 * 1024;
+
 pub const MAX_NICKNAME_CHARS: usize = 32;
 
-pub const MAX_AVATAR_SEED_CHARS: usize = 64;
+/// Bound on an avatar seed, whether received from the network or produced locally.
+///
+/// `AvatarSeed::derive` joins a 36-character device id, a `:`, and a nickname of up to
+/// [`MAX_NICKNAME_CHARS`], so the limit must clear that whole join or a long-named device
+/// derives a seed it cannot itself parse.
+pub const MAX_AVATAR_SEED_CHARS: usize = 36 + 1 + MAX_NICKNAME_CHARS;
 
 pub const MAX_BODY_CHARS: usize = 8_000;
 
@@ -38,6 +49,20 @@ pub const MAX_ATTACHMENT_BYTES: u64 = 512 * 1024 * 1024;
 /// Attachments in one message. A frame already bounds the count; this bounds the *work* a single
 /// message can ask for.
 pub const MAX_ATTACHMENTS_PER_MESSAGE: usize = 10;
+
+/// Devices a discovery cache will hold before it stops taking new ones.
+///
+/// Every one of these caches is keyed by attacker-controlled input (a device id from a UDP
+/// datagram, an mDNS service name), so without a cap a single host on the network could grow
+/// them without bound.
+pub const MAX_DISCOVERY_PEERS: usize = 256;
+
+/// Announce datagrams the beacon decodes per second before it starts dropping the rest.
+pub const MAX_BEACON_ANNOUNCES_PER_SECOND: u32 = 128;
+
+/// Files one peer may have arriving at the same time. Each holds an open part file, so an
+/// unbounded map is a file-descriptor and disk-space exhaustion path from a single peer.
+pub const MAX_INCOMING_TRANSFERS_PER_PEER: usize = 16;
 
 /// Characters kept of a file name after it has been sanitised for the local filesystem.
 pub const MAX_FILE_NAME_CHARS: usize = 128;
@@ -123,6 +148,12 @@ pub const OUTBOX_BURST: f64 = 12.0;
 
 /// Sustained rate of the outbox drain; see [`OUTBOX_BURST`].
 pub const OUTBOX_RATE_PER_SECOND: f64 = 6.0;
+
+/// Messages one outbox read returns at a time.
+///
+/// Larger than a burst on purpose: the token bucket stays the thing that paces the drain, and
+/// the batch only decides how many rows one database round-trip can carry.
+pub const OUTBOX_BATCH: u32 = 16;
 
 pub const MAX_PEERS: usize = 128;
 

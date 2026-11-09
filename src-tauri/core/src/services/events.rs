@@ -2,9 +2,8 @@
 
 use crate::domain::attachment::Attachment;
 use crate::domain::clock::UnixMillis;
-use crate::domain::ids::{AvatarSeed, DeviceId, MessageId};
+use crate::domain::ids::{DeviceId, MessageId};
 use crate::domain::message::{ChatMessage, MessageStatus};
-use crate::domain::nickname::Nickname;
 use crate::domain::peer::PeerView;
 
 /// Serialised untagged with camelCase fields: this shape is the interface's API, matched by
@@ -40,10 +39,6 @@ pub enum CoreEvent {
         peer: DeviceId,
         attachment: Attachment,
     },
-    OwnProfile {
-        nickname: Nickname,
-        avatar_seed: AvatarSeed,
-    },
     Notice {
         level: NoticeLevel,
         message: String,
@@ -67,7 +62,6 @@ impl CoreEvent {
             Self::Message { .. } => "message",
             Self::MessageStatus { .. } => "message_status",
             Self::Attachment { .. } => "attachment",
-            Self::OwnProfile { .. } => "own_profile",
             Self::Notice { .. } => "notice",
             Self::Stopped => "stopped",
         }
@@ -78,7 +72,9 @@ impl CoreEvent {
 mod tests {
     use super::*;
     use crate::domain::clock::UnixMillis;
+    use crate::domain::ids::AvatarSeed;
     use crate::domain::message::{Direction, MessageBody};
+    use crate::domain::nickname::Nickname;
     use serde_json::json;
 
     fn peer_view(device_id: DeviceId) -> PeerView {
@@ -152,15 +148,6 @@ mod tests {
         });
         assert_eq!(name, "notice");
         assert_eq!(payload, json!({ "level": "warning", "message": "careful" }));
-
-        let nickname = Nickname::parse("Nemo").expect("valid nickname");
-        let seed = AvatarSeed::parse("seed").expect("valid seed");
-        let (name, payload) = emitted(&CoreEvent::OwnProfile {
-            nickname,
-            avatar_seed: seed,
-        });
-        assert_eq!(name, "own_profile");
-        assert_eq!(payload, json!({ "nickname": "Nemo", "avatarSeed": "seed" }));
     }
 
     #[test]

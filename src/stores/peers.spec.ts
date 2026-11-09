@@ -62,17 +62,6 @@ describe('the peer store', () => {
     expect(peers.selected).toBeNull();
   });
 
-  it('sums the unread counter over every peer', () => {
-    const peers = usePeerStore();
-    peers.replace([
-      makePeer({ deviceId: 'a', unread: 2 }),
-      makePeer({ deviceId: 'b', unread: 5 }),
-      makePeer({ deviceId: 'c', unread: 0 }),
-    ]);
-
-    expect(peers.unreadTotal).toBe(7);
-  });
-
   it('finds a peer by identifier', () => {
     const peers = usePeerStore();
     peers.replace([makePeer({ deviceId: 'a', nickname: 'Alice' })]);

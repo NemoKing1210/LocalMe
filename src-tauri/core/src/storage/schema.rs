@@ -7,7 +7,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use super::sqlite_error;
 use crate::error::StorageError;
 
-pub(super) const SCHEMA_VERSION: u32 = 3;
+pub(super) const SCHEMA_VERSION: u32 = 4;
 
 pub(super) const MIGRATION_1: &str = "
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -96,6 +96,15 @@ CREATE INDEX attachments_outbox  ON attachments(peer_id, message_id)
   WHERE outgoing = 1 AND state IN ('queued', 'sending');
 ";
 
+/// An index on `attachments(peer_id)`.
+///
+/// Forgetting a peer with its history deletes by `peer_id` alone, which neither of the existing
+/// indexes serves: `attachments_outbox` is partial (outgoing, queued or sending) and
+/// `attachments_message` is keyed by the message.
+pub(super) const MIGRATION_4: &str = "
+CREATE INDEX attachments_peer ON attachments(peer_id);
+";
+
 pub(super) fn migrate(conn: &mut Connection) -> Result<(), StorageError> {
     let mut version = current_version(conn)?;
     while version < SCHEMA_VERSION {
@@ -145,6 +154,7 @@ fn apply_migration(conn: &mut Connection, version: u32) -> Result<(), StorageErr
         1 => MIGRATION_1,
         2 => MIGRATION_2,
         3 => MIGRATION_3,
+        4 => MIGRATION_4,
         other => {
             return Err(StorageError::Migration {
                 version: other,
@@ -256,7 +266,7 @@ mod tests {
         assert_eq!(current_version(&conn).unwrap(), 0);
         migrate(&mut conn).unwrap();
         assert_eq!(current_version(&conn).unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 3, "the build under test");
+        assert_eq!(SCHEMA_VERSION, 4, "the build under test");
         assert!(table_exists(&conn, "attachments"));
     }
 
@@ -300,6 +310,20 @@ mod tests {
             "Ann",
             "peers are untouched by a repeated migration"
         );
+    }
+
+    #[test]
+    fn migration_four_adds_the_peer_index_on_attachments() {
+        let (_dir, mut conn) = connection();
+        migrate(&mut conn).unwrap();
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'attachments_peer'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
     }
 
     #[test]

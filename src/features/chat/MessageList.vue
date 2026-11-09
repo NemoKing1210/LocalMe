@@ -5,7 +5,7 @@ import { useVirtualizer } from '@tanstack/vue-virtual';
 import { useNow } from '@/composables/useNow';
 import { dayKey, useI18n } from '@/i18n';
 import type { Message, Peer } from '@/ipc';
-import { useChatStore } from '@/stores/chat';
+import { compareMessages, useChatStore } from '@/stores/chat';
 import MdButton from '@/ui/MdButton.vue';
 import MdIconButton from '@/ui/MdIconButton.vue';
 import MessageBubble from './MessageBubble.vue';
@@ -47,19 +47,12 @@ const scrollElement = ref<HTMLDivElement | null>(null);
 const scrollTop = ref(0);
 const following = ref(true);
 
-// Timestamp then id: the total order the conversation is stored in.
-function byTime(left: Message, right: Message): number {
-  return left.sentAt === right.sentAt
-    ? left.id.localeCompare(right.id)
-    : left.sentAt - right.sentAt;
-}
-
 const layout = computed<{ readonly rows: readonly LogRow[]; readonly days: readonly LogDay[] }>(
   () => {
     const rows: LogRow[] = [];
     const days: LogDay[] = [];
     let current: string | null = null;
-    for (const message of [...chat.messages].sort(byTime)) {
+    for (const message of [...chat.messages].sort(compareMessages)) {
       const key = dayKey(message.sentAt);
       const startsDay = key !== current;
       if (startsDay) {

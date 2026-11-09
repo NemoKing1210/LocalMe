@@ -219,14 +219,12 @@ export interface CoreEventMap {
     readonly deliveredAt: UnixMillis | null;
   };
   attachment: { readonly peer: DeviceId; readonly attachment: Attachment };
-  own_profile: { readonly nickname: string; readonly avatarSeed: string };
   notice: { readonly level: NoticeLevel; readonly message: string };
   stopped: null;
   settings_changed: Settings;
   state_snapshot: { readonly peers: readonly Peer[]; readonly settings: Settings };
   open_chat: DeviceId;
   open_settings: null;
-  onboarding_complete: null;
 }
 
 export type CoreEventName = keyof CoreEventMap;

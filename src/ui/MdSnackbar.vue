@@ -3,6 +3,11 @@ defineProps<{
   open: boolean;
   text: string;
   tone?: 'neutral' | 'error';
+  /**
+   * The dismiss label. A required prop rather than a default, because a hardcoded one would be
+   * the only untranslated string in the interface: this component draws, the caller translates.
+   */
+  action: string;
 }>();
 
 const emit = defineEmits<{ dismiss: [] }>();
@@ -23,7 +28,7 @@ const emit = defineEmits<{ dismiss: [] }>();
         type="button"
         @click="emit('dismiss')"
       >
-        <slot name="action">OK</slot>
+        <slot name="action">{{ action }}</slot>
       </button>
     </div>
   </Transition>

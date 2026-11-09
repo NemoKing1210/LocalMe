@@ -116,6 +116,9 @@ pub struct AppState {
     /// Mirrored for the tray and the window title.
     pub unread: AtomicU32,
     pub labels: RwLock<UiLabels>,
+    /// Whether the tray was installed. A window that starts hidden with no tray would be
+    /// unreachable, so the ready gate only honours "start minimized" when this is set.
+    pub tray_available: AtomicBool,
 }
 
 impl AppState {
@@ -135,6 +138,7 @@ impl AppState {
             window_focused: AtomicBool::new(false),
             unread: AtomicU32::new(0),
             labels: RwLock::new(UiLabels::default()),
+            tray_available: AtomicBool::new(false),
         }
     }
 

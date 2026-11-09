@@ -4,6 +4,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { RouterView } from 'vue-router';
 
 import { connectCoreEvents } from '@/app/connect';
+import { reportError } from '@/app/errors';
 import { signalReady } from '@/app/ready';
 import { useI18n } from '@/i18n';
 import * as ipc from '@/ipc';
@@ -40,7 +41,13 @@ onMounted(async () => {
     }
     disconnect = await connectCoreEvents();
   } catch (error) {
-    console.error('[localme] the host did not answer the bootstrap command', error);
+    // Reported by hand: the global handlers never see this one, and a bootstrap that failed is
+    // the first thing to look at in the log when the interface shows an error screen.
+    reportError({
+      scope: 'startup',
+      message: 'the host did not answer the bootstrap command',
+      cause: error,
+    });
     failure.value = true;
   } finally {
     loading.value = false;
@@ -117,6 +124,7 @@ watch(
         :open="ui.notice !== null"
         :text="ui.noticeText"
         :tone="ui.notice?.tone ?? 'neutral'"
+        :action="i18n.t('common.dismiss')"
         @dismiss="ui.dismiss"
       />
     </div>

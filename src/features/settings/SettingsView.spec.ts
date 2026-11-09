@@ -354,12 +354,12 @@ describe('the settings view', () => {
 
     it('saves a preset accent and marks it active', async () => {
       const { wrapper } = await mountSettings();
-      await wrapper.get('button[aria-label="teal"]').trigger('click');
+      await wrapper.get('button[aria-label="Teal"]').trigger('click');
       await flushPromises();
 
       expect(savedSettings().appearance).toEqual({ theme: 'system', accent: '#006A6A' });
-      expect(wrapper.get('button[aria-label="teal"]').attributes('aria-pressed')).toBe('true');
-      expect(wrapper.get('button[aria-label="baseline"]').attributes('aria-pressed')).toBe('false');
+      expect(wrapper.get('button[aria-label="Teal"]').attributes('aria-pressed')).toBe('true');
+      expect(wrapper.get('button[aria-label="Baseline"]').attributes('aria-pressed')).toBe('false');
     });
 
     it('saves a custom colour and marks it as custom', async () => {

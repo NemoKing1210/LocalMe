@@ -2,22 +2,13 @@ import type { MessageCatalog } from './types';
 
 export const zh: MessageCatalog = {
   'app.name': 'LocalMe',
-  'app.tagline': '局域网内的消息',
 
   'common.cancel': '取消',
-  'common.confirm': '确认',
-  'common.close': '关闭',
-  'common.save': '保存',
   'common.delete': '删除',
-  'common.search': '搜索',
   'common.retry': '重试',
   'common.back': '返回',
   'common.loading': '加载中…',
-  'common.you': '你',
   'common.dismiss': '忽略',
-  'common.more': '更多',
-  'common.options': '选项',
-  'common.clear': '清除',
 
   'onboarding.title': '欢迎使用 LocalMe',
   'onboarding.subtitle': 'LocalMe 会在你的网络中查找其他运行它的电脑。无需账号，无需服务器。',
@@ -37,20 +28,14 @@ export const zh: MessageCatalog = {
   'users.clearSearch': '清除搜索',
   'users.searchEmpty': '没有与“{query}”匹配的人。',
   'users.online': '在线',
-  'users.offline': '离线',
   'users.lastSeen': '最后在线：{relative}',
   'users.neverSeen': '从未在线',
-  'users.unread': '{count} 条未读消息',
-  'users.unread.one': '{count} 条未读消息',
   'users.forget': '忘记…',
   'users.muted': '通知已静音',
-  'users.openChatWith': '与 {name} 的对话',
   'users.actionsFor': '{name} 的操作',
   'users.mute': '静音通知',
   'users.unmute': '取消静音',
-  'users.you': '你（{name}）',
   'users.youPreview': '你：{body}',
-  'users.count': '联系人：{count}',
 
   'forget.title': '忘记 {name}？',
   'forget.body': '对方将从你的列表中消失。如果其电脑再次出现在网络上，将作为新联系人添加。',
@@ -63,7 +48,6 @@ export const zh: MessageCatalog = {
   'chat.composerOfflineHint': '{name} 当前离线。对方回来后消息会自动发送。',
   'chat.send': '发送',
   'chat.tooLong': '该消息超过了 {max} 个字符。',
-  'chat.composerHint': 'Enter 发送，Shift+Enter 换行',
   'chat.statusQueued': '等待发送',
   'chat.statusSending': '发送中…',
   'chat.statusDelivered': '已送达',
@@ -119,6 +103,15 @@ export const zh: MessageCatalog = {
   'settings.themeDark': '深色',
   'settings.accent': '强调色',
   'settings.accentHelp': '会更改整个配色，而不只是一个按钮。',
+  'settings.accentName.baseline': '默认',
+  'settings.accentName.indigo': '靛蓝',
+  'settings.accentName.teal': '青色',
+  'settings.accentName.green': '绿色',
+  'settings.accentName.amber': '琥珀色',
+  'settings.accentName.orange': '橙色',
+  'settings.accentName.red': '红色',
+  'settings.accentName.pink': '粉色',
+  'settings.accentName.slate': '石板灰',
 
   'settings.language': '界面语言',
 
@@ -130,6 +123,7 @@ export const zh: MessageCatalog = {
 
   'settings.autostart': '登录时启动 LocalMe',
   'settings.startMinimized': '启动时最小化到托盘',
+  'settings.startMinimizedHelp': '随系统启动时保持在托盘，而不是打开窗口。',
   'settings.closeToTray': '关闭窗口后继续在托盘中运行',
   'settings.closeToTrayHelp': '关闭此项后，关闭窗口会退出 LocalMe，你将不再收到消息。',
 
@@ -167,8 +161,6 @@ export const zh: MessageCatalog = {
   'settings.aboutArchitecture': '局域网通讯工具',
   'settings.aboutLicense': '基于 MIT 许可证授权。',
   'settings.aboutDiagnostics': '诊断',
-  'settings.devicesKnown': '已知',
-  'settings.devicesForgotten': '已忘记',
   'settings.saveFailed': '无法保存该设置。',
   'settings.historyCleared': '已删除 {count} 条消息。',
   'settings.notificationsPerPeerHelp': '可以在列表的 ⋮ 菜单中单独静音某位联系人。',
@@ -194,8 +186,6 @@ export const zh: MessageCatalog = {
   'tray.openLogs': '打开日志文件夹',
 
   'notification.newMessage': '新消息',
-  'notification.newMessageCount': '{count} 条新消息',
-  'notification.newMessageCount.one': '{count} 条新消息',
 
   'error.storage': 'LocalMe 无法读取自己的数据库。',
   'error.discovery': 'LocalMe 无法在此网络中查找其他设备。',

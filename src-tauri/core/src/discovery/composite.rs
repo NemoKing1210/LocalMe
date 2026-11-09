@@ -11,6 +11,7 @@ use tokio::task::JoinHandle;
 use crate::domain::ids::DeviceId;
 use crate::error::DiscoveryError;
 use crate::ports::discovery::{DiscoveredPeer, Discovery, DiscoveryEvent};
+use crate::protocol::limits::MAX_DISCOVERY_PEERS;
 
 /// Small on purpose: back pressure on a source beats unbounded memory.
 const FEED_CAPACITY: usize = 64;
@@ -145,6 +146,13 @@ impl Aggregator {
                     }
                 }
                 None => {
+                    if self.live.len() >= MAX_DISCOVERY_PEERS {
+                        tracing::debug!(
+                            %peer.device_id,
+                            "the discovery cache is full; ignoring a new peer"
+                        );
+                        return None;
+                    }
                     self.live.insert(
                         peer.device_id,
                         Tracked {
@@ -216,6 +224,24 @@ mod tests {
             None,
             "a repeat from a known source is not news"
         );
+    }
+
+    #[test]
+    fn a_flood_of_new_peers_does_not_grow_the_cache() {
+        let mut aggregator = Aggregator::default();
+        let mut reported = 0;
+        for _ in 0..(MAX_DISCOVERY_PEERS * 2) {
+            let id = DeviceId::generate();
+            let accepted = aggregator.apply(
+                0,
+                DiscoveryEvent::Found(announced(id, &["192.168.1.9:47820"])),
+            );
+            if accepted.is_none() {
+                reported += 1;
+            }
+        }
+        assert!(aggregator.live.len() <= MAX_DISCOVERY_PEERS);
+        assert!(reported > 0, "the cap must actually reject some peers");
     }
 
     #[test]

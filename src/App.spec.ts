@@ -10,6 +10,7 @@ vi.mock('@/ipc', async (importOriginal) => ({
   bootstrap: vi.fn(),
   setUiLabels: vi.fn(),
   setWindowAccent: vi.fn(),
+  logFrontend: vi.fn(),
 }));
 vi.mock('@/app/connect', () => ({ connectCoreEvents: vi.fn() }));
 vi.mock('@/app/ready', () => ({ signalReady: vi.fn() }));
@@ -100,6 +101,7 @@ describe('App', () => {
   it('shows the failure state when the host does not answer', async () => {
     const failure = new Error('no host');
     vi.mocked(ipc.bootstrap).mockRejectedValue(failure);
+    vi.mocked(ipc.logFrontend).mockResolvedValue(undefined);
     const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     const wrapper = await mountApp(freshPinia());
@@ -111,6 +113,13 @@ describe('App', () => {
     expect(logged).toHaveBeenCalledWith(
       expect.stringContaining('the host did not answer the bootstrap command'),
       failure,
+    );
+    // The same failure in the host's own log: this path never reaches the global handlers, and
+    // an error screen is exactly what a user reports without any detail.
+    expect(ipc.logFrontend).toHaveBeenCalledWith(
+      'error',
+      expect.stringContaining('startup: the host did not answer the bootstrap command'),
+      expect.any(String),
     );
   });
 

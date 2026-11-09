@@ -86,10 +86,7 @@ fn handle<R: Runtime>(app: &AppHandle<R>, state: &Arc<AppState>, event: CoreEven
             NoticeLevel::Error => tracing::error!(notice = %message, "core notice"),
             NoticeLevel::Info => tracing::info!(notice = %message, "core notice"),
         },
-        CoreEvent::MessageStatus { .. }
-        | CoreEvent::Attachment { .. }
-        | CoreEvent::OwnProfile { .. }
-        | CoreEvent::Stopped => {}
+        CoreEvent::MessageStatus { .. } | CoreEvent::Attachment { .. } | CoreEvent::Stopped => {}
     }
 
     emit_core(app, state, &event);

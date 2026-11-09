@@ -54,11 +54,17 @@ impl AttachmentKind {
         let extension = name
             .as_str()
             .rsplit_once('.')
-            .map(|(_, ext)| ext.to_ascii_lowercase())
+            .map(|(_, ext)| ext)
             .unwrap_or_default();
-        match extension.as_str() {
-            "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "avif" => Self::Image,
-            _ => Self::File,
+        // `eq_ignore_ascii_case` keeps this allocation-free: a kind is derived for every
+        // attachment on every row read.
+        if ["png", "jpg", "jpeg", "gif", "webp", "bmp", "avif"]
+            .iter()
+            .any(|image| extension.eq_ignore_ascii_case(image))
+        {
+            Self::Image
+        } else {
+            Self::File
         }
     }
 }

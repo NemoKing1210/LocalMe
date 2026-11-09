@@ -102,12 +102,8 @@ function add(described: readonly FilePick[]): void {
 }
 
 async function pick(): Promise<void> {
-  try {
-    add(await ipc.pickFiles());
-  } catch (error) {
-    console.error('[localme] the file picker failed', error);
-    ui.fail('error.internal');
-  }
+  const files = await ui.attempt(() => ipc.pickFiles(), 'the file picker failed');
+  if (files.ok) add(files.value);
 }
 
 function remove(path: string): void {
@@ -149,12 +145,11 @@ function submit(): void {
 /** Describes dropped paths and adds them, reporting a failure like every other file action. */
 async function absorb(paths: readonly string[]): Promise<void> {
   if (paths.length === 0) return;
-  try {
-    add(await ipc.inspectFiles(paths));
-  } catch (error) {
-    console.error('[localme] the dropped files could not be read', error);
-    ui.fail('error.internal');
-  }
+  const files = await ui.attempt(
+    () => ipc.inspectFiles(paths),
+    'the dropped files could not be read',
+  );
+  if (files.ok) add(files.value);
 }
 
 onMounted(async () => {
@@ -279,14 +274,11 @@ onBeforeUnmount(() => {
       />
     </div>
 
-    <div class="composer__footer md-typescale-label-small">
-      <span class="composer__hint">{{ i18n.t('chat.composerHint') }}</span>
+    <div v-if="tooLong || showCounter" class="composer__footer md-typescale-label-small">
       <span v-if="tooLong" class="composer__error">
         {{ i18n.t('chat.tooLong', { max: MAX_BODY_CHARS }) }}
       </span>
-      <span v-else-if="showCounter" class="composer__counter">
-        {{ draft.length }} / {{ MAX_BODY_CHARS }}
-      </span>
+      <span v-else class="composer__counter">{{ draft.length }} / {{ MAX_BODY_CHARS }}</span>
     </div>
   </footer>
 </template>
@@ -437,12 +429,11 @@ onBeforeUnmount(() => {
   display: flex;
   gap: 12px;
   align-items: baseline;
-  justify-content: space-between;
+  justify-content: flex-end;
   min-height: 16px;
   padding-inline: 4px;
 }
 
-.composer__hint,
 .composer__counter {
   color: var(--md-sys-color-on-surface-variant);
 }

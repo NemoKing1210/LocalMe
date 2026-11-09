@@ -60,7 +60,7 @@ const BELL: Shape[] = [
   { kind: 'path', d: 'M10 18.8a2.2 2.2 0 0 0 4 0' },
 ];
 
-export const ICONS: Record<string, readonly Shape[]> = {
+export const ICONS = {
   search: [
     { kind: 'circle', cx: 11, cy: 11, r: 6.6 },
     { kind: 'line', x1: 15.9, y1: 15.9, x2: 20.5, y2: 20.5 },
@@ -77,9 +77,6 @@ export const ICONS: Record<string, readonly Shape[]> = {
     { kind: 'line', x1: 20, y1: 12, x2: 4.5, y2: 12 },
     { kind: 'polyline', points: '11.5,19 4.5,12 11.5,5' },
   ],
-  forward: [{ kind: 'polyline', points: '9.5,5 16.5,12 9.5,19' }],
-  down: [{ kind: 'polyline', points: '5,9.5 12,16.5 19,9.5' }],
-  check: [{ kind: 'polyline', points: '4.5,12.5 9.5,17.5 19.5,6' }],
   'check-all': [
     { kind: 'polyline', points: '1.5,12.5 6.5,17.5 15,6' },
     { kind: 'polyline', points: '9.5,12.5 14.5,17.5 23,6' },
@@ -89,10 +86,6 @@ export const ICONS: Record<string, readonly Shape[]> = {
     { kind: 'path', d: 'M2.6 19.8a6.4 6.4 0 0 1 12.8 0' },
     { kind: 'path', d: 'M16 5.2a3.4 3.4 0 0 1 0 5.9' },
     { kind: 'path', d: 'M17.6 19.8a6.4 6.4 0 0 0-1.7-4.3' },
-  ],
-  person: [
-    { kind: 'circle', cx: 12, cy: 8, r: 3.8 },
-    { kind: 'path', d: 'M4.5 20.2a7.5 7.5 0 0 1 15 0' },
   ],
   'more-vertical': [
     { kind: 'dot', cx: 12, cy: 5.2, r: 1.7 },
@@ -146,34 +139,12 @@ export const ICONS: Record<string, readonly Shape[]> = {
     },
   ],
   tune: tuneRows(),
-  palette: [
-    { kind: 'circle', cx: 12, cy: 12, r: 9 },
-    { kind: 'dot', cx: 8.2, cy: 9.2, r: 1.35 },
-    { kind: 'dot', cx: 12, cy: 7.4, r: 1.35 },
-    { kind: 'dot', cx: 15.8, cy: 9.2, r: 1.35 },
-    { kind: 'dot', cx: 9.4, cy: 15.4, r: 1.35 },
-  ],
-  globe: [
-    { kind: 'circle', cx: 12, cy: 12, r: 9 },
-    { kind: 'path', d: 'M12 3a13 13 0 0 1 0 18 13 13 0 0 1 0-18z' },
-    { kind: 'line', x1: 3.4, y1: 9.2, x2: 20.6, y2: 9.2 },
-    { kind: 'line', x1: 3.4, y1: 14.8, x2: 20.6, y2: 14.8 },
-  ],
-  volume: [
-    { kind: 'path', d: 'M4 9.2v5.6h3.4L12 19V5L7.4 9.2z' },
-    { kind: 'path', d: 'M15.4 9.4a3.8 3.8 0 0 1 0 5.2' },
-    { kind: 'path', d: 'M18.2 6.8a7.4 7.4 0 0 1 0 10.4' },
-  ],
   sun: [{ kind: 'circle', cx: 12, cy: 12, r: 4.1 }, ...sunRays()],
   moon: [{ kind: 'path', d: 'M20.4 14.6A8.6 8.6 0 0 1 9.4 3.6a8.6 8.6 0 1 0 11 11z' }],
   display: [
     { kind: 'rect', x: 2.8, y: 4.2, width: 18.4, height: 12.4, rx: 2 },
     { kind: 'line', x1: 9, y1: 20, x2: 15, y2: 20 },
     { kind: 'line', x1: 12, y1: 16.6, x2: 12, y2: 20 },
-  ],
-  power: [
-    { kind: 'path', d: 'M7.4 6.4a7.4 7.4 0 1 0 9.2 0' },
-    { kind: 'line', x1: 12, y1: 3, x2: 12, y2: 11.4 },
   ],
   window: [
     { kind: 'rect', x: 3, y: 4.5, width: 18, height: 15, rx: 2.2 },
@@ -184,11 +155,6 @@ export const ICONS: Record<string, readonly Shape[]> = {
     { kind: 'path', d: 'M19.6 12a7.6 7.6 0 0 1-12.9 5.4' },
     { kind: 'polyline', points: '17.1,2.6 17.4,6.9 13.1,7.2' },
     { kind: 'polyline', points: '6.9,21.4 6.6,17.1 10.9,16.8' },
-  ],
-  database: [
-    { kind: 'path', d: 'M4 6.4c0-1.4 3.6-2.6 8-2.6s8 1.2 8 2.6-3.6 2.6-8 2.6-8-1.2-8-2.6z' },
-    { kind: 'path', d: 'M4 6.4v11.2c0 1.4 3.6 2.6 8 2.6s8-1.2 8-2.6V6.4' },
-    { kind: 'path', d: 'M4 12c0 1.4 3.6 2.6 8 2.6s8-1.2 8-2.6' },
   ],
   'chevron-down': [{ kind: 'polyline', points: '6,9.5 12,15.5 18,9.5' }],
   folder: [
@@ -226,6 +192,6 @@ export const ICONS: Record<string, readonly Shape[]> = {
       d: 'M18.2 13.8v5a1.6 1.6 0 0 1-1.6 1.6H5.4a1.6 1.6 0 0 1-1.6-1.6V7.6A1.6 1.6 0 0 1 5.4 6h5',
     },
   ],
-};
+} as const satisfies Record<string, readonly Shape[]>;
 
 export type IconName = keyof typeof ICONS;

@@ -17,7 +17,7 @@ use crate::domain::ids::{AvatarSeed, DeviceId};
 use crate::domain::nickname::Nickname;
 use crate::error::DiscoveryError;
 use crate::ports::discovery::{DiscoveredPeer, Discovery, DiscoveryEvent};
-use crate::protocol::limits::{PROTOCOL_VERSION, SERVICE_TYPE};
+use crate::protocol::limits::{MAX_DISCOVERY_PEERS, PROTOCOL_VERSION, SERVICE_TYPE};
 
 use super::{OwnAnnouncement, ordered_addresses};
 
@@ -306,6 +306,15 @@ fn forward(
             let Some(peer) = peer_from_resolved(&resolved, own_device_id) else {
                 return;
             };
+            if known_services.len() >= MAX_DISCOVERY_PEERS
+                && !known_services.contains_key(&resolved.fullname)
+            {
+                tracing::debug!(
+                    fullname = %resolved.fullname,
+                    "the mdns service cache is full; ignoring a new service"
+                );
+                return;
+            }
             known_services.insert(resolved.fullname.clone(), peer.device_id);
             emit(sink, DiscoveryEvent::Found(peer));
         }

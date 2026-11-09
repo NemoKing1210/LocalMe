@@ -43,7 +43,6 @@ macro_rules! ipc_handler {
             $crate::commands::list_peers,
             $crate::commands::history,
             $crate::commands::send_message,
-            $crate::commands::mark_read,
             $crate::commands::pick_files,
             $crate::commands::inspect_files,
             $crate::commands::open_attachment,
@@ -61,13 +60,9 @@ macro_rules! ipc_handler {
             $crate::commands::complete_onboarding,
             $crate::commands::get_settings,
             $crate::commands::update_settings,
-            $crate::commands::is_autostart_enabled,
             $crate::commands::set_ui_labels,
             $crate::commands::set_window_accent,
             $crate::commands::set_active_chat,
-            $crate::commands::show_window,
-            $crate::commands::hide_window,
-            $crate::commands::quit,
             $crate::commands::diagnostics,
             $crate::commands::logs_info,
             $crate::commands::open_logs_folder,
@@ -124,10 +119,11 @@ fn run_inner() -> Result<(), Box<dyn std::error::Error>> {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_os::init())
-        .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            Some(vec![FLAG_MINIMIZED]),
+            // No launch argument: whether a start is tray-only follows the user's
+            // `start_minimized` setting, read once the settings have loaded.
+            None,
         ))
         .invoke_handler(ipc_handler!())
         .setup(|app| {
@@ -170,7 +166,10 @@ fn run_inner() -> Result<(), Box<dyn std::error::Error>> {
                 return Err("the application state was not installed".into());
             };
             match tray::install(&handle, &state) {
-                Ok(()) => tray::refresh(&handle, &state),
+                Ok(()) => {
+                    state.tray_available.store(true, std::sync::atomic::Ordering::Relaxed);
+                    tray::refresh(&handle, &state);
+                }
                 Err(error) => {
                     tracing::warn!(%error, "the tray icon is unavailable on this desktop");
                 }
