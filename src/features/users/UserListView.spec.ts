@@ -91,6 +91,10 @@ beforeEach(() => {
   vi.resetAllMocks();
 });
 
+function pinnedRow(deviceId: string, nickname: string, pinRank: number): Peer {
+  return makePeer({ deviceId, nickname, pinned: true, pinRank, unread: 0, online: false });
+}
+
 describe('UserListView', () => {
   it('renders one row per visible peer at the estimated offsets', async () => {
     const { wrapper } = await mountList([
@@ -220,6 +224,83 @@ describe('UserListView', () => {
     await flushPromises();
 
     expect(useUiStore(pinia).notice?.key).toBe('error.internal');
+  });
+
+  it('moves a pinned row with Alt+ArrowDown and persists the new order', async () => {
+    const { wrapper } = await mountList([
+      pinnedRow('device-a', 'Ann', 0),
+      pinnedRow('device-b', 'Ben', 1),
+      pinnedRow('device-c', 'Cid', 2),
+    ]);
+
+    await wrapper.findAll('.users__row')[0]!.get('.md-list-item__row').trigger('keydown', {
+      key: 'ArrowDown',
+      altKey: true,
+    });
+    await flushPromises();
+
+    expect(ipc.reorderPinnedPeers).toHaveBeenCalledWith(['device-b', 'device-a', 'device-c']);
+  });
+
+  it('does not move the first pinned row upwards or an unpinned row at all', async () => {
+    const { wrapper } = await mountList([
+      pinnedRow('device-a', 'Ann', 0),
+      makePeer({ deviceId: 'device-b', pinned: false }),
+    ]);
+
+    await wrapper.findAll('.users__row')[0]!.get('.md-list-item__row').trigger('keydown', {
+      key: 'ArrowUp',
+      altKey: true,
+    });
+    await wrapper.findAll('.users__row')[1]!.get('.md-list-item__row').trigger('keydown', {
+      key: 'ArrowDown',
+      altKey: true,
+    });
+    await flushPromises();
+
+    expect(ipc.reorderPinnedPeers).not.toHaveBeenCalled();
+  });
+
+  it('reorders by dragging a pinned row across another', async () => {
+    const { wrapper } = await mountList([
+      pinnedRow('device-a', 'Ann', 0),
+      pinnedRow('device-b', 'Ben', 1),
+    ]);
+    const first = wrapper.findAll('.users__row')[0]!.element;
+
+    first.dispatchEvent(
+      new PointerEvent('pointerdown', { bubbles: true, button: 0, pointerId: 1, clientY: 10 }),
+    );
+    window.dispatchEvent(new PointerEvent('pointermove', { pointerId: 1, clientY: 90 }));
+    window.dispatchEvent(new PointerEvent('pointerup', { pointerId: 1, clientY: 90 }));
+    await flushPromises();
+
+    expect(ipc.reorderPinnedPeers).toHaveBeenCalledWith(['device-b', 'device-a']);
+  });
+
+  it('leaves a press without movement as a normal click', async () => {
+    const { wrapper, router } = await mountList([pinnedRow('device-a', 'Ann', 0)]);
+
+    await wrapper.get('.md-list-item__row').trigger('click');
+    await flushPromises();
+
+    expect(ipc.reorderPinnedPeers).not.toHaveBeenCalled();
+    expect(router.currentRoute.value.name).toBe('chat');
+  });
+
+  it('does not reorder while a search filter is active', async () => {
+    const { wrapper } = await mountList(
+      [pinnedRow('device-a', 'Ann', 0), pinnedRow('device-b', 'Ben', 1)],
+      { query: 'a' },
+    );
+
+    await wrapper.findAll('.users__row')[0]!.get('.md-list-item__row').trigger('keydown', {
+      key: 'ArrowDown',
+      altKey: true,
+    });
+    await flushPromises();
+
+    expect(ipc.reorderPinnedPeers).not.toHaveBeenCalled();
   });
 
   it('forgets the peer, clears the conversation and leaves the address', async () => {
