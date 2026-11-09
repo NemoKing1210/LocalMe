@@ -6,7 +6,9 @@ use std::sync::Arc;
 
 use localme_core::domain::message::ChatMessage;
 use localme_core::domain::peer::{PeerProfile, PeerView};
-use localme_core::domain::{Attachment, AttachmentId, AttachmentKind};
+use localme_core::domain::{
+    Attachment, AttachmentId, AttachmentKind, AttachmentState, Direction, FileName,
+};
 use localme_core::ports::store::{HistoryCursor, KnownDevice};
 use localme_core::services::Settings;
 use tauri::{AppHandle, Runtime, State};
@@ -104,12 +106,18 @@ pub async fn history<R: Runtime>(
 
     // A picture you sent is rendered from its original file, and the asset protocol's scope is
     // built afresh on every start — so without this, every image you have ever sent becomes a
-    // broken placeholder the next time the application is opened. Only images are granted, and
-    // only ones that are still on disk: this is the whole of what the interface will draw.
+    // broken placeholder the next time the application is opened. Playable media is included for
+    // the same reason: its player reads the stored file directly. Only kinds the interface draws
+    // are granted, and only files still on disk.
     for attachment in page
         .iter()
         .flat_map(|message| message.attachments.iter())
-        .filter(|attachment| attachment.kind == AttachmentKind::Image)
+        .filter(|attachment| {
+            matches!(
+                attachment.kind,
+                AttachmentKind::Image | AttachmentKind::Audio | AttachmentKind::Video
+            )
+        })
     {
         if let Some(path) = attachment.path.as_deref() {
             let path = Path::new(path);
@@ -525,26 +533,100 @@ pub async fn save_attachment<R: Runtime>(
     let source = files::stored_path(attachment.path.as_deref())
         .map_err(|error| ApiError::invalid_input("attachmentId", error))?;
 
-    let (sender, receiver) = tokio::sync::oneshot::channel();
-    app.dialog()
-        .file()
-        .set_file_name(attachment.name.as_str())
-        .save_file(move |file| {
-            let _ = sender.send(file);
-        });
-    let target = receiver
-        .await
-        .map_err(|_| ApiError::Internal {
-            message: "the save dialog did not answer".to_owned(),
-        })?
-        .and_then(|file| file.as_path().map(Path::to_path_buf));
-    let Some(target) = target else {
+    let Some(target) = ask_save_target(&app, &attachment.name).await? else {
         return Ok(None);
     };
     files::copy(&source, &target).map_err(|error| ApiError::Internal {
         message: format!("the file could not be saved: {error}"),
     })?;
     tracing::info!(file = %attachment.name, "a received file was saved");
+    Ok(Some(target.to_string_lossy().into_owned()))
+}
+
+/// Asks the platform where to save a file, defaulting to its own name.
+///
+/// The plugin's dialog is callback-based: bridging it through a oneshot keeps the command async,
+/// so the main thread is never held while the modal dialog is open.
+async fn ask_save_target<R: Runtime>(
+    app: &AppHandle<R>,
+    name: &FileName,
+) -> Result<Option<std::path::PathBuf>, ApiError> {
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .file()
+        .set_file_name(name.as_str())
+        .save_file(move |file| {
+            let _ = sender.send(file);
+        });
+    let target = receiver.await.map_err(|_| ApiError::Internal {
+        message: "the save dialog did not answer".to_owned(),
+    })?;
+    Ok(target.and_then(|file| file.as_path().map(Path::to_path_buf)))
+}
+
+/// Fetches a file that was offered but not transferred, after asking where to put it.
+///
+/// Returns the chosen path, or `None` when the dialog was dismissed — in which case nothing is
+/// requested. The report that the copy actually happened comes from the `attachment_saved`
+/// event, never from this return value, so a save is reported exactly once.
+///
+/// # Errors
+///
+/// [`ApiError::InvalidInput`] if the attachment is unknown or is one this device sent.
+#[tauri::command]
+pub async fn download_attachment<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, Arc<AppState>>,
+    attachment_id: String,
+) -> Result<Option<String>, ApiError> {
+    let id = args::attachment_id(&attachment_id)?;
+    let attachment = state
+        .session
+        .attachment(id)
+        .await?
+        .ok_or_else(|| ApiError::invalid_input("attachmentId", "there is no such file"))?;
+    if attachment.direction == Direction::Outgoing {
+        return Err(ApiError::invalid_input(
+            "attachmentId",
+            "this file was sent from here",
+        ));
+    }
+
+    // Already here: this is the same as Save as…, and nothing needs to be requested.
+    if attachment.state == AttachmentState::Complete {
+        let Some(target) = ask_save_target(&app, &attachment.name).await? else {
+            return Ok(None);
+        };
+        crate::events::copy_and_report(&app, &attachment, target.clone());
+        return Ok(Some(target.to_string_lossy().into_owned()));
+    }
+
+    let Some(target) = ask_save_target(&app, &attachment.name).await? else {
+        return Ok(None);
+    };
+
+    // It may have finished while the dialog was open.
+    if let Some(current) = state.session.attachment(id).await?
+        && current.state == AttachmentState::Complete
+    {
+        crate::events::copy_and_report(&app, &current, target.clone());
+        return Ok(Some(target.to_string_lossy().into_owned()));
+    }
+
+    state.set_pending_save(id, target.clone());
+
+    // The transfer can complete between the read above and the registration: taking the entry
+    // here is what makes exactly one of the two paths report the copy.
+    if let Some(current) = state.session.attachment(id).await?
+        && current.state == AttachmentState::Complete
+    {
+        if state.take_pending_save(id).is_some() {
+            crate::events::copy_and_report(&app, &current, target.clone());
+        }
+        return Ok(Some(target.to_string_lossy().into_owned()));
+    }
+
+    state.session.download_attachment(id).await?;
     Ok(Some(target.to_string_lossy().into_owned()))
 }
 
@@ -560,6 +642,8 @@ pub async fn cancel_attachment(
 ) -> Result<(), ApiError> {
     let id = args::attachment_id(&attachment_id)?;
     state.session.cancel_attachment(id).await?;
+    // The destination belonged to the cancelled attempt: a later retry must ask again.
+    let _ = state.take_pending_save(id);
     Ok(())
 }
 

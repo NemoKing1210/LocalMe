@@ -1,12 +1,15 @@
 //! Core events to the interface, plus the two host-side reactions.
 
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use localme_core::domain::ids::DeviceId;
+use localme_core::domain::{Attachment, AttachmentId, AttachmentState};
 use localme_core::services::{CoreEvent, NoticeLevel, Settings};
 use tauri::{AppHandle, Emitter, Runtime};
 
+use crate::files;
 use crate::state::{self, AppState};
 use crate::{notifications, tray, window};
 
@@ -17,6 +20,17 @@ const SNAPSHOT_EVENT: &str = "state_snapshot";
 const OPEN_CHAT_EVENT: &str = "open_chat";
 
 const OPEN_SETTINGS_EVENT: &str = "open_settings";
+
+/// Reports the result of copying a completed download to the path the user chose.
+const ATTACHMENT_SAVED_EVENT: &str = "attachment_saved";
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AttachmentSaved<'a> {
+    attachment_id: &'a AttachmentId,
+    /// `None` when the copy failed; the interface tells the user rather than staying silent.
+    path: Option<&'a str>,
+}
 
 pub fn spawn_forwarder<R: Runtime>(app: &AppHandle<R>) {
     let app = app.clone();
@@ -42,6 +56,9 @@ pub fn spawn_forwarder<R: Runtime>(app: &AppHandle<R>) {
                     // state the interface can also read back through `state_snapshot`.
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
                         tracing::warn!(skipped, "the interface fell behind the event stream");
+                        // A completion may have been in the skipped window: reconcile the saves
+                        // the user already confirmed rather than lose them silently.
+                        reconcile_pending_saves(&app, &state);
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
                 },
@@ -86,10 +103,94 @@ fn handle<R: Runtime>(app: &AppHandle<R>, state: &Arc<AppState>, event: CoreEven
             NoticeLevel::Error => tracing::error!(notice = %message, "core notice"),
             NoticeLevel::Info => tracing::info!(notice = %message, "core notice"),
         },
-        CoreEvent::MessageStatus { .. } | CoreEvent::Attachment { .. } | CoreEvent::Stopped => {}
+        CoreEvent::Attachment { attachment, .. } => match attachment.state {
+            AttachmentState::Complete => {
+                if let Some(target) = state.take_pending_save(attachment.id) {
+                    copy_and_report(app, attachment, target);
+                }
+            }
+            // A cancelled or failed transfer forgets the destination the user chose: asking
+            // again later must reopen the dialog rather than copy to an old choice.
+            AttachmentState::Cancelled | AttachmentState::Failed => {
+                let _ = state.take_pending_save(attachment.id);
+            }
+            _ => {}
+        },
+        CoreEvent::MessageStatus { .. } | CoreEvent::Stopped => {}
     }
 
     emit_core(app, state, &event);
+}
+
+/// Copies a completed download to the path the user chose, off the event loop, and reports the
+/// outcome through [`ATTACHMENT_SAVED_EVENT`] — once, whether the copy worked or not.
+pub(crate) fn copy_and_report<R: Runtime>(
+    app: &AppHandle<R>,
+    attachment: &Attachment,
+    target: PathBuf,
+) {
+    let app = app.clone();
+    let attachment = attachment.clone();
+    tauri::async_runtime::spawn(async move {
+        let source = match files::stored_path(attachment.path.as_deref()) {
+            Ok(source) => source,
+            Err(error) => {
+                tracing::warn!(%error, id = %attachment.id, "the completed file is not on disk");
+                emit_saved(&app, attachment.id, None);
+                return;
+            }
+        };
+        let destination = target.clone();
+        let copied =
+            tauri::async_runtime::spawn_blocking(move || files::copy(&source, &destination)).await;
+        match copied {
+            Ok(Ok(bytes)) => {
+                tracing::info!(file = %attachment.name, bytes, "a downloaded file was saved");
+                emit_saved(&app, attachment.id, Some(&target));
+            }
+            Ok(Err(error)) => {
+                tracing::warn!(file = %attachment.name, %error, "a downloaded file could not be saved");
+                emit_saved(&app, attachment.id, None);
+            }
+            Err(error) => {
+                tracing::warn!(file = %attachment.name, %error, "the copy task did not finish");
+                emit_saved(&app, attachment.id, None);
+            }
+        }
+    });
+}
+
+fn emit_saved<R: Runtime>(app: &AppHandle<R>, id: AttachmentId, path: Option<&Path>) {
+    let path = path.map(|path| path.to_string_lossy().into_owned());
+    let payload = AttachmentSaved {
+        attachment_id: &id,
+        path: path.as_deref(),
+    };
+    if let Err(error) = app.emit(ATTACHMENT_SAVED_EVENT, payload) {
+        tracing::debug!(%error, "the save result could not be delivered");
+    }
+}
+
+/// After the event stream lagged: copy the saves that completed in the skipped window, and put
+/// the rest back to wait for their own completion event.
+fn reconcile_pending_saves<R: Runtime>(app: &AppHandle<R>, state: &Arc<AppState>) {
+    let app = app.clone();
+    let state = state.clone();
+    tauri::async_runtime::spawn(async move {
+        for (id, target) in state.take_all_pending_saves() {
+            match state.session.attachment(id).await {
+                Ok(Some(attachment)) if attachment.state == AttachmentState::Complete => {
+                    copy_and_report(&app, &attachment, target);
+                }
+                Ok(Some(_)) => state.set_pending_save(id, target),
+                Ok(None) => {}
+                Err(error) => {
+                    tracing::warn!(%error, %id, "a waiting save could not be reconciled");
+                    state.set_pending_save(id, target);
+                }
+            }
+        }
+    });
 }
 
 fn emit_core<R: Runtime>(app: &AppHandle<R>, state: &AppState, event: &CoreEvent) {
@@ -181,6 +282,7 @@ mod tests {
         assert_eq!(SNAPSHOT_EVENT, "state_snapshot");
         assert_eq!(OPEN_CHAT_EVENT, "open_chat");
         assert_eq!(OPEN_SETTINGS_EVENT, "open_settings");
+        assert_eq!(ATTACHMENT_SAVED_EVENT, "attachment_saved");
     }
 
     #[tokio::test]

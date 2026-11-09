@@ -2,10 +2,12 @@
 //! policy. The real state lives in the `localme-core` session actor; this is the host's own
 //! view of the world.
 
+use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Mutex, RwLock};
 
-use localme_core::domain::ids::DeviceId;
+use localme_core::domain::ids::{AttachmentId, DeviceId};
 use localme_core::runtime::Core;
 use localme_core::services::{SessionHandle, Settings, SettingsHandle};
 use tauri::Manager;
@@ -119,6 +121,9 @@ pub struct AppState {
     /// Whether the tray was installed. A window that starts hidden with no tray would be
     /// unreachable, so the ready gate only honours "start minimized" when this is set.
     pub tray_available: AtomicBool,
+    /// Where a requested download should be copied once its transfer completes. In memory only:
+    /// a restart loses the destination, and the received file can be saved again.
+    pub pending_saves: Mutex<HashMap<AttachmentId, PathBuf>>,
 }
 
 impl AppState {
@@ -139,6 +144,7 @@ impl AppState {
             unread: AtomicU32::new(0),
             labels: RwLock::new(UiLabels::default()),
             tray_available: AtomicBool::new(false),
+            pending_saves: Mutex::new(HashMap::new()),
         }
     }
 
@@ -215,6 +221,31 @@ impl AppState {
     #[must_use]
     pub fn take_core(&self) -> Option<Core> {
         self.core.lock().ok().and_then(|mut guard| guard.take())
+    }
+
+    /// Remembers where a requested download should be copied when it completes.
+    pub fn set_pending_save(&self, id: AttachmentId, target: PathBuf) {
+        if let Ok(mut pending) = self.pending_saves.lock() {
+            pending.insert(id, target);
+        }
+    }
+
+    /// Takes the destination waiting for one attachment, if there is one.
+    #[must_use]
+    pub fn take_pending_save(&self, id: AttachmentId) -> Option<PathBuf> {
+        self.pending_saves
+            .lock()
+            .ok()
+            .and_then(|mut pending| pending.remove(&id))
+    }
+
+    /// Drains every waiting destination; used to reconcile after the event stream lagged.
+    #[must_use]
+    pub fn take_all_pending_saves(&self) -> Vec<(AttachmentId, PathBuf)> {
+        self.pending_saves
+            .lock()
+            .map(|mut pending| pending.drain().collect())
+            .unwrap_or_default()
     }
 }
 
@@ -407,6 +438,31 @@ mod tests {
         // Focused but hidden.
         state.window_visible.store(false, Ordering::Relaxed);
         assert!(!state.is_window_active());
+    }
+
+    #[tokio::test]
+    async fn a_pending_save_is_taken_exactly_once() {
+        use localme_core::domain::ids::AttachmentId;
+        use std::path::PathBuf;
+
+        let (state, _dir) = test_support::state().await;
+        let first = AttachmentId::generate();
+        let second = AttachmentId::generate();
+        state.set_pending_save(first, PathBuf::from("/tmp/first.bin"));
+        state.set_pending_save(second, PathBuf::from("/tmp/second.bin"));
+
+        assert_eq!(
+            state.take_pending_save(first),
+            Some(PathBuf::from("/tmp/first.bin"))
+        );
+        // Taking empties it, so a completion event cannot copy the same file twice.
+        assert_eq!(state.take_pending_save(first), None);
+
+        assert_eq!(
+            state.take_all_pending_saves(),
+            vec![(second, PathBuf::from("/tmp/second.bin"))]
+        );
+        assert!(state.take_all_pending_saves().is_empty());
     }
 
     #[tokio::test]

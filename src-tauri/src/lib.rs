@@ -51,6 +51,7 @@ macro_rules! ipc_handler {
             $crate::commands::open_attachment,
             $crate::commands::reveal_attachment,
             $crate::commands::save_attachment,
+            $crate::commands::download_attachment,
             $crate::commands::cancel_attachment,
             $crate::commands::retry_attachment,
             $crate::commands::forget_peer,
