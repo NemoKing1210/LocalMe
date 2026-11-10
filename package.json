@@ -35,13 +35,13 @@
   },
   "dependencies": {
     "@material/material-color-utilities": "0.4.0",
-    "@tanstack/vue-virtual": "3.13.39",
-    "@tauri-apps/api": "2.12.0",
+    "@tanstack/vue-virtual": "3.13.52",
+    "@tauri-apps/api": "2.12.4",
     "@tauri-apps/plugin-os": "2.4.0",
     "blobatar": "2.7.0",
-    "motion-v": "^2.5.1",
-    "pinia": "4.0.3",
-    "vue": "3.5.43",
+    "motion-v": "^2.11.1",
+    "pinia": "4.1.0",
+    "vue": "3.5.45",
     "vue-router": "^4.6.4"
   },
   "devDependencies": {
